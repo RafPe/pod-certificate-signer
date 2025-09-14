@@ -18,23 +18,29 @@ package controller
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rsa"
+	"crypto/x509"
 	"fmt"
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/api"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/ca"
-	certificatesv1alpha1 "k8s.io/api/certificates/v1alpha1"
+
+	capi "k8s.io/api/certificates/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // PodCertificateRequestReconciler reconciles a PodCertificateRequest object
@@ -55,21 +61,21 @@ type PodCertificateRequestReconciler struct {
 
 func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&certificatesv1alpha1.PodCertificateRequest{}).
+		For(&capi.PodCertificateRequest{}).
 		WithEventFilter(predicate.Funcs{
 			UpdateFunc: func(e event.UpdateEvent) bool {
 				// Simple check without method calls
-				if newCert, ok := e.ObjectNew.(*certificatesv1alpha1.PodCertificateRequest); ok && newCert != nil {
+				if newCert, ok := e.ObjectNew.(*capi.PodCertificateRequest); ok && newCert != nil {
 					return newCert.Status.CertificateChain == ""
 				}
 				return true
 			},
 			// UpdateFunc: func(e event.UpdateEvent) bool {
-			// 	newCert := e.ObjectNew.(*certificatesv1alpha1.PodCertificateRequest)
+			// 	newCert := e.ObjectNew.(*capi.PodCertificateRequest)
 
 			// 	return !r.isAlreadyIssued(newCert)
 
-			// 	// if newCert, ok := e.ObjectNew.(*certificatesv1alpha1.PodCertificateRequest); ok {
+			// 	// if newCert, ok := e.ObjectNew.(*capi.PodCertificateRequest); ok {
 			// 	// 	return !r.isAlreadyIssued(newCert)
 			// 	// }
 			// 	// return true
@@ -95,37 +101,43 @@ func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) err
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the PodCertificateRequest object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
 func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	r.Log = logf.FromContext(ctx)
 
 	// Retrieve the object from the ctx and map to PodCertificateRequest
-	var certReq certificatesv1alpha1.PodCertificateRequest
-	if err := r.Client.Get(ctx, req.NamespacedName, &certReq); client.IgnoreNotFound(err) != nil {
+	var pcr capi.PodCertificateRequest
+	if err := r.Client.Get(ctx, req.NamespacedName, &pcr); client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, fmt.Errorf("Error %q getting PodCertificateRequest", err)
 	}
-	r.Log.Info("Processing PodCertificateRequest", "name", certReq.Name, "namespace", certReq.Namespace, "signer-name", certReq.Spec.SignerName)
+	r.Log.Info("Processing PodCertificateRequest")
 
-	// Check if certificate has already issued
-	if r.isAlreadyIssued(&certReq) {
-		r.Log.Info("PodCertificateRequest already issued", "name", certReq.Name, "namespace", certReq.Namespace)
+	// Check if the PodCertificateRequest has already been issued - if so we skip the event
+	if api.IsPodCertificateRequestIssued(&pcr) {
+		r.Log.Info("PodCertificateRequest already issued - skipping")
 		return ctrl.Result{}, nil
 	}
 
-	// Get the associated pod - this is optional for us to retrieve custom annotations if exist
-	pod, err := r.getAssociatedPod(ctx, &certReq)
+	// Check if the public key type is supported
+	if !r.isPublicKeyTypeSupported(pcr.Spec.PKIXPublicKey) {
+		r.Log.Error(fmt.Errorf("Unsupported public key type"), "Unsupported public key type")
+
+		r.setPodCertificateRequestStatusCondition(
+			ctx, &pcr,
+			capi.PodCertificateRequestConditionTypeFailed,         // Condition type
+			capi.PodCertificateRequestConditionUnsupportedKeyType, // Condition reason
+			"Unsupported public key type")                         // Condition message
+
+		return ctrl.Result{}, nil
+	}
+
+	// Get the associated pod - used for retrieval of custom annotations
+	pod, err := r.getAssociatedPod(ctx, &pcr)
 	if err != nil {
 		r.Log.Error(err, "Failed to get associated pod")
-		r.setFailedCondition(ctx, &certReq, "PodNotFound", err.Error())
+		r.setFailedCondition(ctx, &pcr, "PodNotFound", err.Error())
 		return ctrl.Result{}, nil // Don't retry if pod doesn't exist
 	}
-	r.Log.Info("Found associated pod for PodCertificateRequest", "name", certReq.Name, "namespace", certReq.Namespace, "pod", pod.Name)
+	r.Log.Info("Found associated pod for PodCertificateRequest", "podName", pod.Name)
 
 	// if dnsNames, found := r.getPodAnnotation(pod, "coolcert.example.com/foo-san"); found {
 	// 	// Use annotation value
@@ -136,35 +148,33 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 	// 	r.Log.Info("No SANs found in pod annotations, using empty []string", "value", dnsNames)
 	// }
 
-	r.Log.Info("Generating x509 certificate request ... ", "signer-name", certReq.Spec.SignerName)
-
 	// Issue certificate
-	commonName := certReq.Spec.PodName                    // Adjust based on your CRD spec
-	dnsNames := []string{certReq.Spec.ServiceAccountName} // Adjust based on your CRD spec
-	duration := 1 * time.Hour                             // 1 hour for testing
+	commonName := pcr.Spec.PodName                    // Adjust based on your CRD spec
+	dnsNames := []string{pcr.Spec.ServiceAccountName} // Adjust based on your CRD spec
+	duration := 1 * time.Hour                         // 1 hour for testing
 
 	// Issue certificate using the public key from the request
-	certificateChain, notBefore, notAfter, err := r.CA.IssueCertificateForPublicKey(
-		certReq.Spec.PKIXPublicKey,
+	podCertificate, err := r.CA.IssueCertificateForPublicKey(
+		pcr.Spec.PKIXPublicKey,
 		commonName,
 		dnsNames,
 		duration,
 	)
 	if err != nil {
 		r.Log.Error(err, "failed to issue certificate")
-		r.setFailedCondition(ctx, &certReq, "CertificateIssueFailed", fmt.Sprintf("Failed to issue certificate: %v", err))
-		r.EventRecorder.Event(&certReq, v1.EventTypeWarning, "CertificateIssueFailed", "Failed to issue certificate")
+		r.setFailedCondition(ctx, &pcr, "CertificateIssueFailed", fmt.Sprintf("Failed to issue certificate: %v", err))
+		r.EventRecorder.Event(&pcr, corev1.EventTypeWarning, "CertificateIssueFailed", "Failed to issue certificate")
 		return ctrl.Result{}, err
 	}
 
 	// Update certificate fields
-	certReq.Status.CertificateChain = certificateChain
-	certReq.Status.NotBefore = &metav1.Time{Time: notBefore}
-	certReq.Status.NotAfter = &metav1.Time{Time: notAfter}
-	certReq.Status.BeginRefreshAt = &metav1.Time{Time: notBefore.Add(10 * time.Minute)}
+	pcr.Status.CertificateChain = podCertificate.CertificateChain
+	pcr.Status.NotBefore = &metav1.Time{Time: podCertificate.NotBefore}
+	pcr.Status.NotAfter = &metav1.Time{Time: podCertificate.NotAfter}
+	pcr.Status.BeginRefreshAt = &metav1.Time{Time: podCertificate.NotBefore.Add(10 * time.Minute)}
 
 	// Add Issued condition
-	certReq.Status.Conditions = []metav1.Condition{
+	pcr.Status.Conditions = []metav1.Condition{
 		{
 			Type:               "Issued",
 			Status:             metav1.ConditionTrue,
@@ -175,22 +185,53 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 	}
 
 	// Update the status
-	if err := r.Status().Update(ctx, &certReq); err != nil {
+	if err := r.Status().Update(ctx, &pcr); err != nil {
 		r.Log.Error(err, "failed to update status")
 		return ctrl.Result{}, err
 	}
 
+	// Add annotations to the pod
+	if err := r.patchPodAnnotations(ctx, pod, map[string]string{
+		fmt.Sprintf("%s-request-name-request-name", pcr.Spec.SignerName): pcr.Name,
+		fmt.Sprintf("%s-request-name-issued-at", pcr.Spec.SignerName):    time.Now().Format(time.RFC3339),
+	}); err != nil {
+		r.Log.Error(err, "failed to add annotations to pod")
+	}
+
 	// Successfully issued certificate
 	r.Log.Info("Certificate successfully issued")
-	r.EventRecorder.Event(&certReq, v1.EventTypeNormal, "CertificateIssues", "Certificate successfully issued")
+	r.EventRecorder.Event(&pcr, corev1.EventTypeNormal, "CertificateIssued", "Certificate successfully issued")
 
 	return ctrl.Result{}, nil
 }
 
-func (r *PodCertificateRequestReconciler) setFailedCondition(ctx context.Context, certReq *certificatesv1alpha1.PodCertificateRequest, reason, message string) {
-	certReq.Status.Conditions = []metav1.Condition{
+func (r *PodCertificateRequestReconciler) isPublicKeyTypeSupported(publicKeyBytes []byte) bool {
+
+	// Parse the public key from the request - this handles both RSA and Ed25519
+	publicKey, err := x509.ParsePKIXPublicKey(publicKeyBytes)
+	if err != nil {
+		r.Log.Error(err, "Failed to parse PodCertificateRequest public key")
+		return false
+	}
+
+	// Log the key type for debugging
+	switch publicKey.(type) {
+	case *rsa.PublicKey:
+		fmt.Printf("Using RSA public key\n")
+	case ed25519.PublicKey:
+		fmt.Printf("Using Ed25519 public key\n")
+	default:
+		return false
+	}
+
+	return true
+}
+
+func (r *PodCertificateRequestReconciler) setPodCertificateRequestStatusCondition(ctx context.Context, pcr *capi.PodCertificateRequest, conditionType, reason, message string) {
+
+	pcr.Status.Conditions = []metav1.Condition{
 		{
-			Type:               "Failed",
+			Type:               conditionType,
 			Status:             metav1.ConditionTrue,
 			LastTransitionTime: metav1.Now(),
 			Reason:             reason,
@@ -198,59 +239,41 @@ func (r *PodCertificateRequestReconciler) setFailedCondition(ctx context.Context
 		},
 	}
 
-	if err := r.Status().Update(ctx, certReq); err != nil {
+	if err := r.Status().Update(ctx, pcr); err != nil {
 		r.Log.Error(err, "failed to update status with failure condition")
 	}
 }
 
-func (r *PodCertificateRequestReconciler) getAssociatedPod(ctx context.Context, certReq *certificatesv1alpha1.PodCertificateRequest) (*corev1.Pod, error) {
-	// Validate required fields
-	if certReq.Spec.PodName == "" {
-		return nil, fmt.Errorf("podName is empty")
-	}
-	if certReq.Namespace == "" {
-		return nil, fmt.Errorf("namespace is empty")
-	}
+func (r *PodCertificateRequestReconciler) getAssociatedPod(ctx context.Context, pcr *capi.PodCertificateRequest) (*corev1.Pod, error) {
 
 	// Fetch the pod
-	var pod v1.Pod
+	var pod corev1.Pod
 	podKey := types.NamespacedName{
-		Name:      certReq.Spec.PodName,
-		Namespace: certReq.Namespace,
+		Name:      pcr.Spec.PodName,
+		Namespace: pcr.Namespace,
 	}
 
 	// This condition should not ever happen - since kube-apiserver is responsible for creating the requests
 	// and also validates the proof of possession during creation of the PodCertificateRequest we have this check as a fail safe
 	if err := r.Get(ctx, podKey, &pod); err != nil {
-		return nil, fmt.Errorf("failed to get pod %s/%s: %w", certReq.Namespace, certReq.Spec.PodName, err)
-	}
-
-	// Validate UID matches (security check)
-	if certReq.Spec.PodUID != "" && string(pod.UID) != string(certReq.Spec.PodUID) {
-		return nil, fmt.Errorf("pod UID mismatch: expected %s, got %s", certReq.Spec.PodUID, pod.UID)
+		return nil, fmt.Errorf("failed to get pod %s/%s: %w", pcr.Namespace, pcr.Spec.PodName, err)
 	}
 
 	return &pod, nil
 }
 
-func (r *PodCertificateRequestReconciler) isAlreadyIssued(certReq *certificatesv1alpha1.PodCertificateRequest) bool {
-	if certReq == nil {
-		return false
+func (r *PodCertificateRequestReconciler) patchPodAnnotations(ctx context.Context, pod *corev1.Pod, annotations map[string]string) error {
+	patch := client.MergeFrom(pod.DeepCopy())
+
+	if pod.Annotations == nil {
+		pod.Annotations = make(map[string]string)
 	}
 
-	// Status might not be initialized on new objects
-	if certReq.Status.Conditions == nil {
-		return false
+	for key, value := range annotations {
+		pod.Annotations[key] = value
 	}
 
-	// Avoid range over nil slice
-	for i := 0; i < len(certReq.Status.Conditions); i++ {
-		condition := certReq.Status.Conditions[i]
-		if condition.Type == "Issued" && condition.Status == metav1.ConditionTrue {
-			return true
-		}
-	}
-	return false
+	return r.Patch(ctx, pod, patch)
 }
 
 // func (r *PodCertificateRequestReconciler) getPodAnnotation(pod *v1.Pod, annotationKey string) (string, bool) {
