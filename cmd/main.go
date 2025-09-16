@@ -112,6 +112,7 @@ func main() {
 		Scheme:        mgr.GetScheme(),
 		CA:            certificateAuthority,
 		SignerName:    "coolcert.example.com/foo",
+		ClusterFqdn:   clusterFqdn,
 		EventRecorder: mgr.GetEventRecorderFor("PodCertificateSignerReconciler"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PodCertificateRequest")

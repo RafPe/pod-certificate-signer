@@ -19,10 +19,16 @@ type CA struct {
 	KeyPEM      []byte
 }
 type PodCertificate struct {
-	Subject             string
-	DNSNames            []string
-	NotBefore, NotAfter time.Time
+	Certificate         []byte
 	CertificateChain    string
+	Config              *PodCertificateConfig
+	NotBefore, NotAfter time.Time
+}
+type PodCertificateConfig struct {
+	CommonName    string
+	DNSNames      []string
+	Duration      time.Duration
+	RefreshBefore time.Time
 }
 
 func GenerateCA() (*CA, error) {
@@ -87,72 +93,21 @@ func GenerateCA() (*CA, error) {
 	}, nil
 }
 
-// func (ca *CA) IssueCertificateForPublicKey(publicKeyBytes []byte, commonName string, dnsNames []string, duration time.Duration) (string, time.Time, time.Time, error) {
-// 	// Parse the public key from the request - this handles both RSA and Ed25519
-// 	publicKey, err := x509.ParsePKIXPublicKey(publicKeyBytes)
-// 	if err != nil {
-// 		return "", time.Time{}, time.Time{}, fmt.Errorf("failed to parse public key: %w", err)
-// 	}
-
-// 	// Log the key type for debugging
-// 	switch publicKey.(type) {
-// 	case *rsa.PublicKey:
-// 		fmt.Printf("Using RSA public key\n")
-// 	case ed25519.PublicKey:
-// 		fmt.Printf("Using Ed25519 public key\n")
-// 	default:
-// 		return "", time.Time{}, time.Time{}, fmt.Errorf("unsupported public key type: %T", publicKey)
-// 	}
-
-// 	// Create certificate template
-// 	notBefore := time.Now()
-// 	notAfter := notBefore.Add(duration)
-
-// 	template := x509.Certificate{
-// 		SerialNumber: big.NewInt(time.Now().Unix()),
-// 		Subject: pkix.Name{
-// 			CommonName: commonName,
-// 		},
-// 		DNSNames:    dnsNames,
-// 		NotBefore:   notBefore,
-// 		NotAfter:    notAfter,
-// 		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-// 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
-// 	}
-
-// 	// CRITICAL: Use the parsed public key from the request, not a generated one
-// 	certDER, err := x509.CreateCertificate(rand.Reader, &template, ca.Certificate, publicKey, ca.PrivateKey)
-// 	if err != nil {
-// 		return "", time.Time{}, time.Time{}, fmt.Errorf("failed to create certificate for public key type %T: %w", publicKey, err)
-// 	}
-
-// 	// Create PEM blocks
-// 	issuedCertPEM := pem.EncodeToMemory(&pem.Block{
-// 		Type:  "CERTIFICATE",
-// 		Bytes: certDER,
-// 	})
-
-// 	// Certificate chain: issued cert + CA cert
-// 	certificateChain := string(issuedCertPEM) + string(ca.CertPEM)
-
-// 	return certificateChain, notBefore, notAfter, nil
-// }
-
-func (ca *CA) IssueCertificateForPublicKey(publicKeyBytes []byte, commonName string, dnsNames []string, duration time.Duration) (*PodCertificate, error) {
+func (ca *CA) IssueCertificateForPublicKey(publicKeyBytes []byte, pcg *PodCertificateConfig) (*PodCertificate, error) {
 
 	//TODO: We already been parsing this - should simplify this
 	publicKey, err := x509.ParsePKIXPublicKey(publicKeyBytes)
 
 	// Create certificate template
 	notBefore := time.Now()
-	notAfter := notBefore.Add(duration)
+	notAfter := notBefore.Add(pcg.Duration)
 
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().Unix()),
 		Subject: pkix.Name{
-			CommonName: commonName,
+			CommonName: pcg.CommonName,
 		},
-		DNSNames:    dnsNames,
+		DNSNames:    pcg.DNSNames,
 		NotBefore:   notBefore,
 		NotAfter:    notAfter,
 		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
@@ -174,9 +129,9 @@ func (ca *CA) IssueCertificateForPublicKey(publicKeyBytes []byte, commonName str
 	certificateChain := string(issuedCertPEM) + string(ca.CertPEM)
 
 	return &PodCertificate{
-		Subject:          commonName,
-		DNSNames:         dnsNames,
+		Certificate:      certDER,
 		CertificateChain: certificateChain,
+		Config:           pcg,
 		NotBefore:        notBefore,
 		NotAfter:         notAfter,
 	}, nil
