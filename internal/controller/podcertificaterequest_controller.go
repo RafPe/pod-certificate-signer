@@ -22,6 +22,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -299,6 +300,18 @@ func (r *PodCertificateRequestReconciler) setPodCertificateRequestStatusConditio
 
 func (r *PodCertificateRequestReconciler) getPodCertificateRequestConfiguration(pcr *capi.PodCertificateRequest, pod *corev1.Pod) *ca.PodCertificateConfig {
 
+	// V(0) - Info level (default, always shown)
+	r.Log.Info("Generating the certificate configuration for the PodCertificateRequest")
+
+	// // V(1) - Debug level (basic debugging)
+	// r.Log.V(1).Info("Processing certificate request", "podName", pod.Name)
+
+	// // V(2) - Trace level (detailed debugging)
+	// r.Log.V(2).Info("Annotation values", "commonName", commonName, "duration", duration)
+
+	// // V(3) - Very verbose (internal state)
+	// r.Log.V(3).Info("Internal state", "certReq", certReq)
+
 	// signer/name-cn                  => common name for the certificate
 	// signer/name-san                 => dns names for the certificate
 	// signer/name-duration            => duration for the certificate
@@ -309,34 +322,45 @@ func (r *PodCertificateRequestReconciler) getPodCertificateRequestConfiguration(
 	defaultCertificateDuration := 1 * time.Hour // default value for certificate duration
 	certificateDuration := defaultCertificateDuration
 
-	commonName, exists := r.getPodAnnotation(pod, fmt.Sprintf("%s-cn", r.SignerName))
-	if !exists {
-		commonName = pcr.Spec.PodName
-	}
+	// Retrieve the common name from the pod annotation
+	// V(1) - Debug level (basic debugging)
+	r.Log.V(1).Info("Retrieving certificate common name from the annotations", "podName", pod.Name)
+
+	commonName := r.getAnnotationOrDefault(pod,
+		fmt.Sprintf("%s-cn", r.SignerName),
+		pcr.Spec.PodName,
+		"cn")
 
 	// Retrieve the duration from the pod annotation
-	durationStr, exists := r.getPodAnnotation(pod, fmt.Sprintf("%s-duration", r.SignerName))
-	if exists {
+	// V(1) - Debug level (basic debugging)
+	r.Log.V(1).Info("Retrieving certificate duration time from the annotations", "podName", pod.Name)
+
+	durationStr := r.getAnnotationOrDefault(pod,
+		fmt.Sprintf("%s-duration", r.SignerName),
+		"", // empty string means no annotation found
+		"duration")
+
+	if durationStr != "" {
 		parsedCertificateDuration, err := time.ParseDuration(durationStr)
 		if err != nil {
-			r.Log.Error(err, "Could not parse duration from annotation - using default value")
+			r.Log.V(1).Info("Could not parse duration from annotation - using default value", "podName", pod.Name)
 		} else {
 			certificateDuration = parsedCertificateDuration
+			r.Log.V(1).Info("Parsed duration from annotation - using the supplied value", "podName", pod.Name, "duration", certificateDuration.String())
 		}
 	}
 
-	dnsNames := []string{}
-
-	dnsNames = append(dnsNames, "xxx")
+	dnsNames := r.getCommaSeparatedAnnotation(pod,
+		fmt.Sprintf("%s-san", r.SignerName),
+		"dnsNames")
 
 	pcConfig := &ca.PodCertificateConfig{
 		CommonName: commonName,
-		DNSNames: []string{
-			fmt.Sprintf("%s.%s.svc.%s", pod.Name, pod.Namespace, r.ClusterFqdn),
-		},
-		Duration: certificateDuration,
-		// RefreshBefore: 30 * time.Minute,
+		DNSNames:   dnsNames,
+		Duration:   certificateDuration,
+		// RefreshBefore: 30 * time.Minute, //TODO: Finish the refresh before which should be configurable
 	}
+	//TODO: Add method to validate the integrity of the certificate configuration?!
 
 	return pcConfig
 }
@@ -362,4 +386,37 @@ func (r *PodCertificateRequestReconciler) getPodAnnotation(pod *v1.Pod, annotati
 
 	value, exists := pod.Annotations[annotationKey]
 	return value, exists
+}
+
+// getAnnotationOrDefault retrieves an annotation from the pod or returns a default value if the annotation is not found
+func (r *PodCertificateRequestReconciler) getAnnotationOrDefault(pod *corev1.Pod, annotationKey, defaultValue, fieldName string) string {
+	value, exists := r.getPodAnnotation(pod, annotationKey)
+	if !exists {
+		r.Log.V(1).Info("No annotation found - using default",
+			"field", fieldName,
+			"key", annotationKey,
+			"default", defaultValue)
+		return defaultValue
+	}
+
+	r.Log.V(1).Info("Annotation found - using supplied value",
+		"field", fieldName,
+		"key", annotationKey,
+		"value", value)
+	return value
+}
+
+func (r *PodCertificateRequestReconciler) getCommaSeparatedAnnotation(pod *corev1.Pod, annotationKey, fieldName string) []string {
+	value := r.getAnnotationOrDefault(pod, annotationKey, "", fieldName)
+	if value == "" {
+		return []string{}
+	}
+
+	var result []string
+	for _, dns := range strings.Split(value, ",") {
+		if trimmed := strings.TrimSpace(dns); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
