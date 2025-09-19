@@ -63,7 +63,8 @@ spec:
       annotations:
         coolcert.example.com/foo-cn: "some-epic-name.com"
         coolcert.example.com/foo-san: "example.com, www.example.com, anotherexample.com.cy"
-        coolcert.example.com/foo-duration: "2h"
+        coolcert.example.com/foo-duration: "1h"
+        coolcert.example.com/foo-refresh: "49m"        
     spec:
       serviceAccountName: default
       containers:
@@ -90,4 +91,24 @@ spec:
 ```sh
 kubebuilder init --domain=operators.raftech.io --repo=github.com/rafpe/kubernetes-podcertificate-signer --project-name podcert
 kubebuilder create api --group certificates --version v1alpha1 --kind PodCertificateRequest --controller --resource=false
+```
+
+
+## To Requeue or not 
+
+```
+			// DON'T REQUEUE - Terminal success
+			return ctrl.Result{}, nil
+		
+			// DON'T REQUEUE - Terminal failure (log error but don't retry)
+			if terminalError {
+				r.Log.Error(err, "Terminal error - not retrying")
+				return ctrl.Result{}, nil // nil error = no requeue
+			}
+		
+			// REQUEUE - Transient error (will retry with exponential backoff)
+			return ctrl.Result{}, fmt.Errorf("transient error: %w", err)
+		
+			// REQUEUE AFTER SPECIFIC TIME - Scheduled retry
+			return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 ```

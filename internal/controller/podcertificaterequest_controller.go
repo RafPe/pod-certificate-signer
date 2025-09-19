@@ -31,7 +31,6 @@ import (
 
 	capi "k8s.io/api/certificates/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -39,6 +38,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -57,8 +57,9 @@ type PodCertificateRequestReconciler struct {
 }
 
 const (
-	PodCertificateRequestConditionCertificateIssued string = "CertificateIssued"
-	PodCertificateRequestConditionReasonPodNotFound string = "PodNotFound"
+	PodCertificateRequestConditionCertificateIssued                     string = "CertificateIssued"
+	PodCertificateRequestConditionReasonPodNotFound                     string = "PodNotFound"
+	PodCertificateRequestConditionReasonCertificateConfigurationInvalid string = "CertificateConfigurationInvalid"
 )
 
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests,verbs=get;list;watch;create;update;patch;delete
@@ -69,30 +70,46 @@ const (
 
 func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 2}). //TODO Create a configurable setup for this
 		For(&capi.PodCertificateRequest{}).
 		WithEventFilter(predicate.Funcs{
-			UpdateFunc: func(e event.UpdateEvent) bool {
-				// Simple check without method calls
-				if newCert, ok := e.ObjectNew.(*capi.PodCertificateRequest); ok && newCert != nil {
-					return newCert.Status.CertificateChain == ""
-				}
-				return true
-			},
 			// UpdateFunc: func(e event.UpdateEvent) bool {
-			// 	newCert := e.ObjectNew.(*capi.PodCertificateRequest)
 
-			// 	return !r.isAlreadyIssued(newCert)
+			// 	isPcrImmutable := api.IsPodCertificateRequestImmutable(e.ObjectNew.(*capi.PodCertificateRequest))
 
-			// 	// if newCert, ok := e.ObjectNew.(*capi.PodCertificateRequest); ok {
-			// 	// 	return !r.isAlreadyIssued(newCert)
+			// 	//TODO: Check here r.SignerName that the object matches our designation
+
+			// 	// V(1) - Debug level (basic debugging)
+			// 	r.Log.Info("Check if PodCertificateRequest is immutable", "immutable", isPcrImmutable, "event", "update", "request-name", e.ObjectNew.(*capi.PodCertificateRequest).Name)
+			// 	return !isPcrImmutable // True for processing request ; False for skipping request
+
+			// 	// // Simple check without method calls
+			// 	// if newCert, ok := e.ObjectNew.(*capi.PodCertificateRequest); ok && newCert != nil {
+			// 	// 	return newCert.Status.CertificateChain == ""
 			// 	// }
 			// 	// return true
 			// },
 
-			// // Allow create events
-			// CreateFunc: func(e event.CreateEvent) bool {
-			// 	return true
-			// },
+			// Allow create events
+			CreateFunc: func(e event.CreateEvent) bool {
+
+				isPcrImmutable := api.IsPodCertificateRequestImmutable(e.Object.(*capi.PodCertificateRequest))
+
+				// V(1) - Debug level (basic debugging)
+				r.Log.Info("Check if PodCertificateRequest is immutable", "immutable", isPcrImmutable, "event", "create", "request-name", e.Object.(*capi.PodCertificateRequest).Name)
+				return !isPcrImmutable // True for processing request ; False for skipping request
+
+				// // Skip handling of immutable requests
+				// if api.IsPodCertificateRequestImmutable(e.Object.(*capi.PodCertificateRequest)) {
+				// 	// V(1) - Debug level (basic debugging)
+				// 	r.Log.V(1).Info("Check if PodCertificateRequest is immutable", "immutable", true, "request-name", e.Object.(*capi.PodCertificateRequest).Name)
+				// 	return true
+				// }
+
+				// return true
+
+				//				return true
+			},
 
 			// // Allow delete events
 			// DeleteFunc: func(e event.DeleteEvent) bool {
@@ -101,7 +118,13 @@ func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) err
 
 			// // Allow generic events (e.g., external triggers)
 			// GenericFunc: func(e event.GenericEvent) bool {
-			// 	return true
+			// 	isPcrImmutable := api.IsPodCertificateRequestImmutable(e.Object.(*capi.PodCertificateRequest))
+
+			// 	//TODO: Check here r.SignerName that the object matches our designation
+
+			// 	// V(1) - Debug level (basic debugging)
+			// 	r.Log.Info("Check if PodCertificateRequest is immutable", "immutable", isPcrImmutable, "event", "update", "request-name", e.Object.(*capi.PodCertificateRequest).Name)
+			// 	return !isPcrImmutable // True for processing request ; False for skipping request
 			// },
 		}).
 		Complete(r)
@@ -110,25 +133,38 @@ func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) err
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.Log = logf.FromContext(ctx)
+	//r.Log = logf.Log.WithName("PodCertificateRequestReconciler").WithValues("request-name", req.Name)
+
+	r.Log = logf.Log.WithValues("name", req.Name, "namespace", req.Namespace)
+	// r.Log = logf.FromContext(ctx)
 
 	// Retrieve the object from the ctx and map to PodCertificateRequest
 	var pcr capi.PodCertificateRequest
 	if err := r.Client.Get(ctx, req.NamespacedName, &pcr); client.IgnoreNotFound(err) != nil {
-		return ctrl.Result{}, fmt.Errorf("Error %q getting PodCertificateRequest", err)
+		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
+
 	}
-	r.Log.Info("Processing PodCertificateRequest")
+
+	if api.IsPodCertificateRequestImmutable(&pcr) {
+		r.Log.Info("PodCertificateRequest is immutable - skipping")
+		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
+
+	}
 
 	// Verify our signer name matches the one from request
+	//TODO: Move to SetupWithManager func ?
 	if !r.isSignerNameMatching(&pcr) {
 		r.Log.Info("Signer name does not match - skipping")
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
+
 	}
 
+	// This should now be handled by our configuration of SetupMgr which drops immutable requests
 	// Check if the PodCertificateRequest has already been issued - if so we skip the event
 	if api.IsPodCertificateRequestIssued(&pcr) {
 		r.Log.Info("PodCertificateRequest already issued - skipping")
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
+
 	}
 
 	// Check if the public key type is supported
@@ -138,10 +174,13 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		r.Log.Error(err, "The key provided in the PodCertificateRequest is not a supported type")
 
 		r.setPodCertificateRequestStatusCondition(
-			ctx, &pcr,
+			&pcr,
 			capi.PodCertificateRequestConditionTypeFailed,         // Condition type
 			capi.PodCertificateRequestConditionUnsupportedKeyType, // Condition reason
 			"Unsupported public key type")                         // Condition message
+
+		r.clearPodCertificateRequestStatusFields(&pcr)
+		r.updatePodCertificateRequestStatus(ctx, &pcr)
 
 		r.EventRecorder.Event(
 			&pcr,
@@ -149,7 +188,7 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 			capi.PodCertificateRequestConditionUnsupportedKeyType,
 			"Unsupported public key type")
 
-		return ctrl.Result{}, err
+		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
 
 	// Retrieve the pod associated with the PodCertificateRequest - if we fail to do so we are facing
@@ -159,10 +198,13 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		r.Log.Error(err, "Failed to find associated pod", "podName", pcr.Spec.PodName)
 
 		r.setPodCertificateRequestStatusCondition(
-			ctx, &pcr,
+			&pcr,
 			capi.PodCertificateRequestConditionTypeFailed,        // Condition type
 			PodCertificateRequestConditionReasonPodNotFound,      // Condition reason
 			"Pod for associated PodCertificateRequest not found") // Condition message
+
+		r.clearPodCertificateRequestStatusFields(&pcr)
+		r.updatePodCertificateRequestStatus(ctx, &pcr)
 
 		r.EventRecorder.Event(
 			&pcr,
@@ -170,25 +212,46 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 			PodCertificateRequestConditionReasonPodNotFound,
 			"Pod for associated PodCertificateRequest not found")
 
-		return ctrl.Result{}, err
+		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
 
 	r.Log.Info("Found associated pod for PodCertificateRequest", "podName", pod.Name)
 
 	// Extract the configuration for the certificate from the pod annotations or use defailts if none.
-	pCertificateConfig := r.getPodCertificateRequestConfiguration(&pcr, pod)
+	podCertificateRequestConfiguration := r.getPodCertificateRequestConfiguration(&pcr, pod)
 
 	// Issue certificate using the public key from the request
 	podCertificate, err := r.CA.IssueCertificateForPublicKey(
 		pcr.Spec.PKIXPublicKey,
-		pCertificateConfig)
+		podCertificateRequestConfiguration)
 	if err != nil {
 		r.Log.Error(err, "Failed to issue certificate", "podName", pod.Name)
-		return ctrl.Result{}, err
+		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
 
 	// Set the certificate in the PodCertificateRequest and update annotations on the pod
-	r.setPodCertificateRequestWithCertificate(ctx, &pcr, podCertificate)
+	err = r.setPodCertificateRequestWithCertificate(ctx, &pcr, podCertificate)
+	if err != nil {
+		r.Log.Error(err, "Certificate configuration is invalid!")
+
+		r.setPodCertificateRequestStatusCondition(
+			&pcr,
+			capi.PodCertificateRequestConditionTypeFailed,                       // Condition type
+			PodCertificateRequestConditionReasonCertificateConfigurationInvalid, // Condition reason
+			"Pod for associated PodCertificateRequest not found")                // Condition message
+
+		r.clearPodCertificateRequestStatusFields(&pcr)
+		r.updatePodCertificateRequestStatus(ctx, &pcr)
+
+		r.EventRecorder.Event(
+			&pcr,
+			corev1.EventTypeWarning,
+			PodCertificateRequestConditionReasonCertificateConfigurationInvalid,
+			"Certificate configuration is invalid")
+
+		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
+	}
+
 	r.setDefaultPodAnnotations(ctx, &pcr, pod)
 
 	// Successfully issued certificate
@@ -199,7 +262,8 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		capi.PodCertificateRequestConditionTypeIssued,
 		"Certificate successfully issued")
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, nil // DON'T REQUEUE - Terminal success
+
 }
 
 func (r *PodCertificateRequestReconciler) isPublicKeyTypeSupported(publicKeyBytes []byte) bool {
@@ -214,9 +278,9 @@ func (r *PodCertificateRequestReconciler) isPublicKeyTypeSupported(publicKeyByte
 	// Log the key type for debugging
 	switch publicKey.(type) {
 	case *rsa.PublicKey:
-		fmt.Printf("Using RSA public key\n")
+		r.Log.Info("Using RSA public key")
 	case ed25519.PublicKey:
-		fmt.Printf("Using Ed25519 public key\n")
+		r.Log.Info("Using Ed25519 public key")
 	default:
 		return false
 	}
@@ -248,20 +312,30 @@ func (r *PodCertificateRequestReconciler) getPodCertificateRequestAssociatedPod(
 
 func (r *PodCertificateRequestReconciler) setPodCertificateRequestWithCertificate(ctx context.Context, pcr *capi.PodCertificateRequest, podCertificate *ca.PodCertificate) error {
 
-	// Update certificate fields
+	// We update only fields required
+	beginRefreshAt := podCertificate.NotAfter.Add(-podCertificate.Config.RefreshBefore)
+
+	r.Log.V(1).Info("Setting the certificate in the PodCertificateRequest",
+		"podName", pcr.Spec.PodName,
+		"commonName", podCertificate.Config.CommonName,
+		"dnsNames", podCertificate.Config.DNSNames,
+		"duration", podCertificate.Config.Duration.String(),
+		"refreshBefore", podCertificate.Config.RefreshBefore.String(),
+		"beginRefreshAt", beginRefreshAt.Format(time.RFC1123Z))
+
 	pcr.Status.CertificateChain = podCertificate.CertificateChain
 	pcr.Status.NotBefore = &metav1.Time{Time: podCertificate.NotBefore}
 	pcr.Status.NotAfter = &metav1.Time{Time: podCertificate.NotAfter}
-	pcr.Status.BeginRefreshAt = &metav1.Time{Time: podCertificate.NotBefore.Add(30 * time.Minute)} //TODO: This should be configurable
+	pcr.Status.BeginRefreshAt = &metav1.Time{Time: beginRefreshAt}
 
 	r.setPodCertificateRequestStatusCondition(
-		ctx, pcr,
+		pcr,
 		capi.PodCertificateRequestConditionTypeIssued,   // Condition type
 		PodCertificateRequestConditionCertificateIssued, // Condition reason
 		"Certificate successfully issued")               // Condition message
 
 	if err := r.Status().Update(ctx, pcr); err != nil {
-		r.Log.Error(err, "failed to update status")
+		r.Log.Error(err, "failed to update the PodCertificateRequest status")
 		return err
 	}
 
@@ -281,7 +355,16 @@ func (r *PodCertificateRequestReconciler) setDefaultPodAnnotations(ctx context.C
 	return nil
 }
 
-func (r *PodCertificateRequestReconciler) setPodCertificateRequestStatusCondition(ctx context.Context, pcr *capi.PodCertificateRequest, conditionType, reason, message string) {
+func (r *PodCertificateRequestReconciler) clearPodCertificateRequestStatusFields(pcr *capi.PodCertificateRequest) {
+
+	pcr.Status.CertificateChain = ""
+	pcr.Status.NotBefore = nil
+	pcr.Status.NotAfter = nil
+	pcr.Status.BeginRefreshAt = nil
+
+}
+
+func (r *PodCertificateRequestReconciler) setPodCertificateRequestStatusCondition(pcr *capi.PodCertificateRequest, conditionType, reason, message string) {
 
 	pcr.Status.Conditions = []metav1.Condition{
 		{
@@ -292,10 +375,17 @@ func (r *PodCertificateRequestReconciler) setPodCertificateRequestStatusConditio
 			Message:            message,
 		},
 	}
+}
 
-	if err := r.Status().Update(ctx, pcr); err != nil {
+func (r *PodCertificateRequestReconciler) updatePodCertificateRequestStatus(ctx context.Context, pcr *capi.PodCertificateRequest) error {
+
+	err := r.Status().Update(ctx, pcr)
+	if err != nil {
 		r.Log.Error(err, "failed to update status with failure condition")
+		return err
 	}
+
+	return nil
 }
 
 func (r *PodCertificateRequestReconciler) getPodCertificateRequestConfiguration(pcr *capi.PodCertificateRequest, pod *corev1.Pod) *ca.PodCertificateConfig {
@@ -319,8 +409,11 @@ func (r *PodCertificateRequestReconciler) getPodCertificateRequestConfiguration(
 	//TODO: we need testing on various combination of time/duration and refresh to make sure we are alligned with requirements of the API server
 	//TODO: Add these default annotations into a static map for easy retrieval ?
 
-	defaultCertificateDuration := 1 * time.Hour // default value for certificate duration
-	certificateDuration := defaultCertificateDuration
+	defaultCertificateDuration := 1 * time.Hour       // default value for certificate duration
+	certificateDuration := defaultCertificateDuration // set the value for default if we fail to parse from annotations
+
+	defaultRefreshBefore := 30 * time.Minute // default value for refresh before
+	refreshBefore := defaultRefreshBefore    // set the value for default if we fail to parse from annotations
 
 	// Retrieve the common name from the pod annotation
 	// V(1) - Debug level (basic debugging)
@@ -350,15 +443,34 @@ func (r *PodCertificateRequestReconciler) getPodCertificateRequestConfiguration(
 		}
 	}
 
+	// Retrieve the duration from the pod annotation
+	// V(1) - Debug level (basic debugging)
+	r.Log.V(1).Info("Retrieving certificate refresh window time from the annotations", "podName", pod.Name)
+
+	refreshBeforeStr := r.getAnnotationOrDefault(pod,
+		fmt.Sprintf("%s-refresh", r.SignerName),
+		"", // empty string means no annotation found
+		"refresh-before")
+
+	if refreshBeforeStr != "" {
+		parsedCertificateRefreshDuration, err := time.ParseDuration(refreshBeforeStr)
+		if err != nil {
+			r.Log.V(1).Info("Could not parse refresh window from annotation - using default value", "podName", pod.Name)
+		} else {
+			refreshBefore = parsedCertificateRefreshDuration
+			r.Log.V(1).Info("Parsed refresh window from annotation - using the supplied value", "podName", pod.Name, "refresh-before", refreshBefore.String())
+		}
+	}
+
 	dnsNames := r.getCommaSeparatedAnnotation(pod,
 		fmt.Sprintf("%s-san", r.SignerName),
 		"dnsNames")
 
 	pcConfig := &ca.PodCertificateConfig{
-		CommonName: commonName,
-		DNSNames:   dnsNames,
-		Duration:   certificateDuration,
-		// RefreshBefore: 30 * time.Minute, //TODO: Finish the refresh before which should be configurable
+		CommonName:    commonName,
+		DNSNames:      dnsNames,
+		Duration:      certificateDuration,
+		RefreshBefore: refreshBefore,
 	}
 	//TODO: Add method to validate the integrity of the certificate configuration?!
 
@@ -379,7 +491,7 @@ func (r *PodCertificateRequestReconciler) patchPodAnnotations(ctx context.Contex
 	return r.Patch(ctx, pod, patch)
 }
 
-func (r *PodCertificateRequestReconciler) getPodAnnotation(pod *v1.Pod, annotationKey string) (string, bool) {
+func (r *PodCertificateRequestReconciler) getPodAnnotation(pod *corev1.Pod, annotationKey string) (string, bool) {
 	if pod == nil || pod.Annotations == nil {
 		return "", false
 	}

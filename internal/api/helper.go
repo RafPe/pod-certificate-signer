@@ -8,39 +8,32 @@ import (
 	capi "k8s.io/api/certificates/v1alpha1"
 )
 
-// // IsCertificateRequestApproved returns true if a certificate request has the
-// // "Approved" condition and no "Denied" conditions; false otherwise.
-// func IsCertificateRequestApproved(csr *capi.CertificateSigningRequest) bool {
-// 	approved, denied := GetCertApprovalCondition(&csr.Status)
-// 	return approved && !denied
-// }
+// We cannot handle immutable requests anymore
+// TODO: Maybe there isa better way to handle the check for request already being done
+func IsPodCertificateRequestImmutable(pcr *capi.PodCertificateRequest) bool {
+	issued, denied, failed := GetPodCertificateRequestStatusCondition(&pcr.Status)
+	return issued || denied || failed
+}
 
-// func GetCertApprovalCondition(status *capi.Certific) (approved bool, denied bool) {
-// 	for _, c := range status.Conditions {
-// 		if c.Type == capi.Cer {
-// 			approved = true
-// 		}
-// 		if c.Type == capi.CertificateDenied {
-// 			denied = true
-// 		}
-// 	}
-// 	return
-// }
+func IsPodCertificateIssued(pcr *capi.PodCertificateRequest) bool {
+	issued, denied, failed := GetPodCertificateRequestStatusCondition(&pcr.Status)
+	return issued && !denied && !failed
+}
 
-// func AddPodAnnotation(ctx context.Context, pod *corev1.Pod, certFingerprint string) error {
-// 	if pod.Annotations == nil {
-// 		pod.Annotations = make(map[string]string)
-// 	}
-
-// 	pod.Annotations["cert.example.com/fingerprint"] = certFingerprint
-// 	pod.Annotations["cert.example.com/issued-at"] = time.Now().Format(time.RFC3339)
-
-// 	if err := r.Update(ctx, pod); err != nil {
-// 		return fmt.Errorf("failed to update pod annotations: %w", err)
-// 	}
-
-// 	return nil
-// }
+func GetPodCertificateRequestStatusCondition(status *capi.PodCertificateRequestStatus) (issued bool, denied bool, failed bool) {
+	for _, c := range status.Conditions {
+		if c.Type == capi.PodCertificateRequestConditionTypeIssued {
+			issued = true
+		}
+		if c.Type == capi.PodCertificateRequestConditionTypeDenied {
+			denied = true
+		}
+		if c.Type == capi.PodCertificateRequestConditionTypeFailed {
+			failed = true
+		}
+	}
+	return
+}
 
 // ParseCSR decodes a PEM encoded CSR
 // Copied from https://github.com/kubernetes/kubernetes/blob/v1.34.1/pkg/apis/certificates/v1/helpers.go

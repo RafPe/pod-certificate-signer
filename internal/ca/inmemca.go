@@ -28,7 +28,7 @@ type PodCertificateConfig struct {
 	CommonName    string
 	DNSNames      []string
 	Duration      time.Duration
-	RefreshBefore time.Time
+	RefreshBefore time.Duration
 }
 
 func GenerateCA() (*CA, error) {
