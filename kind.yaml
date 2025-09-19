@@ -1,0 +1,29 @@
+---
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+featureGates:
+  "PodCertificateRequest": true # For Pod generated certificates
+  "ImageVolume": true # For mounting OCI volumes
+  "StructuredAuthenticationConfiguration": true
+  "MutatingAdmissionPolicy": true # https://kubernetes.io/docs/reference/access-authn-authz/mutating-admission-policy/
+runtimeConfig:
+  "certificates.k8s.io/v1alpha1/podcertificaterequests": "true" # For Pod generated certificates
+  "admissionregistration.k8s.io/v1beta1": "true" # For MutatingAdmissionPolicy
+containerdConfigPatches:
+- |-
+  [plugins."io.containerd.grpc.v1.cri".registry.mirrors."gitea.raftech.localtest.me:8443"]
+    endpoint = ["https://gitea.raftech.localtest.me"]
+  [plugins."io.containerd.grpc.v1.cri".registry.configs."gitea.raftech.localtest.me".tls]
+    insecure_skip_verify = true
+nodes:
+- role: control-plane
+  image: "kindest/node:v1.34.0"
+  labels:
+    ingress-ready: "true"
+  extraPortMappings:
+  - containerPort: 443
+    hostPort: 8443
+    protocol: TCP
+  - containerPort: 32222
+    hostPort: 32222
+    protocol: TCP  
