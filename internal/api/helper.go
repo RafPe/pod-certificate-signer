@@ -1,86 +1,79 @@
 package api
 
 import (
-	"crypto/x509"
-	"encoding/pem"
-	"errors"
+	"context"
+	"fmt"
 
-	capi "k8s.io/api/certificates/v1alpha1"
+	capiv1alpha1 "k8s.io/api/certificates/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
+
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// We cannot handle immutable requests anymore
-// TODO: Maybe there isa better way to handle the check for request already being done
-func IsPodCertificateRequestImmutable(pcr *capi.PodCertificateRequest) bool {
-	issued, denied, failed := GetPodCertificateRequestStatusCondition(&pcr.Status)
-	return issued || denied || failed
+func IsPodCertificateRequestImmutable(pcr *capiv1alpha1.PodCertificateRequest) bool {
+	return GetPodCertificateRequestConditionType(&pcr.Status) != ""
 }
 
-func IsPodCertificateIssued(pcr *capi.PodCertificateRequest) bool {
-	issued, denied, failed := GetPodCertificateRequestStatusCondition(&pcr.Status)
-	return issued && !denied && !failed
+func IsPodCertificateStatusIssued(pcr *capiv1alpha1.PodCertificateRequest) bool {
+	return GetPodCertificateRequestConditionType(&pcr.Status) == capiv1alpha1.PodCertificateRequestConditionTypeIssued
 }
 
-func GetPodCertificateRequestStatusCondition(status *capi.PodCertificateRequestStatus) (issued bool, denied bool, failed bool) {
-	for _, c := range status.Conditions {
-		if c.Type == capi.PodCertificateRequestConditionTypeIssued {
-			issued = true
-		}
-		if c.Type == capi.PodCertificateRequestConditionTypeDenied {
-			denied = true
-		}
-		if c.Type == capi.PodCertificateRequestConditionTypeFailed {
-			failed = true
-		}
-	}
-	return
-}
-
-// ParseCSR decodes a PEM encoded CSR
-// Copied from https://github.com/kubernetes/kubernetes/blob/v1.34.1/pkg/apis/certificates/v1/helpers.go
-func ParseCSR(pemBytes []byte) (*x509.CertificateRequest, error) {
-	// extract PEM from request object
-	block, _ := pem.Decode(pemBytes)
-	if block == nil || block.Type != "CERTIFICATE REQUEST" {
-		return nil, errors.New("PEM block type must be CERTIFICATE REQUEST")
-	}
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		return nil, err
-	}
-	return csr, nil
-}
-
-func IsPodCertificateRequestIssued(pcr *capi.PodCertificateRequest) bool {
-
+func GetPodCertificateRequestConditionType(status *capiv1alpha1.PodCertificateRequestStatus) string {
 	// Fail safe if the object would be set to nil
-	if pcr.Status.Conditions == nil {
-		return false
+	if status.Conditions == nil {
+		return ""
 	}
 
-	// Check if the condition is set to well known type of being issued
-	for _, c := range pcr.Status.Conditions {
-		if c.Type == capi.PodCertificateRequestConditionTypeIssued {
-			return true
+	// // Well-known condition types for PodCertificateRequests
+	// const (
+	// 	// Denied indicates the request was denied by the signer.
+	// 	PodCertificateRequestConditionTypeDenied string = "Denied"
+	// 	// Failed indicates the signer failed to issue the certificate.
+	// 	PodCertificateRequestConditionTypeFailed string = "Failed"
+	// 	// Issued indicates the certificate has been issued.
+	// 	PodCertificateRequestConditionTypeIssued string = "Issued"
+	// )
+
+	for _, c := range status.Conditions {
+		if c.Type == capiv1alpha1.PodCertificateRequestConditionTypeIssued {
+			return capiv1alpha1.PodCertificateRequestConditionTypeIssued
+		}
+		if c.Type == capiv1alpha1.PodCertificateRequestConditionTypeDenied {
+			return capiv1alpha1.PodCertificateRequestConditionTypeDenied
+		}
+		if c.Type == capiv1alpha1.PodCertificateRequestConditionTypeFailed {
+			return capiv1alpha1.PodCertificateRequestConditionTypeFailed
 		}
 	}
 
-	return false
-
+	return ""
 }
 
-// // Well-known condition types for PodCertificateRequests
-// const (
-// 	// Denied indicates the request was denied by the signer.
-// 	PodCertificateRequestConditionTypeDenied string = "Denied"
-// 	// Failed indicates the signer failed to issue the certificate.
-// 	PodCertificateRequestConditionTypeFailed string = "Failed"
-// 	// Issued indicates the certificate has been issued.
-// 	PodCertificateRequestConditionTypeIssued string = "Issued"
-// )
+func GetPodAnnotation(pod *corev1.Pod, annotationKey string) (string, bool) {
+	if pod == nil || pod.Annotations == nil {
+		return "", false
+	}
 
-// // Well-known condition reasons for PodCertificateRequests
-// const (
-// 	// UnsupportedKeyType should be set on "Denied" conditions when the signer
-// 	// doesn't support the key type of publicKey.
-// 	PodCertificateRequestConditionUnsupportedKeyType string = "UnsupportedKeyType"
-// )
+	value, exists := pod.Annotations[annotationKey]
+	if !exists || value == "" {
+		return "", false
+	}
+
+	return value, true
+}
+
+func GetPod(ctx context.Context, client client.Client, podName, podNamespace string) (*corev1.Pod, error) {
+
+	var pod corev1.Pod
+	podKey := types.NamespacedName{
+		Name:      podName,
+		Namespace: podNamespace,
+	}
+
+	if err := client.Get(ctx, podKey, &pod); err != nil {
+		return nil, fmt.Errorf("Failed to get pod %s/%s: %w", podNamespace, podName, err)
+	}
+
+	return &pod, nil
+}

@@ -2,13 +2,16 @@
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 featureGates:
-  "PodCertificateRequest": true # For Pod generated certificates
-  "ImageVolume": true # For mounting OCI volumes
+  "PodCertificateRequest": true                   # For Pod generated certificates
+  "ClusterTrustBundle": true                      # For Cluster Trust Bundle https://kubernetes.io/docs/concepts/storage/projected-volumes/#clustertrustbundle
+  "ClusterTrustBundleProjection": true            # For Cluster Trust Bundle Projection https://kubernetes.io/docs/concepts/storage/projected-volumes/#clustertrustbundle
+  "ImageVolume": true                             # For mounting OCI volumes
   "StructuredAuthenticationConfiguration": true
-  "MutatingAdmissionPolicy": true # https://kubernetes.io/docs/reference/access-authn-authz/mutating-admission-policy/
+  "MutatingAdmissionPolicy": true                 # https://kubernetes.io/docs/reference/access-authn-authz/mutating-admission-policy/
 runtimeConfig:
   "certificates.k8s.io/v1alpha1/podcertificaterequests": "true" # For Pod generated certificates
-  "admissionregistration.k8s.io/v1beta1": "true" # For MutatingAdmissionPolicy
+  "certificates.k8s.io/v1beta1/clustertrustbundles": "true"     # For Cluster Trust Bundle
+  "admissionregistration.k8s.io/v1beta1": "true"                # For MutatingAdmissionPolicy
 containerdConfigPatches:
 - |-
   [plugins."io.containerd.grpc.v1.cri".registry.mirrors."gitea.raftech.localtest.me:8443"]

@@ -32,8 +32,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/ca"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/controller"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -50,11 +50,19 @@ func init() {
 
 // nolint:gocyclo
 func main() {
+	var signerName string
+	var caCertPath string
+	var caKeyPath string
+
 	var clusterFqdn string
 	var enableLeaderElection bool
 	var leaderElectionID string
 	var healthProbeBindAddress string
 	var debugLogging bool
+
+	flag.StringVar(&signerName, "signer-name", "coolcert.example.com/foo", "Only sign CSR with this .spec.signerName.")
+	flag.StringVar(&caCertPath, "ca-cert-path", "/Users/rafalpieniazek/github.com/rafpe/kubernetes-podcertificate-signer/hack/ca.pem", "CA certificate file.")
+	flag.StringVar(&caKeyPath, "ca-key-path", "/Users/rafalpieniazek/github.com/rafpe/kubernetes-podcertificate-signer/hack/ca-key.pem", "CA private key file.")
 
 	flag.StringVar(&clusterFqdn, "cluster-fqdn", "cluster.local", "The FQDN of the cluster")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
@@ -101,20 +109,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Generate CA during startup
-	certificateAuthority, err := ca.GenerateCA()
+	signer, err := signer.NewSigner(caCertPath, caKeyPath, signerName)
 	if err != nil {
-		setupLog.Error(err, "failed to generate CA")
+		setupLog.Error(err, "failed to create signer")
 		os.Exit(1)
 	}
-	setupLog.Info("CA generated successfully")
 
 	if err := (&controller.PodCertificateRequestReconciler{
 		Client:        mgr.GetClient(),
 		Log:           ctrl.Log.WithName("controllers").WithName("PodCertificateSignerReconciler"),
 		Scheme:        mgr.GetScheme(),
-		CA:            certificateAuthority,
-		SignerName:    "coolcert.example.com/foo",
+		Signer:        signer,
 		ClusterFqdn:   clusterFqdn,
 		EventRecorder: mgr.GetEventRecorderFor("PodCertificateSignerReconciler"),
 	}).SetupWithManager(mgr); err != nil {
