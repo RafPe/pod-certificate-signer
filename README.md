@@ -85,7 +85,7 @@ The following can be used to create a deployment which will trigger new PodCerti
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: podcertificate-deployment
+  name: duo-test
 spec:
   replicas: 1
   selector:
@@ -98,8 +98,9 @@ spec:
       annotations:
         coolcert.example.com/foo-cn: "some-epic-name.com"
         coolcert.example.com/foo-san: "example.com, www.example.com, anotherexample.com.cy"
-        coolcert.example.com/foo-duration: "1h"
-        coolcert.example.com/foo-refresh: "49m"        
+        coolcert.example.com/foo-duration: "2h"
+        coolcert.example.com/foo-refresh: "30m" 
+        coolcert.example.com/foo-uris: "https://example.com, https://www.example.com, https://anotherexample.com.cy"                
     spec:
       serviceAccountName: default
       containers:

@@ -42,7 +42,7 @@ const (
 	// Duration for the certificate
 	PodCertificateConfigAnnotationSuffixDuration string = "duration"
 	// Refresh before for the certificate
-	PodCertificateConfigAnnotationSuffixRefreshBefore string = "refresh-before"
+	PodCertificateConfigAnnotationSuffixRefreshBefore string = "refresh"
 	// URIs for the certificate
 	PodCertificateConfigAnnotationSuffixURIs string = "uris"
 )
@@ -132,7 +132,10 @@ func getConfigFromAnnotationsRefreshBefore(pod *corev1.Pod, signerName string) t
 			return refresh
 		}
 	}
-	return 1 * time.Hour // Default
+	//TODO: Default value here
+	// As a ref certificate minimum duration is 1 hour - so we can safely say 15 min - the field is only a hint so
+	// this is not 100% deterministic value for the kube-api.
+	return 15 * time.Minute // Default
 }
 
 //TODO: Implement these :)
