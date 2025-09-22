@@ -61,8 +61,8 @@ func main() {
 	var debugLogging bool
 
 	flag.StringVar(&signerName, "signer-name", "coolcert.example.com/foo", "Only sign CSR with this .spec.signerName.")
-	flag.StringVar(&caCertPath, "ca-cert-path", "/Users/rafalpieniazek/github.com/rafpe/kubernetes-podcertificate-signer/hack/ca.pem", "CA certificate file.")
-	flag.StringVar(&caKeyPath, "ca-key-path", "/Users/rafalpieniazek/github.com/rafpe/kubernetes-podcertificate-signer/hack/ca-key.pem", "CA private key file.")
+	flag.StringVar(&caCertPath, "ca-cert-path", "../../hack/ca.pem", "CA certificate file.")
+	flag.StringVar(&caKeyPath, "ca-key-path", "../../hack/ca-key.pem", "CA private key file.")
 
 	flag.StringVar(&clusterFqdn, "cluster-fqdn", "cluster.local", "The FQDN of the cluster")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,

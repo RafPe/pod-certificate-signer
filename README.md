@@ -48,23 +48,182 @@ Once a CA is generated you can easily mount it to the controller container via v
 
 ```yaml
   # ..... content not relevant for the example
-        volumes:
-        - name: ca-secret
-        secret:
-            secretName: ca-secret
-            items:
-            - key: tls.crt
-            path: ca.pem
-            - key: tls.key
-            path: ca-key.pem
-    volumeMounts:
+      volumeMounts:
+      - name: ca-secret
+        mountPath: /etc/ssl/ca
+        readOnly: true  
+    volumes:
     - name: ca-secret
-    mountPath: /etc/ssl/ca
-    readOnly: true
+    secret:
+        secretName: ca-secret
+        items:
+        - key: tls.crt
+          path: ca.pem
+        - key: tls.key
+          path: ca-key.pem
   # ..... content not relevant for the example
 ```
 
 ## Deploying controller to Kubernetes
+> This is currently a sample static deployment - Kustomize/Helm is coming next ... The signer used in this example is `coolcert.example.com/foo`
+
+```yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pcs
+  namespace: system
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pcs-controller-role # pod certificate signer controller role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - podcertificaterequests
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - podcertificaterequests/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - podcertificaterequests/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - signers
+  resourceNames:
+  - "coolcert.example.com/foo"  # Your specific signer name
+  # - "coolcert.example.com/*"  # Alternative: wildcard for all signers in your domain
+  verbs:
+  - sign  
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: meshtool-is-a-meshtool-signer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pcs-controller-role
+subjects:
+- kind: ServiceAccount
+  namespace: system
+  name: pcs
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pcs-controller
+  namespace: system
+  labels:
+    app: pcs-controller
+spec:
+  replicas: 1 # we need leader election to properly work with multiple replicas
+  selector:
+    matchLabels:
+      app: pcs-controller
+  template:
+    metadata:
+      labels:
+        app: pcs-controller
+    spec:
+      securityContext:
+        # Projects are configured by default to adhere to the "restricted" Pod Security Standards.
+        # This ensures that deployments meet the highest security requirements for Kubernetes.
+        # For more details, see: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - command:
+        - /manager
+        args:
+          - --signer-name=coolcert.example.com/foo
+          - --ca-cert-path=/etc/ssl/ca/ca.pem
+          - --ca-key-path=/etc/ssl/ca/ca-key.pem         
+        image: ghcr.io/rafpe/kubernetes-podcertificate-signer/controller:rc-v0.0.1
+        imagePullPolicy: Always		
+        name: manager
+        ports: []
+        resources:
+          limits:
+            memory: 256Mi
+          requests:
+            cpu: 10m
+            memory: 32Mi        
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - "ALL"
+        volumeMounts:
+        - name: ca-secret
+          mountPath: /etc/ssl/ca
+          readOnly: true              
+      volumes:
+      - name: ca-secret
+        secret:
+            secretName: ca-secret
+            items:
+            - key: tls.crt
+              path: ca.pem
+            - key: tls.key
+              path: ca-key.pem          
+      dnsPolicy: Default
+      nodeSelector:
+        kubernetes.io/os: linux
+      priorityClassName: system-cluster-critical
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      serviceAccountName: pcs
+      terminationGracePeriodSeconds: 10
+
+```
 
 
 ## Controller commandline options
