@@ -8,11 +8,11 @@ This in combination with [Cluster Trust Bundles](https://kubernetes.io/docs/refe
 - [kubernetes-podcertificate-signer](#kubernetes-podcertificate-signer)
 - [Why this controller](#why-this-controller)
   - [Controller flow](#controller-flow)
+    - [New PodCertificateRequest](#new-podcertificaterequest)
 - [Running the controller](#running-the-controller)
   - [Prerequisites - valid CA](#prerequisites---valid-ca)
   - [Deploying controller to Kubernetes](#deploying-controller-to-kubernetes)
   - [Controller commandline options](#controller-commandline-options)
-    - [New PodCertificateRequest](#new-podcertificaterequest)
   - [Certificate configuration](#certificate-configuration)
   - [Applying configuration for certificates](#applying-configuration-for-certificates)
   - [Requesting PodCertificates](#requesting-podcertificates)
@@ -28,6 +28,37 @@ The main idea of this controller is leveraging on native functionalities/feature
 
 ## Controller flow
 Below you can see current chart showing how the flow of actions looks from a high level overview.
+
+
+### New PodCertificateRequest
+Is currently the default flow in our controller and is being the heart of its logic.
+
+```mermaid
+---
+config:
+  theme: neo
+---
+sequenceDiagram
+    participant Pod
+    participant KubeAPI
+    participant Controller
+    participant CA
+    Pod->>KubeAPI: Create with projected volume
+    KubeAPI->>Controller: PodCertificateRequest event
+    Controller->>Controller: Validate pod & config
+    critical Handle request    
+    alt Success
+        Controller->>CA: Sign certificate
+        CA->>Controller: Return certificate
+        Controller->>KubeAPI: Update status: Issued
+        KubeAPI->>Pod: Pod starts
+    else Failure/Deny
+        Controller->>KubeAPI: Update status: Failed/Denied
+        KubeAPI->>Pod: Pod blocked
+    end
+    end
+
+```
 
 # Running the controller
 Running the controller requires that you have a valid CA certificate and key ( can be of course self signed i.e. with [cfssl](https://github.com/cloudflare/cfssl) ) and determine what will be your designated `signer-name` for the controller. 
@@ -260,37 +291,6 @@ command line argument:
     	Zap Level at and above which stacktraces are captured (one of 'info', 'error', 'panic').
   -zap-time-encoding value
     	Zap time encoding (one of 'epoch', 'millis', 'nano', 'iso8601', 'rfc3339' or 'rfc3339nano'). Defaults to 'epoch'.
-```
-
-
-### New PodCertificateRequest
-Is currently the default flow in our controller and is being the heart of its logic.
-
-```mermaid
----
-config:
-  theme: neo
----
-sequenceDiagram
-    participant Pod
-    participant KubeAPI
-    participant Controller
-    participant CA
-    Pod->>KubeAPI: Create with projected volume
-    KubeAPI->>Controller: PodCertificateRequest event
-    Controller->>Controller: Validate pod & config
-    critical Handle request    
-    alt Success
-        Controller->>CA: Sign certificate
-        CA->>Controller: Return certificate
-        Controller->>KubeAPI: Update status: Issued
-        KubeAPI->>Pod: Pod starts
-    else Failure/Deny
-        Controller->>KubeAPI: Update status: Failed/Denied
-        KubeAPI->>Pod: Pod blocked
-    end
-    end
-
 ```
 
 ## Certificate configuration
