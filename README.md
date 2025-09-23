@@ -85,7 +85,7 @@ Once a CA is generated you can easily mount it to the controller container via v
         readOnly: true  
     volumes:
     - name: ca-secret
-    secret:
+      secret:
         secretName: ca-secret
         items:
         - key: tls.crt
