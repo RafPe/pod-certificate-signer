@@ -1,0 +1,12 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+featureGates:
+  "PodCertificateRequest": true
+  "ClusterTrustBundle": true
+  "ClusterTrustBundleProjection": true
+runtimeConfig:
+  "api/alpha": "true"
+  "certificates.k8s.io/v1beta1/clustertrustbundles": "true"
+nodes:
+- role: control-plane
+- role: worker
