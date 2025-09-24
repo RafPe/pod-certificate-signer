@@ -1,0 +1,164 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pcs
+  namespace: system
+
+# Selfsigned CA for testing purposes
+---
+apiVersion: v1
+data:
+  tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUR2VENDQXFXZ0F3SUJBZ0lVWFd4ODV6dDZEazFTd2ovZDVxNjM5enhQd3RRd0RRWUpLb1pJaHZjTkFRRUwKQlFBd2JqRUxNQWtHQTFVRUJoTUNWVk14RVRBUEJnTlZCQWdUQ0U1bGR5QlpiM0pyTVJZd0ZBWURWUVFIRXcxVApZVzRnUm5KaGJtTnBjMk52TVI0d0hBWURWUVFLRXhWRmVHRnRjR3hsSUVOdmJYQmhibmtzSUVsdVl5NHhGREFTCkJnTlZCQXNUQzBWdVoybHVaV1Z5YVc1bk1CNFhEVEkxTURreU1EQTJNVFl3TUZvWERUTXdNRGt4T1RBMk1UWXcKTUZvd2JqRUxNQWtHQTFVRUJoTUNWVk14RVRBUEJnTlZCQWdUQ0U1bGR5QlpiM0pyTVJZd0ZBWURWUVFIRXcxVApZVzRnUm5KaGJtTnBjMk52TVI0d0hBWURWUVFLRXhWRmVHRnRjR3hsSUVOdmJYQmhibmtzSUVsdVl5NHhGREFTCkJnTlZCQXNUQzBWdVoybHVaV1Z5YVc1bk1JSUJJakFOQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0MKQVFFQXFwVUt6WFFXcy9Tb1BEQ1FJL3QzZ01OT2FNWEhPMjI3RHBYeEVOck5pbkhWY3VIdUcyZmZIMDlvaVg3TQp1bFRXQlZjL0JUcEM1ZVEvalo1akFrcjI5MzAvSmRUZERzNU85eGZOb1oyRmpMOTNta0p3dVVIdkV0TVRtQUJOCi9aYzU5bkRUQ2FicEpoK1h1VEVtMFBXeEZyL2VOSXJiOVRCdFREWHZpMDBrRThWSjFTNVN5Qjh5OStwZlRCem8KRW82c1RsM0FGQ2FSblpPUjZrdE5DUmR4amRwYXd0a0tvaTYxaWd3RjVDTE5vMXBjWFgwUnhMSWlwVUJzeHBYMAo3dk40MG5JYXlwanBlY2tGazlEN0x2WVFDT0NtKzNvdkE4LzlqMUxrSkZnc2JHZGExRW1uS091MktZZWdtNjM4Ck5vd2FzbkwrcU9Bc2xlTzFRWTZBMjRVZHF3SURBUUFCbzFNd1VUQU9CZ05WSFE4QkFmOEVCQU1DQVFZd0R3WUQKVlIwVEFRSC9CQVV3QXdFQi96QWRCZ05WSFE0RUZnUVVtQWR5OForWVdWc3RCdDNFSytQTmhEWmVTMjh3RHdZRApWUjBSQkFnd0JvY0Vmd0FBQVRBTkJna3Foa2lHOXcwQkFRc0ZBQU9DQVFFQURiT2J0QzdlWVNodjFUdTB1eHBYCkVZVThaQWRTZjFsN1hCZG9rSFBpb056dHA4OW1JelNvMEpGNXh4VjlBYnFMZXFxa1lEMlhZUnRyL2FnV0MyYmUKRE5lRDhLWnptU2trVlFBcm1iTjZiQW1DVGJ1UmQvT1M5QUZ3S1NIS3BsVVdjcXhlN0NQWWtXYlNpcy9oNENIcgpybUZqTnprSVAvUEROYVowQVIvY28rZm5oN2dlTmErK3d2c3dXd1BRUS9LdjNVRFBoZHRYWXFGVGplTjRzVkdSCmxqQno3MGxiVDE1VlFlWk91WlpwVnFob1ZMOER1eHVyTU9YVTk2cnhtakdsWHhncE5HMDUwSEVUYS9POUdVaDgKRFFVcEZPeDZmSGZ6QmdYMkQ0cVBPMjVab3pqMnRlTG9YdG5rL3piMldpdURNTjQvbGFWUUtBRzdvSEFMRXM2bwpBUT09Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+  tls.key: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb3dJQkFBS0NBUUVBcXBVS3pYUVdzL1NvUERDUUkvdDNnTU5PYU1YSE8yMjdEcFh4RU5yTmluSFZjdUh1CkcyZmZIMDlvaVg3TXVsVFdCVmMvQlRwQzVlUS9qWjVqQWtyMjkzMC9KZFRkRHM1Tzl4Zk5vWjJGakw5M21rSncKdVVIdkV0TVRtQUJOL1pjNTluRFRDYWJwSmgrWHVURW0wUFd4RnIvZU5JcmI5VEJ0VERYdmkwMGtFOFZKMVM1Uwp5Qjh5OStwZlRCem9FbzZzVGwzQUZDYVJuWk9SNmt0TkNSZHhqZHBhd3RrS29pNjFpZ3dGNUNMTm8xcGNYWDBSCnhMSWlwVUJzeHBYMDd2TjQwbklheXBqcGVja0ZrOUQ3THZZUUNPQ20rM292QTgvOWoxTGtKRmdzYkdkYTFFbW4KS091MktZZWdtNjM4Tm93YXNuTCtxT0FzbGVPMVFZNkEyNFVkcXdJREFRQUJBb0lCQUFlQXdMeEpHa3FKUFBFZAptb01LcDRPUllHbFM4YkNrRmZHYTVNTHlCbWpMNWpDUk5LUWQ4N0Z3cWh3OVR2SDFrMDY3b1hqOU1OZXcrUVVMCjFEYWdtcS9oUjlFc1h4cGYwRXFNQTY1dEllUjFqUmRrZnJ4a0Y5VzJWUXJsZzd2Zkl5bFV6TEJSWk94TWpYQjYKRFMyZ0pCb2JkZlRPRkY4VVRBUURJT21UY1Q0eFRrTzVwcEhtUWV3NjVLY1JDNXNDUExITnAveFJLUmQ1NEkrbQpTUVc2cWh5OHFEbjZFd293MncwUTB1RXpvMmFBT0VQRG1xamlTV05BOWdFOGVnTWxLZU9HVllHSlpVSzJJRllUCjJPanduSzJlek53d0dOTzRPOWtmaHMvaUdoR0ljbmZYbFREMGJZdUtja1dSUjNsVk55aGdDUGpIbWwyNHVRS0sKSlhBVGwra0NnWUVBd1FZWU1wWGZsL1pxMHRhN2RiUXZrMzIyaTlpK2N0MFFaY2J2alY1YVJMMDlZcTlLV1NzOApaRTVqN3FHczVnbUVxN3FIa2xsMXRpL1VUNkt1VFhwYi9QcXdLbWdMSmhIaHE0cFA1R29DUno1UFRjbDdCSFFRCnAyRVlzaS9Cd1BsME96SEI2cFY5MytlSXd1TkovTHYrOEloTzJpeFBkYXZ6U3J1a21lM3RBcWNDZ1lFQTRqeVAKUUoyclJuUENFNm9iU0E0c1pVK3dneDFGRTA5b2kxUnVFb3ErQ3EwOEIxazF3am5XY2djM29OdUozbU5TZUNOTQptV1dBOWJvS1hhSWw3Q2ZxbXc5aXBQOXp0UUpsZ2xhUzdEKzE2eWhLSGQ5RUwrTjRpb3ZIMmMyU212RGFPTFRmCm92T0V0SWZ4SzdGdXI5V0FXYmF3eEZkSkh5b0lpdW84WTd6amdWMENnWUIwdXN2Tlk2ZDVUZE1pT0N2YnJhRUwKNy8yQ0t3eFppR2pQTS9SUXFOdXNNRWs4TWNlamp5c1JlZnFqS0hEWUdLOTc3dXpueTJRTlRuVjF4MnJqZmZpOQpUNWxUdStIcUh1dzdnZ1I0bk1kTjhGZWpNaEpNQ2lpOElGTUFCek9FRVJlQ2FML2RycFFWNFA1cTVXc3NCVURTCms0d2tFcUhuQnBxMStpNDd6SkFGaHdLQmdRQ1JzbXFYTkhNL05nR0E1SVlaUzNkdjczZy9tRFFLRVpQRVZ5VmsKTDVIZ0VseWNadWxtSWhWbTdocjNMeXVFMnZZYmhMQXFBZUtoWGFTYlZIZVR0TWt6L3g2S0lER0dHdnNBaTN5bgpSUWlGWHpjTU1lTVo3Q2FQSXlJYnRIWjc3aXk3WkZDNkFwWXVKWFk5cTFFYlVDWU9vTWNLU3lRK083V3dzTlVmCmJtQWR5UUtCZ0FMVHdWTEZMR0kvQTVIV1JReGYzakRTOFRTNFQ5ZUxnT2lqUkxmZHM4ODZYYis3b3YrNzNvckgKMER0SVliWjQ5MFdtWkc1T3J6eFNrd1k1WFQyZUN3UWNUWFFxb2p1M1dUR3lBTTF2bSt0UkZBbERQK3loNTUwbgp4TS9vVGlnL01rdnRKZ1ZhM2tKU1pPVkxmSzRVK0lMb0dJQTdVVzU1NVNYUVFyL2p6bGVyCi0tLS0tRU5EIFJTQSBQUklWQVRFIEtFWS0tLS0tCg==
+kind: Secret
+metadata:
+  name: pcs-ca
+  namespace: system
+type: kubernetes.io/tls
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pcs-controller-role
+rules:
+# Events
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+
+# Pods - need get for reading, patch/update for annotations
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - patch
+  - update
+
+# PodCertificateRequests - monitor only
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - podcertificaterequests
+  verbs:
+  - get
+  - list
+  - watch
+
+# Status subresource - required for issuing certificates
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - podcertificaterequests/status
+  verbs:
+  - update
+
+# Finalizers
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - podcertificaterequests/finalizers
+  verbs:
+  - update
+
+# Signer permission - required
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - signers
+  resourceNames:
+  - "coolcert.example.com/foo"
+  verbs:
+  - sign
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: meshtool-is-a-meshtool-signer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pcs-controller-role
+subjects:
+- kind: ServiceAccount
+  namespace: system
+  name: pcs
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pcs-controller
+  namespace: system
+  labels:
+    app: pcs-controller
+spec:
+  replicas: 1 # we need leader election to properly work with multiple replicas
+  selector:
+    matchLabels:
+      app: pcs-controller
+  template:
+    metadata:
+      labels:
+        app: pcs-controller
+    spec:
+      securityContext:
+        # Projects are configured by default to adhere to the "restricted" Pod Security Standards.
+        # This ensures that deployments meet the highest security requirements for Kubernetes.
+        # For more details, see: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - command:
+        - /manager
+        args:
+          - --signer-name=coolcert.example.com/foo # 👈 update signer name here!
+          - --ca-cert-path=/etc/ssl/ca/ca.pem
+          - --ca-key-path=/etc/ssl/ca/ca-key.pem         
+        image: ghcr.io/rafpe/kubernetes-podcertificate-signer/controller:latest # 👈 update image here!
+        imagePullPolicy: Always		
+        name: manager
+        ports: []
+        resources:
+          limits:
+            cpu: 125m          
+            memory: 256Mi
+          requests:
+            cpu: 10m
+            memory: 32Mi        
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - "ALL"
+        volumeMounts:
+        - name: pcs-ca
+          mountPath: /etc/ssl/ca
+          readOnly: true              
+      volumes:
+      - name: pcs-ca
+        secret:
+            secretName: pcs-ca
+            items:
+            - key: tls.crt
+              path: ca.pem
+            - key: tls.key
+              path: ca-key.pem          
+      dnsPolicy: Default
+      nodeSelector:
+        kubernetes.io/os: linux
+      priorityClassName: system-cluster-critical
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      serviceAccountName: pcs
+      terminationGracePeriodSeconds: 10  
