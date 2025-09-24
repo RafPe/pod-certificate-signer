@@ -99,9 +99,12 @@ sequenceDiagram
 
 
 ## 📋 Prerequisites
+> To test this setup with kind you can use prepared [kind-config](https://github.com/RafPe/pod-certificate-signer/blob/main/kind/kind-config.yaml) 
 
-- Kubernetes cluster version 1.34+ ( may require feature gate )
+- Kubernetes cluster version 1.34+ ( requires feature gates ) 
 - CA certificate ( can be self-signed )
+
+
 
 ## 🚀 Kubernetes Deployment
 A ready to use manifest file is available under `manifests` folder
