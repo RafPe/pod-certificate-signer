@@ -1,37 +1,74 @@
-# kubernetes-podcertificate-signer
-
-Kubernetes v1.34+ comes with new feature called [PodCertificateRequest](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#pod-certificate-requests) that enables native handling of x509 certificates to pods via projected volumes. 
-This in combination with [Cluster Trust Bundles](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#cluster-trust-bundles) is going to allow for easy , native and declarative way of securing workloads communication with TLS/mTLS in your cluster(s). 
+🔐 **PodCertificateSigner**: A Kubernetes controller that issues x509 certificates from a custom provided CA for your pods.
 
 > This controller is not yet ready to deploy to PRODUCTION facing worklads - it is being actively developed and should be considered for TESTING and validating concepts now
 
-- [kubernetes-podcertificate-signer](#kubernetes-podcertificate-signer)
-- [Why this controller](#why-this-controller)
-  - [Controller flow](#controller-flow)
-    - [New PodCertificateRequest](#new-podcertificaterequest)
-- [Running the controller](#running-the-controller)
-  - [Prerequisites - valid CA](#prerequisites---valid-ca)
-  - [Deploying controller to Kubernetes](#deploying-controller-to-kubernetes)
-  - [Controller commandline options](#controller-commandline-options)
-  - [Certificate configuration](#certificate-configuration)
-  - [Applying configuration for certificates](#applying-configuration-for-certificates)
-  - [Requesting PodCertificates](#requesting-podcertificates)
-  - [Examples of workload](#examples-of-workload)
-- [Development](#development)
-  - [Running locally with kind](#running-locally-with-kind)
-  - [TODOs](#todos)
-  - [TLS / mTLS and client\&server auth](#tls--mtls-and-clientserver-auth)
+- [pod-certificate-signer (PCS): Custom signer for x509 pod certificates](#pod-certificate-signer-pcs-custom-signer-for-x509-pod-certificates)
+  - [📋 Overview](#-overview)
+    - [What PodCertificateSigner Does](#what-podcertificatesigner-does)
+    - [Why Do You Need PodCertificateSigner](#why-do-you-need-podcertificatesigner)
+    - [Key Benefits](#key-benefits)
+  - [Features](#features)
+  - [🔄 How It Works](#-how-it-works)
+  - [📋 Prerequisites](#-prerequisites)
+  - [🚀 Kubernetes Deployment](#-kubernetes-deployment)
+  - [📦 Helm Deployment](#-helm-deployment)
+  - [🛠️ Manual Deployment](#️-manual-deployment)
+    - [1. 🔐 Create CA and Secret](#1--create-ca-and-secret)
+    - [2. ⚙️ Create ServiceAccount and RBAC](#2-️-create-serviceaccount-and-rbac)
+    - [3. 🚀 PodCertificateSigner Deployment](#3--podcertificatesigner-deployment)
+  - [📝 Usage](#-usage)
+    - [🏷️ Configuration via Pod Annotations](#️-configuration-via-pod-annotations)
+      - [🔗 Example configuration](#-example-configuration)
+    - [Requesting PodCertificates for your workload](#requesting-podcertificates-for-your-workload)
+      - [🔗 Example workload manifest](#-example-workload-manifest)
+  - [✅ Default PodCertificateSigner validation rules](#-default-podcertificatesigner-validation-rules)
+  - [⌘ Controller commandline options](#-controller-commandline-options)
+  - [🔧 Troubleshooting](#-troubleshooting)
+    - [Common Issues](#common-issues)
+    - [📊 Logs](#-logs)
+  - [🛡️ Security Considerations](#️-security-considerations)
+  - [🤝 Contributing](#-contributing)
+    - [Unofficial roadmap/work in progress](#unofficial-roadmapwork-in-progress)
+# pod-certificate-signer (PCS): Custom signer for x509 pod certificates
+
+## 📋 Overview
+
+PodCertificateSigner is a simple controller operating on **native feature** introduced in Kubernetes v1.34+ that creates [PodCertificateRequest](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#pod-certificate-requests) for your pods that specify a custom x509 signer via projected volume.From your custom configuration the contoller issues(or denies) short lived x509 certificates making sure your workloads can leverage this in their operations ( either for mTLS or just TLS )
+
+Further to that enhancments combining with [Cluster Trust Bundles](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#cluster-trust-bundles) / MutatingAdmissionPolicies / ValidatingAdmissionPolicy will provide the cluster operator with extremly strong security framework of operations to secure your cluster and its workloads.
 
 
-# Why this controller
-The main idea of this controller is leveraging on native functionalities/features of Kubernetes to automate and secure your cluster workloads with short living x509 certificates issued per pod. 
 
-## Controller flow
-Below you can see current chart showing how the flow of actions looks from a high level overview.
+### What PodCertificateSigner Does
+- **Handle PodCertificateRequest**: responds and validates all requests for new pod certificates
+- **Validates new x509 certificate configuration**: making sure the dynamic configuration is correct
+- **Signs pod x509 certificates** or deny issuing a cetrtificate based on the configuration and cluster information.
+
+###  Why Do You Need PodCertificateSigner
+- **Secures your workloads east/west traffic** by issuing shortlived x509 certificates to your pods
+- **Declarative security** by providing the configuration to your workloads
+- **Enabling mTLS** by allowing you to implement strict client/server auth from the x509 certs
+- **Enhancing your cluster security** without any external tools - you can use native cluster features to stregthen your security. 
+
+### Key Benefits
+- **Zero false positives** - only kube-api creates the PodCertificateRequests
+- **Easy integration** - works with existing Kubernetes clusters
+- **Comprehensive logging** - full audit trail of decisions
+- **Flexible configuration** - supports dynamic configuration via annotations
+
+## Features
+
+- **Support for TLS/mTLS certificates**: You can decide how to use the certificates
+- **Annotation-Based**: Uses pod annotations to specify certificate configurations
 
 
-### New PodCertificateRequest
-Is currently the default flow in our controller and is being the heart of its logic.
+
+## 🔄 How It Works
+
+1. **Pod Creation**: When a pod is created in Kubernetes with the projected volume , the kube-api server creates `PodCertificateRequest`
+2. **Annotation Check**: PodCertificateSigner looks for predefined configuration annotations to customize the certificate
+3. **Validation**: It validates the certificate configuration against default checks
+4. **Decision**: The certificate for pod is either issued or denied based on validation results. 
 
 ```mermaid
 ---
@@ -60,63 +97,72 @@ sequenceDiagram
 
 ```
 
-# Running the controller
-Running the controller requires that you have a valid CA certificate and key ( can be of course self signed i.e. with [cfssl](https://github.com/cloudflare/cfssl) ) and determine what will be your designated `signer-name` for the controller. 
 
-As a reminder - `one controller --(runs)--> one signer ( with user provided CA )` 
+## 📋 Prerequisites
 
-## Prerequisites - valid CA
-As mentioned before running the controller sucessfully - requires a valid CA. There are many ways of approaching this being generating the CA via tool like the [cfssl](https://github.com/cloudflare/cfssl) or leverage [`cert-manager`](https://cert-manager.io/) 
+- Kubernetes cluster version 1.34+ ( may require feature gate )
+- CA certificate ( can be self-signed )
 
+## 🚀 Kubernetes Deployment
+A ready to use manifest file is available under `manifests` folder
 
+## 📦 Helm Deployment
+
+> ... coming soon
+
+## 🛠️ Manual Deployment
+
+Manual deployment is also an option too, please ensure you follow the manifest guide below to correctly configure the controller.
+
+### 1. 🔐 Create CA and Secret
+
+You will need to create a valid CA which will be used by the controller to sign the pod certificate requests. There are many ways of approaching this either via tool like the [cfssl](https://github.com/cloudflare/cfssl) or leverage [`cert-manager`](https://cert-manager.io/) or if you live in terminal you can use `openssl` cli. 
+
+Of course if you have an existing CA you would like to use simply skip the creation and use that as the source for secret
+
+>Adapt the resulting name and namespace as needed 
+After you generated the certificate create a secret out it of type `TLS`
 ```sh
 kubectl create secret tls ca-secret \
   --cert=ca.pem \
   --key=ca-key.pem
 ```
 
-Once a CA is generated you can easily mount it to the controller container via volume mounts
 
 ```yaml
-  # ..... content not relevant for the example
-      volumeMounts:
-      - name: ca-secret
-        mountPath: /etc/ssl/ca
-        readOnly: true  
-    volumes:
-    - name: ca-secret
-      secret:
-        secretName: ca-secret
-        items:
-        - key: tls.crt
-          path: ca.pem
-        - key: tls.key
-          path: ca-key.pem
-  # ..... content not relevant for the example
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pcs-ca
+  namespace: system
+type: kubernetes.io/tls
+data:
+  tls.crt: <base64-encoded-certificate>
+  tls.key: <base64-encoded-private-key>
 ```
 
-## Deploying controller to Kubernetes
-> This is currently a sample static deployment - Kustomize/Helm is coming next ... The signer used in this example is `coolcert.example.com/foo`
+### 2. ⚙️ Create ServiceAccount and RBAC
+
+Next we will create a dedicated ServiceAccount and associated RBAC permissions for our controller.
+
 
 ```yaml
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: system
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: pcs
   namespace: system
+```
 
+```yaml
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: pcs-controller-role # pod certificate signer controller role
+  name: pcs-controller-role
 rules:
+# Events
 - apiGroups:
   - ""
   resources:
@@ -124,51 +170,54 @@ rules:
   verbs:
   - create
   - patch
+
+# Pods - need get for reading, patch/update for annotations
 - apiGroups:
   - ""
   resources:
   - pods
   verbs:
   - get
-  - list
   - patch
   - update
-  - watch
+  - list      # REQUIRED for watching
+  - watch     # REQUIRED for watching  
+
+# PodCertificateRequests - monitor only
 - apiGroups:
   - certificates.k8s.io
   resources:
   - podcertificaterequests
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
-  - update
   - watch
+
+# Status subresource - required for issuing certificates
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - podcertificaterequests/status
+  verbs:
+  - update
+
+# Finalizers
 - apiGroups:
   - certificates.k8s.io
   resources:
   - podcertificaterequests/finalizers
   verbs:
   - update
-- apiGroups:
-  - certificates.k8s.io
-  resources:
-  - podcertificaterequests/status
-  verbs:
-  - get
-  - patch
-  - update
+
+# Signer permission - required
 - apiGroups:
   - certificates.k8s.io
   resources:
   - signers
   resourceNames:
-  - "coolcert.example.com/foo"  # Your specific signer name
-  # - "coolcert.example.com/*"  # Alternative: wildcard for all signers in your domain
+  - "coolcert.example.com/foo"
   verbs:
-  - sign  
+  - sign
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -184,6 +233,17 @@ subjects:
   namespace: system
   name: pcs
 
+```
+
+### 3. 🚀 PodCertificateSigner Deployment
+
+Deployment manifest is on purpose kept simple - you are free to expand it as needed. 
+
+> Change the image for the controller 
+
+> Change the signer name
+
+```yaml
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -213,15 +273,16 @@ spec:
       - command:
         - /manager
         args:
-          - --signer-name=coolcert.example.com/foo
+          - --signer-name=coolcert.example.com/foo 👈 update signer name here!
           - --ca-cert-path=/etc/ssl/ca/ca.pem
           - --ca-key-path=/etc/ssl/ca/ca-key.pem         
-        image: ghcr.io/rafpe/kubernetes-podcertificate-signer/controller:rc-v0.0.1
+        image: ghcr.io/rafpe/kubernetes-podcertificate-signer/controller:latest 👈 update image here!
         imagePullPolicy: Always		
         name: manager
         ports: []
         resources:
           limits:
+            cpu: 125m          
             memory: 256Mi
           requests:
             cpu: 10m
@@ -253,11 +314,187 @@ spec:
       schedulerName: default-scheduler
       serviceAccountName: pcs
       terminationGracePeriodSeconds: 10
-
 ```
 
 
-## Controller commandline options
+## 📝 Usage
+
+### 🏷️ Configuration via Pod Annotations
+In order to not use controller defaults for certificates being generated - the cluster operator is able to set customize that via [`annotations`](https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/). 
+
+The scheme for configuration is `signer-domain/name-<configuration-item>: <value>`
+
+Below is the table with the annotations and example values: 
+
+| Annotation Prefix        | Required | Default Value                                                                       | Example                                                                                              |
+| ------------------------ | -------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `{signer-name}-cn`       | No       | `{pod-name}`                                                                        | `mysigner.example.com/foobar-cn: my-pod.default.pod.cluster.local`                                   |
+| `{signer-name}-san`      | No       | `{pod-name}.{namespace}.pod.cluster.local,{pod-name}.{namespace}.svc.cluster.local` | `mysigner.example.com/foobar-san: my-pod.default.pod.cluster.local,my-pod.default.svc.cluster.local` |
+| `{signer-name}-uris`     | No       | `(empty)`                                                                           | `mysigner.example.com/foobar-uris: spiffe://cluster.local/ns/default/sa/my-service`                  |
+| `{signer-name}-duration` | No       | `24h`                                                                               | `mysigner.example.com/foobar-duration: 12h`                                                          |
+| `{signer-name}-refresh`  | No       | `1h`                                                                                | `mysigner.example.com/foobar-refresh: 30m`                                                           |
+
+
+To customize certificates issued by PodCertificateSigner you can add one of the following annotations to your pod. This operation can be automated and delegated to your pipeline(s) or you can leverage native Kubernetes enhancment i.e `MutatingAdmissionPolicy` 
+
+
+
+
+#### 🔗 Example configuration
+```yaml
+  # ..... content not relevant for the example
+
+  template:
+    metadata:
+      labels:
+        app: podcertificate-app
+      annotations:
+        coolcert.example.com/foo-cn: "some-epic-name.com"
+        coolcert.example.com/foo-san: "example.com, www.example.com, anotherexample.com.cy"
+        coolcert.example.com/foo-duration: "2h"
+        coolcert.example.com/foo-refresh: "30m" 
+        coolcert.example.com/foo-uris: "https://example.com, https://www.example.com, https://anotherexample.com.cy"                
+    spec:
+
+  # ..... rest of the manifest
+```
+
+
+### Requesting PodCertificates for your workload
+In order for kube-api server to create new PodCertificateRequests your workload needs to use specified projected volume referencing a signer. 
+Snipper below shows the crucial part of your code configuration required 
+```yaml
+  # ..... content not relevant for the example
+
+        volumeMounts:
+        - name: x509-cert
+          mountPath: /var/run/x509-cert
+      volumes:
+      - name: x509-cert
+        projected:
+          defaultMode: 420
+          sources:
+          - podCertificate:
+              keyType: RSA4096 # "RSA3072", "RSA4096", "ECDSAP256", "ECDSAP384", "ECDSAP521", "ED25519"
+              signerName: coolcert.example.com/foo # 👈 IMPORTANT! The signer name must match controller
+              credentialBundlePath: credentialbundle.pem
+
+  # ..... rest of the manifest              
+```
+
+#### 🔗 Example workload manifest
+The below provided deployment manifest is using GowebHTTPs server I wrote in Go in order to explore use of certificates in container environment. 
+
+
+```yaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: goweb
+  labels:
+    app: goweb-https
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: goweb-https
+  template:
+    metadata:
+      labels:
+        app: goweb-https
+      annotations:
+        coolcert.example.com/foo-cn: "some-epic-name.com"
+        coolcert.example.com/foo-san: "example.com, www.example.com, anotherexample.com.cy"
+        coolcert.example.com/foo-duration: "1h"
+        coolcert.example.com/foo-refresh: "45m"        
+    spec:
+      containers:
+      - name: server
+        image: ghcr.io/rafpe/goweb-https/server:d567d45        
+        ports:
+        - containerPort: 8443
+          name: https
+          protocol: TCP
+        env:
+        - name: GOWEB_PORT
+          value: "8443"
+        - name: GOWEB_CERT_DIRECTORY_PATH
+          value: "/var/run/pcr-x509"
+        - name: TZ
+          value: "Europe/Amsterdam" # 👈 Update to match your timezone
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: CONTAINER_NAME
+          value: "server"
+        volumeMounts:
+        - name: pcr-x509
+          mountPath: /var/run/pcr-x509
+          readOnly: true
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 65532
+          runAsGroup: 65532
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: pcr-x509
+        projected:
+          defaultMode: 420
+          sources:
+          - podCertificate:
+              keyType: RSA4096
+              signerName: coolcert.example.com/foo
+              credentialBundlePath: credentialbundle.pem
+      securityContext:
+        fsGroup: 65532
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 5
+```
+
+
+As a bonus point if using this workload demo you can check the certificate status via call to `/status` which provides detailed view of mounted certificate.
+```sh
+📜 Certificate Status:
+
+Domain: some-epic-name.com
+  File: /var/run/pcr-x509/credentialbundle.pem
+  CN: some-epic-name.com
+  Valid: 2025-09-24 11:33:54 UTC to 2025-09-24 12:33:54 UTC
+  Status: ⚠️  EXPIRES SOON (in 57m46s)
+```
+
+
+
+## ✅ Default PodCertificateSigner validation rules
+
+PodCertificateSigner performs the following `default` validations:
+
+1. **CA files provided**: Verifies the CA provided/mounted files exists and can be loaded
+2. **CA valid**: Ensures that the CA used to signing of certificates is a valid CA and not expired
+3. **PodCertificateRequest configuration**: Validates the configuration provided via annotation against Kubernetes constraints
+
+## ⌘ Controller commandline options
 Controller is customizable and supports the following arguments along with their default values 
 ```
 command line argument:
@@ -293,116 +530,52 @@ command line argument:
     	Zap time encoding (one of 'epoch', 'millis', 'nano', 'iso8601', 'rfc3339' or 'rfc3339nano'). Defaults to 'epoch'.
 ```
 
-## Certificate configuration
-First and foremost the current implementation of the signer is based on the principle that one controller is one signer - and this is done to keep things simple and handle designated areas of responsibilities. 
-In order to not use defaults for certificate being generated - operator is able to set customize that via [`annotations`](https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/). 
+## 🔧 Troubleshooting
+Every system can experience issues. Below you may find the most commonly identified ones.
 
-The scheme for configuration is `signer-domain/name-<configuration-item>: <value>`
+### Common Issues
 
-Below is the table with the annotations and example values: 
+1. **Signer name mismatch**
+   - Ensure signer name is correct in the controller
+   - Ensure signer name is correct in the projected volume of the pod(s)
 
-| Annotation Prefix        | Required | Default Value                                                                       | Example                                                                                              |
-| ------------------------ | -------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `{signer-name}-cn`       | No       | `{pod-name}`                                                                        | `mysigner.example.com/foobar-cn: my-pod.default.pod.cluster.local`                                   |
-| `{signer-name}-san`      | No       | `{pod-name}.{namespace}.pod.cluster.local,{pod-name}.{namespace}.svc.cluster.local` | `mysigner.example.com/foobar-san: my-pod.default.pod.cluster.local,my-pod.default.svc.cluster.local` |
-| `{signer-name}-uris`     | No       | `(empty)`                                                                           | `mysigner.example.com/foobar-uris: spiffe://cluster.local/ns/default/sa/my-service`                  |
-| `{signer-name}-duration` | No       | `24h`                                                                               | `mysigner.example.com/foobar-duration: 12h`                                                          |
-| `{signer-name}-refresh`  | No       | `1h`                                                                                | `mysigner.example.com/foobar-refresh: 30m`                                                           |
+2. **CA failures**
+   - Verify CA is valid ( isCA )
+   - Verify private key is valid
+   - Ensure the CA is not expiring too soon
 
-## Applying configuration for certificates
-By adding the annotations specified you are then able to control specifics of certificates being generated.
-```yaml
+3. **Configuration Errors**
+   - Verify if your configuration on annotation is not causing errors
+   - Troubleshoot by incremently changing the configuration to eliminate the source
+   - Keep checking the PodCertificateSigner logs
 
-  # ..... content not relevant for the example
+### 📊 Logs
 
-  template:
-    metadata:
-      labels:
-        app: podcertificate-app
-      annotations:
-        coolcert.example.com/foo-cn: "some-epic-name.com"
-        coolcert.example.com/foo-san: "example.com, www.example.com, anotherexample.com.cy"
-        coolcert.example.com/foo-duration: "2h"
-        coolcert.example.com/foo-refresh: "30m" 
-        coolcert.example.com/foo-uris: "https://example.com, https://www.example.com, https://anotherexample.com.cy"                
-    spec:
+PodCertificateSigner provides detailed logging for troubleshooting:
 
-  # ..... rest of the manifest
-
+```bash
+kubectl logs -n system deployment/pcs-controller
 ```
 
-## Requesting PodCertificates
-In order for kube-api server to create new PodCertificateRequests your workload needs to use specified projected volume referencing a signer. 
-Snipper below shows the crucial part of your code configuration required 
-```yaml
-  # ..... content not relevant for the example
+## 🛡️ Security Considerations
 
-        volumeMounts:
-        - name: x509-cert
-          mountPath: /var/run/x509-cert
-      volumes:
-      - name: x509-cert
-        projected:
-          defaultMode: 420
-          sources:
-          - podCertificate:
-              keyType: RSA4096 # "RSA3072", "RSA4096", "ECDSAP256", "ECDSAP384", "ECDSAP521", "ED25519"
-              signerName: coolcert.example.com/foo
-              credentialBundlePath: credentialbundle.pem
+- Use Kubernetes secrets to store certificates/keys
+- Monitor controller logs for suspicious activity
+- Use RBAC or ValidatingAdmissionPolicy to restrict access
+- Bonus: Use MutatingAdmissionPolicies to implement secure usage of the annotation
 
-  # ..... rest of the manifest              
-```
+🔐 Remember: No security mechanism is effective without strong authentication and authorization. In Kubernetes, security begins with controlling who can access what — user identities , RBAC policies and MutatingAdmissionPolicies/ValidatingAdmissionPolicy to form the foundation of your cluster's defense.
 
+## 🤝 Contributing
 
-## Examples of workload
-To test your signer you can run the following example below 
-> Make sure the `signer` name matches the one you created your controller with
+Contributions are welcome! 
 
-```yaml
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: pcr
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: podcertificate-app
-  template:
-    metadata:
-      labels:
-        app: podcertificate-app
-      annotations:
-        coolcert.example.com/foo-cn: "some-epic-name.com"
-        coolcert.example.com/foo-san: "example.com, www.example.com, anotherexample.com.cy"
-        coolcert.example.com/foo-duration: "2h"
-        coolcert.example.com/foo-refresh: "30m" 
-        coolcert.example.com/foo-uris: "https://example.com, https://www.example.com, https://anotherexample.com.cy"                
-    spec:
-      serviceAccountName: default
-      containers:
-      - image: debian
-        name: main
-        command: ["sleep", "infinity"]
-        volumeMounts:
-        - name: my-x509-credentials
-          mountPath: /var/run/my-x509-credentials
-      volumes:
-      - name: my-x509-credentials
-        projected:
-          defaultMode: 420
-          sources:
-          - podCertificate:
-              keyType: RSA
-              signerName: coolcert.example.com/foo
-              credentialBundlePath: credentialbundle.pem
-```
+For issues and questions:
+- 📝 Create an issue in the repository
+- 🔍 Check the troubleshooting section
+- 📊 Review the logs for error details
 
-# Development
-## Running locally with kind
-
-## TODOs
+### Unofficial roadmap/work in progress
 There is work planned in the controller that still needs to happen however this is heavily influenced by the development of this feature in Kubernetes community  
 - [ ] code::proper validation of certificate constraints ( time based nbf,naf , refresh hint)
 - [ ] code::object consistency Camel/Snake casing
@@ -420,6 +593,4 @@ There is work planned in the controller that still needs to happen however this 
 - [ ] testing::examples of apps using TLS 
 - [ ] testing::examples of controller deployment
 
-## TLS / mTLS and client&server auth
-<!-- TODO: Add here details ... -->
 
