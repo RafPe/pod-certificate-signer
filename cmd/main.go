@@ -17,7 +17,10 @@ limitations under the License.
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
+	"fmt"
 	"os"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -42,6 +45,16 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
+const (
+	defaultFlagMaxConcurrentReconciles = 5
+	defaultFlagMaxCertificateNbfSkew   = 5
+
+	defaultFlagHealthProbeBindAddress = ":8081"
+	defaultFlagClusterFqdn            = "cluster.local"
+	defaultFlagEnableLeaderElection   = false
+	defaultFlagLeaderElectionID       = "pcs-leader"
+)
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
@@ -53,6 +66,7 @@ func main() {
 	var signerName string
 	var caCertPath string
 	var caKeyPath string
+	var maxConcurrentReconciles int
 
 	var clusterFqdn string
 	var enableLeaderElection bool
@@ -60,20 +74,19 @@ func main() {
 	var healthProbeBindAddress string
 	var debugLogging bool
 
-	flag.StringVar(&signerName, "signer-name", "coolcert.example.com/foo", "Only sign CSR with this .spec.signerName.")
-	flag.StringVar(&caCertPath, "ca-cert-path", "../../hack/ca.pem", "CA certificate file.")
-	flag.StringVar(&caKeyPath, "ca-key-path", "../../hack/ca-key.pem", "CA private key file.")
+	flag.StringVar(&signerName, "signer-name", "", "Only sign CSR with this .spec.signerName.")
+	flag.StringVar(&caCertPath, "ca-cert-path", "", "CA certificate file.")
+	flag.StringVar(&caKeyPath, "ca-key-path", "", "CA private key file.")
+	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", defaultFlagMaxConcurrentReconciles, "The maximum number of concurrent reconciles.")
 
-	flag.StringVar(&clusterFqdn, "cluster-fqdn", "cluster.local", "The FQDN of the cluster")
-	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
+	flag.StringVar(&clusterFqdn, "cluster-fqdn", defaultFlagClusterFqdn, "The FQDN of the cluster")
+	flag.BoolVar(&enableLeaderElection, "enable-leader-election", defaultFlagEnableLeaderElection,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	flag.StringVar(&leaderElectionID, "leader-election-id", "pcs-leader-election",
+	flag.StringVar(&leaderElectionID, "leader-election-id", defaultFlagLeaderElectionID,
 		"The name of the configmap used to coordinate leader election between controller-managers.")
-	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
-	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
-		"Enable leader election for controller manager. "+
-			"Enabling this will ensure there is only one active controller manager.")
+	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", defaultFlagHealthProbeBindAddress, "The address the probe endpoint binds to.")
+
 	// flag.BoolVar(&secureMetrics, "metrics-secure", true,
 	// 	"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	// flag.StringVar(&webhookCertPath, "webhook-cert-path", "", "The directory that contains the webhook certificate.")
@@ -96,6 +109,17 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	// Validate required flags as they are critical for starting our controller
+	if err := validateRequiredFlags(signerName, caCertPath, caKeyPath); err != nil {
+		setupLog.Error(err, "Missing required flags")
+		os.Exit(1)
+	}
+
+	// If we have choosen to use leader election but not provided a leader election ID, use the signer name to create a unique ID with a hash
+	if enableLeaderElection && leaderElectionID == defaultFlagLeaderElectionID {
+		leaderElectionID = fmt.Sprintf("%s-%s", defaultFlagLeaderElectionID, createStringHash(signerName))
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
@@ -142,4 +166,29 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func validateRequiredFlags(signerName, caCertPath, caKeyPath string) error {
+	var missing []string
+
+	if signerName == "" {
+		missing = append(missing, "--signer-name")
+	}
+	if caCertPath == "" {
+		missing = append(missing, "--ca-cert-path")
+	}
+	if caKeyPath == "" {
+		missing = append(missing, "--ca-key-path")
+	}
+
+	if len(missing) > 0 {
+		return fmt.Errorf("required flags missing: %v", missing)
+	}
+
+	return nil
+}
+
+func createStringHash(input string) string {
+	hash := sha256.Sum256([]byte(input))
+	return hex.EncodeToString(hash[:])[:8]
 }
