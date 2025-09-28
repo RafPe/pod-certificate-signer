@@ -1,6 +1,7 @@
 package podCertificate
 
 import (
+	"context"
 	"crypto"
 	"crypto/x509"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/api"
 	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 type PodCertificate struct {
@@ -59,6 +61,45 @@ func NewPodCertificate(certificate []byte, certificateChain string, config *PodC
 	}
 }
 
+// -- getters :)
+func (pc *PodCertificate) Certificate() []byte {
+	return pc.certificate
+}
+
+func (pc *PodCertificate) CertificateChain() string {
+	return pc.certificateChain
+}
+
+func (pc *PodCertificate) Config() *PodCertificateConfig {
+	return pc.config
+}
+
+func (pc *PodCertificate) NotBefore() time.Time {
+	return pc.notBefore
+}
+
+func (pc *PodCertificate) NotAfter() time.Time {
+	return pc.notAfter
+}
+
+// -- validators :)
+func (pc *PodCertificate) IsValid() bool {
+	now := time.Now()
+	return now.After(pc.notBefore) && now.Before(pc.notAfter)
+}
+
+func (pc *PodCertificate) ExpiresIn() time.Duration {
+	return time.Until(pc.notAfter)
+}
+
+func (pc *PodCertificate) CertificateChainToPEM() []byte {
+	return []byte(pc.certificateChain)
+}
+
+func (pc *PodCertificate) CertificateToPEM() []byte {
+	return []byte(pc.certificate)
+}
+
 // -- Config
 
 func NewPodCertificateConfig(pod *corev1.Pod, signerName string, publicKey crypto.PublicKey, publicKeyAlgorithm x509.PublicKeyAlgorithm) (*PodCertificateConfig, error) {
@@ -76,6 +117,17 @@ func NewPodCertificateConfig(pod *corev1.Pod, signerName string, publicKey crypt
 	}
 
 	return config, nil
+}
+
+func (pcc *PodCertificateConfig) LogConfiguration(ctx context.Context) {
+	lgr := log.FromContext(ctx)
+
+	lgr.Info("Successfully created PodCertificateConfig",
+		"commonName", pcc.CommonName,
+		"dnsNames", pcc.DNSNames,
+		"uris", pcc.URIs,
+		"duration", pcc.Duration.String(),
+		"refreshBefore", pcc.RefreshBefore.String())
 }
 
 // getConfigFromAnnotationsCN extracts common name from pod annotations or uses default
@@ -144,42 +196,3 @@ func getConfigFromAnnotationsRefreshBefore(pod *corev1.Pod, signerName string) t
 // PodCertificate.ExpiresIn() time.Duration
 // PodCertificateConfig.Validate() error
 // PodCertificate.ToPEM() []byte
-
-// -- getters :)
-func (pc *PodCertificate) Certificate() []byte {
-	return pc.certificate
-}
-
-func (pc *PodCertificate) CertificateChain() string {
-	return pc.certificateChain
-}
-
-func (pc *PodCertificate) Config() *PodCertificateConfig {
-	return pc.config
-}
-
-func (pc *PodCertificate) NotBefore() time.Time {
-	return pc.notBefore
-}
-
-func (pc *PodCertificate) NotAfter() time.Time {
-	return pc.notAfter
-}
-
-// -- validators :)
-func (pc *PodCertificate) IsValid() bool {
-	now := time.Now()
-	return now.After(pc.notBefore) && now.Before(pc.notAfter)
-}
-
-func (pc *PodCertificate) ExpiresIn() time.Duration {
-	return time.Until(pc.notAfter)
-}
-
-func (pc *PodCertificate) CertificateChainToPEM() []byte {
-	return []byte(pc.certificateChain)
-}
-
-func (pc *PodCertificate) CertificateToPEM() []byte {
-	return []byte(pc.certificate)
-}

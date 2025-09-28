@@ -39,7 +39,11 @@ import (
 
 var (
 	scheme   = runtime.NewScheme()
-	setupLog = ctrl.Log.WithName("setup")
+	setupLog = ctrl.Log.WithName("controller.setup")
+)
+
+const (
+	DefaultControllerName = "PodCertificateSigner"
 )
 
 func init() {
@@ -60,9 +64,9 @@ func main() {
 	var healthProbeBindAddress string
 	var debugLogging bool
 
-	flag.StringVar(&signerName, "signer-name", "coolcert.example.com/foo", "Only sign CSR with this .spec.signerName.")
-	flag.StringVar(&caCertPath, "ca-cert-path", "../../hack/ca.pem", "CA certificate file.")
-	flag.StringVar(&caKeyPath, "ca-key-path", "../../hack/ca-key.pem", "CA private key file.")
+	flag.StringVar(&signerName, "signer-name", "", "Only sign CSR with this .spec.signerName.")
+	flag.StringVar(&caCertPath, "ca-cert-path", "", "CA certificate file.")
+	flag.StringVar(&caKeyPath, "ca-key-path", "", "CA private key file.")
 
 	flag.StringVar(&clusterFqdn, "cluster-fqdn", "cluster.local", "The FQDN of the cluster")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
@@ -109,7 +113,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	signer, err := signer.NewSigner(caCertPath, caKeyPath, signerName)
+	pcrSigner, err := signer.NewSigner(caCertPath, caKeyPath, signerName)
 	if err != nil {
 		setupLog.Error(err, "failed to create signer")
 		os.Exit(1)
@@ -117,13 +121,13 @@ func main() {
 
 	if err := (&controller.PodCertificateRequestReconciler{
 		Client:        mgr.GetClient(),
-		Log:           ctrl.Log.WithName("controllers").WithName("PodCertificateSignerReconciler"),
+		Log:           ctrl.Log.WithName("controller").WithName(DefaultControllerName),
 		Scheme:        mgr.GetScheme(),
-		Signer:        signer,
+		Signer:        pcrSigner,
 		ClusterFqdn:   clusterFqdn,
-		EventRecorder: mgr.GetEventRecorderFor("PodCertificateSignerReconciler"),
+		EventRecorder: mgr.GetEventRecorderFor(DefaultControllerName),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "PodCertificateRequest")
+		setupLog.Error(err, "unable to create controller", "controller", "PodCertificateSignerReconciler")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
@@ -137,9 +141,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	setupLog.Info("starting manager")
+	displayCommandlineFlags()
+
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func displayCommandlineFlags() {
+
+	flag.CommandLine.VisitAll(func(f *flag.Flag) {
+		setupLog.Info("Flag",
+			"name", f.Name,
+			"value", f.Value.String(),
+			"default", f.DefValue)
+	})
+
 }
