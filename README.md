@@ -107,7 +107,7 @@ sequenceDiagram
 
 
 ## 🚀 Kubernetes Deployment
-A ready to use manifest file is available under `manifests` folder
+A ready to use manifest file is available under `manifests` folder where you can deploy the [latest](./manifests/pcs-controller-latest.yaml) version
 
 ## 📦 Helm Deployment
 
@@ -226,7 +226,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: meshtool-is-a-meshtool-signer
+  name: pcs-controller-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
