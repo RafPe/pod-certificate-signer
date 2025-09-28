@@ -113,7 +113,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	signer, err := signer.NewSigner(caCertPath, caKeyPath, signerName)
+	pcrSigner, err := signer.NewSigner(caCertPath, caKeyPath, signerName)
 	if err != nil {
 		setupLog.Error(err, "failed to create signer")
 		os.Exit(1)
@@ -123,7 +123,7 @@ func main() {
 		Client:        mgr.GetClient(),
 		Log:           ctrl.Log.WithName("controller").WithName(DefaultControllerName),
 		Scheme:        mgr.GetScheme(),
-		Signer:        signer,
+		Signer:        pcrSigner,
 		ClusterFqdn:   clusterFqdn,
 		EventRecorder: mgr.GetEventRecorderFor(DefaultControllerName),
 	}).SetupWithManager(mgr); err != nil {
