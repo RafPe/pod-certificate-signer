@@ -52,18 +52,6 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
-func displayCommandlineFlags() {
-	setupLog.Info("-------------------------------- Controller Startup Flags --------------------------------")
-
-	flag.CommandLine.VisitAll(func(f *flag.Flag) {
-		setupLog.Info("Flag",
-			"name", f.Name,
-			"value", f.Value.String(),
-			"default", f.DefValue)
-	})
-
-}
-
 // nolint:gocyclo
 func main() {
 	var signerName string
@@ -155,9 +143,19 @@ func main() {
 
 	displayCommandlineFlags()
 
-	setupLog.Info("-------------------------------- Starting PodCertificateSigner --------------------------------")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func displayCommandlineFlags() {
+
+	flag.CommandLine.VisitAll(func(f *flag.Flag) {
+		setupLog.Info("Flag",
+			"name", f.Name,
+			"value", f.Value.String(),
+			"default", f.DefValue)
+	})
+
 }
