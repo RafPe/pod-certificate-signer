@@ -46,6 +46,8 @@ rules:
   - get
   - patch
   - update
+  - list      # REQUIRED for watching
+  - watch     # REQUIRED for watching  
 
 # PodCertificateRequests - monitor only
 - apiGroups:
