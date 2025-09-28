@@ -43,7 +43,7 @@ var (
 )
 
 const (
-	ControllerNamePodCertificateSigner = "PodCertificateSigner"
+	DefaultControllerName = "PodCertificateSigner"
 )
 
 func init() {
@@ -121,11 +121,11 @@ func main() {
 
 	if err := (&controller.PodCertificateRequestReconciler{
 		Client:        mgr.GetClient(),
-		Log:           ctrl.Log.WithName("controller").WithName(ControllerNamePodCertificateSigner),
+		Log:           ctrl.Log.WithName("controller").WithName(DefaultControllerName),
 		Scheme:        mgr.GetScheme(),
 		Signer:        signer,
 		ClusterFqdn:   clusterFqdn,
-		EventRecorder: mgr.GetEventRecorderFor(ControllerNamePodCertificateSigner),
+		EventRecorder: mgr.GetEventRecorderFor(DefaultControllerName),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PodCertificateSignerReconciler")
 		os.Exit(1)
