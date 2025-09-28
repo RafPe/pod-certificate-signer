@@ -157,30 +157,30 @@ func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) err
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.Log = logf.Log.WithValues("name", req.Name, "namespace", req.Namespace)
-
 	var pcr capi.PodCertificateRequest
 	if err := r.Client.Get(ctx, req.NamespacedName, &pcr); client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
-
 	}
 
+	r.Log = logf.Log.WithValues("name", req.Name, "namespace", req.Namespace, "podName", pcr.Spec.PodName, "podNamespace", pcr.Namespace)
+	ctx = logr.NewContext(ctx, r.Log)
+
 	if !pcr.DeletionTimestamp.IsZero() {
-		r.Log.Info("PodCertificateRequest has been deleted. Ignoring.")
+		r.Log.Info("PodCertificateRequest has been deleted.")
 		return ctrl.Result{}, nil
 	}
 
 	if !r.Signer.IsSignerNameMatching(pcr.Spec.SignerName) {
-		r.Log.Info("PodCertificateRequest signer name does not match - skipping")
+		r.Log.Info("PodCertificateRequest signer name does not match controller signer name")
 		return ctrl.Result{}, nil
 	}
 
 	if api.IsPodCertificateRequestImmutable(&pcr) {
-		r.Log.Info("PodCertificateRequest is immutable - skipping")
+		r.Log.Info("PodCertificateRequest is immutable")
 		return ctrl.Result{}, nil
 	}
 
-	r.Log.Info("Verifying if pod associated with PodCertificateRequest", "podName", pcr.Spec.PodName, "podNamespace", pcr.Namespace)
+	r.Log.Info("Lookup pod associated with PodCertificateRequest")
 	crPod, err := api.GetPod(ctx, r.Client, pcr.Spec.PodName, pcr.Namespace)
 	if err != nil {
 		r.Log.Error(err, "Failed to retrieve pod associated with PodCertificateRequest")
@@ -190,31 +190,31 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 	}
 
 	if !crPod.DeletionTimestamp.IsZero() {
-		r.Log.Info("Pod is being deleted - skipping")
+		r.Log.Info("Pod has been deleted.")
 		return ctrl.Result{}, nil
 	}
 
 	publicKey, publicKeyAlgorithm, err := r.Signer.ParsePkixPublicKey(pcr.Spec.PKIXPublicKey)
 	if err != nil {
+		r.Log.Error(err, "Public key is not supported/invalid")
 		r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonUnsupportedKeyType, "", true)
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
 
-	r.Log.Info("Create new configuration instance for the certificate req")
 	pcConfig, err := podcertificate.NewPodCertificateConfig(
 		crPod,
 		r.Signer.GetSignerName(),
 		publicKey,
 		publicKeyAlgorithm)
 	if err != nil {
-		r.Log.Error(err, "Failed to create configuration for the certificate")
+		r.Log.Error(err, "Failed to create PodCertificateConfig")
 		r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonCertificateConfigurationInvalid, "", true)
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
-	r.Log.Info("Successfully created PodCertificateConfig", "pcConfig", pcConfig)
+	r.Log.Info("Successfully created PodCertificateConfig")
 
 	if err := r.Signer.ValidatePodCertificateConfig(pcConfig); err != nil {
-		r.Log.Error(err, "Failed to validate the certificate configuration")
+		r.Log.Error(err, "Failed to validate the PodCertificateConfig")
 		r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonCertificateConfigurationInvalid, "", true)
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
@@ -238,6 +238,7 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 	return ctrl.Result{}, nil // DON'T REQUEUE - Terminal success
 
 }
+
 func (r *PodCertificateRequestReconciler) issueCertificate(ctx context.Context, pcr *capi.PodCertificateRequest, podCertificate *podcertificate.PodCertificate) error {
 
 	r.setCertificateOnPodCertificateRequest(pcr, podCertificate)
@@ -324,79 +325,3 @@ func (r *PodCertificateRequestReconciler) clearPodCertificateRequestStatusFields
 func (r *PodCertificateRequestReconciler) updatePodCertificateRequestStatus(ctx context.Context, pcr *capi.PodCertificateRequest) error {
 	return r.Status().Update(ctx, pcr)
 }
-
-// ------------------------------------------------ Stayers  ------------------------------------------------
-
-// ------------------------------------------------ Leavers  ------------------------------------------------
-
-// func (r *PodCertificateRequestReconciler) setDefaultPodAnnotations(ctx context.Context, pcr *capi.PodCertificateRequest, pod *corev1.Pod) error {
-
-// 	// Add annotations to the pod
-// 	if err := r.patchPodAnnotations(ctx, pod, map[string]string{
-// 		fmt.Sprintf("%s-request-name", r.SignerName): pcr.Name,
-// 		fmt.Sprintf("%s-issued-at", r.SignerName):    time.Now().Format(time.RFC3339),
-// 	}); err != nil {
-// 		r.Log.Error(err, "failed to patch annotations to pod", "podName", pod.Name)
-// 	}
-
-// 	return nil
-// }
-
-// func (r *PodCertificateRequestReconciler) patchPodAnnotations(ctx context.Context, pod *corev1.Pod, annotations map[string]string) error {
-// 	patch := client.MergeFrom(pod.DeepCopy())
-
-// 	if pod.Annotations == nil {
-// 		pod.Annotations = make(map[string]string)
-// 	}
-
-// 	for key, value := range annotations {
-// 		pod.Annotations[key] = value
-// 	}
-
-// 	return r.Patch(ctx, pod, patch)
-// }
-
-// func (r *PodCertificateRequestReconciler) getPodAnnotation(pod *corev1.Pod, annotationKey string) (string, bool) {
-// 	if pod == nil || pod.Annotations == nil {
-// 		return "", false
-// 	}
-
-// 	value, exists := pod.Annotations[annotationKey]
-// 	return value, exists
-// }
-
-// // getAnnotationOrDefault retrieves an annotation from the pod or returns a default value if the annotation is not found
-// func (r *PodCertificateRequestReconciler) getAnnotationOrDefault(pod *corev1.Pod, annotationKey, defaultValue, fieldName string) string {
-// 	value, exists := r.getPodAnnotation(pod, annotationKey)
-// 	if !exists {
-// 		r.Log.V(1).Info("No annotation found - using default",
-// 			"field", fieldName,
-// 			"key", annotationKey,
-// 			"default", defaultValue)
-// 		return defaultValue
-// 	}
-
-// 	r.Log.V(1).Info("Annotation found - using supplied value",
-// 		"field", fieldName,
-// 		"key", annotationKey,
-// 		"value", value)
-// 	return value
-// }
-
-// func (r *PodCertificateRequestReconciler) setPodCertificateRequestFailed(ctx context.Context, pcr *capi.PodCertificateRequest, reason, message string, err error) (ctrl.Result, error) {
-// 	r.Log.Error(err, message)
-
-// 	// Clear certificate fields for failed status
-// 	r.clearPodCertificateRequestStatusFields(pcr)
-
-// 	r.setPodCertificateRequestStatusCondition(pcr, capi.PodCertificateRequestConditionTypeFailed, reason, message)
-// 	r.EventRecorder.Event(pcr, corev1.EventTypeWarning, reason, message)
-
-// 	// Update status - if this fails, it's a retryable error
-// 	if updateErr := r.updatePodCertificateRequestStatus(ctx, pcr); updateErr != nil {
-// 		r.Log.Error(updateErr, "Failed to update PodCertificateRequest status")
-// 		return ctrl.Result{}, updateErr // REQUEUE - Status update failure is retryable
-// 	}
-
-// 	return ctrl.Result{}, nil // NO REQUEUE - Terminal failure
-// }
