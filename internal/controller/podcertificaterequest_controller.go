@@ -171,7 +171,7 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 	}
 
 	if !r.Signer.IsSignerNameMatching(pcr.Spec.SignerName) {
-		r.Log.Info("PodCertificateRequest signer name does not match controller signer name")
+		r.Log.Info("PodCertificateRequest signer name does not match controller signer name", "signerName", pcr.Spec.SignerName, "controllerSignerName", r.Signer.GetSignerName())
 		return ctrl.Result{}, nil
 	}
 
@@ -211,7 +211,7 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonCertificateConfigurationInvalid, "", true)
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
-	r.Log.Info("Successfully created PodCertificateConfig")
+	pcConfig.LogConfiguration(ctx)
 
 	if err := r.Signer.ValidatePodCertificateConfig(pcConfig); err != nil {
 		r.Log.Error(err, "Failed to validate the PodCertificateConfig")
@@ -235,6 +235,7 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
 
+	r.Log.Info("Successfully issued certificate")
 	return ctrl.Result{}, nil // DON'T REQUEUE - Terminal success
 
 }
