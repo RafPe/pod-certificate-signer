@@ -1,6 +1,7 @@
 package podCertificate
 
 import (
+	"context"
 	"crypto"
 	"crypto/x509"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/api"
 	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 type PodCertificate struct {
@@ -115,6 +117,17 @@ func NewPodCertificateConfig(pod *corev1.Pod, signerName string, publicKey crypt
 	}
 
 	return config, nil
+}
+
+func (pcc *PodCertificateConfig) LogConfiguration(ctx context.Context) {
+	lgr := log.FromContext(ctx)
+
+	lgr.Info("Successfully created PodCertificateConfig",
+		"commonName", pcc.CommonName,
+		"dnsNames", pcc.DNSNames,
+		"uris", pcc.URIs,
+		"duration", pcc.Duration.String(),
+		"refreshBefore", pcc.RefreshBefore.String())
 }
 
 // getConfigFromAnnotationsCN extracts common name from pod annotations or uses default
