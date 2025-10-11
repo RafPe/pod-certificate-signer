@@ -9,4 +9,4 @@ runtimeConfig:
   "certificates.k8s.io/v1beta1/clustertrustbundles": "true"
 nodes:
 - role: control-plane
-- role: worker
+  image: "kindest/node:v1.34.1"
