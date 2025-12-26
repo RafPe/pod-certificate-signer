@@ -2,7 +2,7 @@ package signer
 
 import (
 
-	//capiv1alpha1 "k8s.io/api/certificates/v1alpha1"
+	//capiv1beta1 "k8s.io/api/certificates/v1beta1"
 
 	"crypto"
 	"crypto/ecdsa"
