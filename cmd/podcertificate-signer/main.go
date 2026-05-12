@@ -120,7 +120,7 @@ func main() {
 
 	if err := (&controller.PodCertificateRequestReconciler{
 		Client:        mgr.GetClient(),
-		Log:           ctrl.Log.WithName("controller").WithName(DefaultControllerName),
+		Log:           ctrl.Log.WithName(DefaultControllerName),
 		Scheme:        mgr.GetScheme(),
 		Signer:        pcrSigner,
 		ClusterFqdn:   clusterFqdn,
