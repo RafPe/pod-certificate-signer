@@ -133,6 +133,7 @@ var statusMap = map[string]StatusConfig{
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests,verbs=get;list;watch
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests/status,verbs=patch
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=signers,verbs=sign
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;delete;patch
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 
