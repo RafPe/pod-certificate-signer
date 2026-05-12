@@ -62,34 +62,17 @@ func main() {
 	var enableLeaderElection bool
 	var leaderElectionID string
 	var healthProbeBindAddress string
-	var debugLogging bool
 
 	flag.StringVar(&signerName, "signer-name", "", "Only sign CSR with this .spec.signerName.")
 	flag.StringVar(&caCertPath, "ca-cert-path", "", "CA certificate file.")
 	flag.StringVar(&caKeyPath, "ca-key-path", "", "CA private key file.")
-
 	flag.StringVar(&clusterFqdn, "cluster-fqdn", "cluster.local", "The FQDN of the cluster")
-	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
-		"Enable leader election for controller manager. "+
-			"Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&leaderElectionID, "leader-election-id", "pcs-leader-election",
 		"The name of the configmap used to coordinate leader election between controller-managers.")
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	// flag.BoolVar(&secureMetrics, "metrics-secure", true,
-	// 	"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
-	// flag.StringVar(&webhookCertPath, "webhook-cert-path", "", "The directory that contains the webhook certificate.")
-	// flag.StringVar(&webhookCertName, "webhook-cert-name", "tls.crt", "The name of the webhook certificate file.")
-	// flag.StringVar(&webhookCertKey, "webhook-cert-key", "tls.key", "The name of the webhook key file.")
-	// flag.StringVar(&metricsCertPath, "metrics-cert-path", "",
-	// 	"The directory that contains the metrics server certificate.")
-	// flag.StringVar(&metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
-	// flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
-	// flag.BoolVar(&enableHTTP2, "enable-http2", false,
-	// 	"If set, HTTP/2 will be enabled for the metrics and webhook servers")
-	flag.BoolVar(&debugLogging, "debug-logging", false, "Enable debug logging.")
 
 	opts := zap.Options{
 		Development:     true,
