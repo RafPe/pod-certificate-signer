@@ -130,11 +130,11 @@ var statusMap = map[string]StatusConfig{
 	},
 }
 
-// +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests/finalizers,verbs=update
+// +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests,verbs=get;list;watch
+// +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests/status,verbs=patch
+// +kubebuilder:rbac:groups=certificates.k8s.io,resources=signers,verbs=sign
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
-// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 
 func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
@@ -243,9 +243,10 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 
 func (r *PodCertificateRequestReconciler) issueCertificate(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, podCertificate *podcertificate.PodCertificate) error {
 
+	patch := client.MergeFrom(pcr.DeepCopy())
 	r.setCertificateOnPodCertificateRequest(pcr, podCertificate)
 
-	return r.updatePodCertificateRequestStatusWithReason(ctx, pcr, ReasonCertificateIssued, "", false)
+	return r.patchPodCertificateRequestStatusWithReason(ctx, pcr, patch, ReasonCertificateIssued, "", false)
 }
 
 func (r *PodCertificateRequestReconciler) setCertificateOnPodCertificateRequest(pcr *capiv1beta1.PodCertificateRequest, podCertificate *podcertificate.PodCertificate) {
@@ -271,6 +272,11 @@ func (r *PodCertificateRequestReconciler) setCertificateOnPodCertificateRequest(
 // ------------------------------------------------ GENERIC FUNCTIONS  ------------------------------------------------
 
 func (r *PodCertificateRequestReconciler) updatePodCertificateRequestStatusWithReason(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, reason string, customMessage string, clearFields bool) error {
+	patch := client.MergeFrom(pcr.DeepCopy())
+	return r.patchPodCertificateRequestStatusWithReason(ctx, pcr, patch, reason, customMessage, clearFields)
+}
+
+func (r *PodCertificateRequestReconciler) patchPodCertificateRequestStatusWithReason(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, patch client.Patch, reason string, customMessage string, clearFields bool) error {
 	config, exists := statusMap[reason]
 	if !exists {
 		return fmt.Errorf("unknown reason: %s", reason)
@@ -302,7 +308,7 @@ func (r *PodCertificateRequestReconciler) updatePodCertificateRequestStatusWithR
 		eventMessage,
 	)
 
-	return r.updatePodCertificateRequestStatus(ctx, pcr)
+	return r.patchPodCertificateRequestStatus(ctx, pcr, patch)
 }
 
 func (r *PodCertificateRequestReconciler) setPodCertificateRequestStatusCondition(pcr *capiv1beta1.PodCertificateRequest, conditionType, reason, message string) {
@@ -324,6 +330,6 @@ func (r *PodCertificateRequestReconciler) clearPodCertificateRequestStatusFields
 	pcr.Status.BeginRefreshAt = nil
 }
 
-func (r *PodCertificateRequestReconciler) updatePodCertificateRequestStatus(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest) error {
-	return r.Status().Update(ctx, pcr)
+func (r *PodCertificateRequestReconciler) patchPodCertificateRequestStatus(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, patch client.Patch) error {
+	return r.Status().Patch(ctx, pcr, patch)
 }
