@@ -16,13 +16,13 @@ spec:
     metadata:
       annotations:
         {{- if .Values.metrics.enable_scraping }}
-        prometheus.io/name: {{- include "podcertificate-signer.fullname" }}
+        prometheus.io/name: {{ include "podcertificate-signer.fullname" . }}
         prometheus.io/scrape: "true"
         prometheus.io/port: {{ .Values.metrics.bind_address | trimPrefix ":" | quote }}
         {{- end }}
         {{- with .Values.podAnnotations }}
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
       labels:
         {{- include "podcertificate-signer.labels" . | nindent 8 }}
         {{- with .Values.podLabels }}
