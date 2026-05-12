@@ -19,6 +19,7 @@ package main
 import (
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -29,6 +30,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -63,6 +65,8 @@ func main() {
 	var enableLeaderElection bool
 	var leaderElectionID string
 	var healthProbeBindAddress, metricsBindAddress string
+	var maxConcurrentReconciles int
+	var reconcileTimeout time.Duration
 
 	flag.StringVar(&signerName, "signer-name", "", "Only sign CSR with this .spec.signerName.")
 	flag.StringVar(&caCertPath, "ca-cert-path", "", "CA certificate file.")
@@ -75,6 +79,8 @@ func main() {
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&metricsBindAddress, "metrics-bind-address", ":9090", "The address on which to bind the metrics server.")
+	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 5, "maximum number of concurrent reconciles which can be run.")
+	flag.DurationVar(&reconcileTimeout, "reconcile-timeout", 5*time.Minute, "maximum duration of a reconcile before it times out.")
 
 	opts := zap.Options{
 		Development:     true,
@@ -93,6 +99,11 @@ func main() {
 		LeaderElectionID:       leaderElectionID,
 		Metrics: server.Options{
 			BindAddress: metricsBindAddress,
+		},
+		Controller: config.Controller{
+			MaxConcurrentReconciles: maxConcurrentReconciles,
+			RecoverPanic:            new(true),
+			ReconciliationTimeout:   reconcileTimeout,
 		},
 	})
 
@@ -138,12 +149,10 @@ func main() {
 }
 
 func displayCommandlineFlags() {
-
 	flag.CommandLine.VisitAll(func(f *flag.Flag) {
 		setupLog.Info("Flag",
 			"name", f.Name,
 			"value", f.Value.String(),
 			"default", f.DefValue)
 	})
-
 }

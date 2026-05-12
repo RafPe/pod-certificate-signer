@@ -19,6 +19,11 @@ log:
   level: info             # info, error, debug or panic
   time_encoding: epoch    # epoch, millis, nano, iso8601, rfc3339 or rfc3339nano
 
+# Metrics settings
+metrics:
+  enable_scraping: true
+  bind_address: ":9090"
+
 # PodCertificateRequest Signer settings
 signer:
   # CA cert and private key
@@ -32,14 +37,8 @@ signer:
 manager:
   # Max concurrent reconciles
   max_concurrent_reconciles: 5
-
-  # Number of Queries Per Second for client connections. Set to -1.0 in order
-  # to disable client-side rate limiting and rely on API priority and
-  # fairness.
-  qps: -1.0
-
-  # Extra queries to accumulate when a client is exceeding its rate.
-  burst: 0
+  # Max duration before a reconcile times out
+  reconcile_timeout: "5m"
 
 # This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
 image:
