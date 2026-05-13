@@ -115,18 +115,18 @@ lint-config:  ## Verify golangci-lint linter configuration
 
 .PHONY: kind-start
 kind-start:  ## Start a local development Kind cluster.
-	@if ! $(GO_TOOL) kind get clusters | grep $(KIND_CLUSTER_DEV); then \
+	@if ! $(GO_TOOL) kind get clusters | grep $(KIND_CLUSTER_DEV) >& /dev/null; then \
 		echo "Creating dev Kind cluster '$(KIND_CLUSTER_DEV)' ..."; \
 		$(GO_TOOL) kind create cluster --name $(KIND_CLUSTER_DEV) --config $(SRC_ROOT)/kind/kind-config.yaml; \
 	fi
 
 .PHONY: kind-start
-kind-load-image: kind-start ## Load OCI image into the dev Kind cluster.
+kind-load-image: kind-start docker-build  ## Load OCI image into the dev Kind cluster.
 	@$(GO_TOOL) kind load docker-image --name $(KIND_CLUSTER_DEV) $(IMAGE)
 
 .PHONY: kind-stop
 kind-stop:  ## Tear down the local development Kind cluster.
-	@if $(GO_TOOL) kind get clusters | grep $(KIND_CLUSTER_DEV); then \
+	@if $(GO_TOOL) kind get clusters | grep $(KIND_CLUSTER_DEV) >& /dev/null; then \
 		echo "Tearing down dev Kind cluster '$(KIND_CLUSTER_DEV)' ..."; \
 		$(GO_TOOL) kind delete cluster --name $(KIND_CLUSTER_DEV); \
 	fi
