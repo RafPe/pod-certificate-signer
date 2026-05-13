@@ -39,7 +39,6 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -139,7 +138,6 @@ var statusMap = map[string]StatusConfig{
 
 func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		WithOptions(controller.Options{MaxConcurrentReconciles: 2}). //TODO Create a configurable setup for this
 		For(&capiv1beta1.PodCertificateRequest{}).
 		WithEventFilter(predicate.Funcs{
 			// Allow create events
@@ -160,7 +158,7 @@ func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) err
 func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 
 	var pcr capiv1beta1.PodCertificateRequest
-	if err := r.Client.Get(ctx, req.NamespacedName, &pcr); client.IgnoreNotFound(err) != nil {
+	if err := r.Get(ctx, req.NamespacedName, &pcr); client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
 
@@ -186,7 +184,9 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 	crPod, err := api.GetPod(ctx, r.Client, pcr.Spec.PodName, pcr.Namespace)
 	if err != nil {
 		r.Log.Error(err, "Failed to retrieve pod associated with PodCertificateRequest")
-		r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonAssociatedPodNotFound, "", true)
+		if err := r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonAssociatedPodNotFound); err != nil {
+			return ctrl.Result{}, err
+		}
 
 		return ctrl.Result{}, nil
 	}
@@ -199,7 +199,10 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 	publicKey, publicKeyAlgorithm, err := r.Signer.ParsePkixPublicKey(pcr.Spec.PKIXPublicKey)
 	if err != nil {
 		r.Log.Error(err, "Public key is not supported/invalid")
-		r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonUnsupportedKeyType, "", true)
+		if err := r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonUnsupportedKeyType); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
 
@@ -210,21 +213,29 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		publicKeyAlgorithm)
 	if err != nil {
 		r.Log.Error(err, "Failed to create PodCertificateConfig")
-		r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonCertificateConfigurationInvalid, "", true)
+		if err := r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonCertificateConfigurationInvalid); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
 	pcConfig.LogConfiguration(ctx)
 
 	if err := r.Signer.ValidatePodCertificateConfig(pcConfig); err != nil {
 		r.Log.Error(err, "Failed to validate the PodCertificateConfig")
-		r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonCertificateConfigurationInvalid, "", true)
+		if err := r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonCertificateConfigurationInvalid); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
 
 	podCertificate, err := r.Signer.SignPodCertificate(pcConfig)
 	if err != nil {
 		r.Log.Error(err, "Failed to sign the certificate")
-		r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonSigningFailed, "", true)
+		if err := r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonSigningFailed); err != nil {
+			return ctrl.Result{}, err
+		}
 
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
@@ -232,7 +243,9 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 
 	if err := r.issueCertificate(ctx, &pcr, podCertificate); err != nil {
 		r.Log.Error(err, "failed to update the PodCertificateRequest status")
-		r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonCertificateConfigurationInvalid, "", true)
+		if err := r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonCertificateConfigurationInvalid); err != nil {
+			return ctrl.Result{}, err
+		}
 
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
@@ -247,12 +260,12 @@ func (r *PodCertificateRequestReconciler) issueCertificate(ctx context.Context, 
 	patch := client.MergeFrom(pcr.DeepCopy())
 	r.setCertificateOnPodCertificateRequest(pcr, podCertificate)
 
-	return r.patchPodCertificateRequestStatusWithReason(ctx, pcr, patch, ReasonCertificateIssued, "", false)
+	return r.patchPodCertificateRequestStatusWithReason(ctx, pcr, patch, ReasonCertificateIssued, false)
 }
 
 func (r *PodCertificateRequestReconciler) setCertificateOnPodCertificateRequest(pcr *capiv1beta1.PodCertificateRequest, podCertificate *podcertificate.PodCertificate) {
 
-	//TODO: For validation of config!
+	// TODO: For validation of config!
 	beginRefreshAt := podCertificate.NotAfter().Add(-podCertificate.Config().RefreshBefore)
 
 	r.Log.V(1).Info("Setting the certificate in the PodCertificateRequest",
@@ -272,12 +285,13 @@ func (r *PodCertificateRequestReconciler) setCertificateOnPodCertificateRequest(
 
 // ------------------------------------------------ GENERIC FUNCTIONS  ------------------------------------------------
 
-func (r *PodCertificateRequestReconciler) updatePodCertificateRequestStatusWithReason(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, reason string, customMessage string, clearFields bool) error {
+func (r *PodCertificateRequestReconciler) updatePodCertificateRequestStatusWithReason(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, reason string) error {
 	patch := client.MergeFrom(pcr.DeepCopy())
-	return r.patchPodCertificateRequestStatusWithReason(ctx, pcr, patch, reason, customMessage, clearFields)
+
+	return r.patchPodCertificateRequestStatusWithReason(ctx, pcr, patch, reason, true)
 }
 
-func (r *PodCertificateRequestReconciler) patchPodCertificateRequestStatusWithReason(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, patch client.Patch, reason string, customMessage string, clearFields bool) error {
+func (r *PodCertificateRequestReconciler) patchPodCertificateRequestStatusWithReason(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, patch client.Patch, reason string, clearFields bool) error {
 	config, exists := statusMap[reason]
 	if !exists {
 		return fmt.Errorf("unknown reason: %s", reason)
@@ -287,26 +301,18 @@ func (r *PodCertificateRequestReconciler) patchPodCertificateRequestStatusWithRe
 		r.clearPodCertificateRequestStatusFields(pcr)
 	}
 
-	// Use custom message if provided, otherwise use default
-	conditionMessage := customMessage
-	eventMessage := customMessage
-	if customMessage == "" {
-		conditionMessage = config.ConditionMessage
-		eventMessage = config.EventMessage
-	}
-
 	r.setPodCertificateRequestStatusCondition(
 		pcr,
 		config.ConditionType,
 		config.ConditionReason,
-		conditionMessage,
+		config.ConditionMessage,
 	)
 
 	r.EventRecorder.Event(
 		pcr,
 		config.EventType,
 		config.EventReason,
-		eventMessage,
+		config.EventMessage,
 	)
 
 	return r.patchPodCertificateRequestStatus(ctx, pcr, patch)

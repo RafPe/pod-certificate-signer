@@ -1,9 +1,6 @@
 package signer
 
 import (
-
-	//capiv1beta1 "k8s.io/api/certificates/v1beta1"
-
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -56,7 +53,7 @@ func (s *Signer) GetSignerName() string {
 
 func (s *Signer) ValidatePodCertificateConfig(config *podcertificate.PodCertificateConfig) error {
 
-	//TODO: Validations should come here - like duration , before refresh etc
+	// TODO: Validations should come here - like duration , before refresh etc
 	if config.CommonName == "" {
 		return fmt.Errorf("common name is required")
 	}

@@ -63,7 +63,7 @@ func GetPodAnnotation(pod *corev1.Pod, annotationKey string) (string, bool) {
 	return value, true
 }
 
-func GetPod(ctx context.Context, client client.Client, podName, podNamespace string) (*corev1.Pod, error) {
+func GetPod(ctx context.Context, c client.Client, podName, podNamespace string) (*corev1.Pod, error) {
 
 	var pod corev1.Pod
 	podKey := types.NamespacedName{
@@ -71,8 +71,8 @@ func GetPod(ctx context.Context, client client.Client, podName, podNamespace str
 		Namespace: podNamespace,
 	}
 
-	if err := client.Get(ctx, podKey, &pod); err != nil {
-		return nil, fmt.Errorf("Failed to get pod %s/%s: %w", podNamespace, podName, err)
+	if err := c.Get(ctx, podKey, &pod); err != nil {
+		return nil, fmt.Errorf("failed to get pod %s/%s: %w", podNamespace, podName, err)
 	}
 
 	return &pod, nil

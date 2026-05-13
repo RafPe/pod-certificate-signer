@@ -72,7 +72,7 @@ func NewCertificateAuthority(caFile, caKeyFile string) (*CertificateAuthority, e
 	return &CertificateAuthority{
 		Certificate: caX509Cert,
 		PrivateKey:  caCert.PrivateKey.(crypto.Signer),
-		Backdate:    1 * time.Minute, //TODO: Make CA Backdate configurable
+		Backdate:    1 * time.Minute, // TODO: Make CA Backdate configurable
 	}, nil
 }
 
