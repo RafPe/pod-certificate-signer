@@ -196,7 +196,7 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, nil
 	}
 
-	publicKey, publicKeyAlgorithm, err := r.Signer.ParsePkixPublicKey(pcr.Spec.PKIXPublicKey)
+	publicKey, publicKeyAlgorithm, err := r.Signer.ParsePkixPublicKey(pcr.Spec.StubPKCS10Request)
 	if err != nil {
 		r.Log.Error(err, "Public key is not supported/invalid")
 		if err := r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonUnsupportedKeyType); err != nil {
