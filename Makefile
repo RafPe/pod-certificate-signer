@@ -98,7 +98,12 @@ test-e2e: manifests generate fmt vet ## Run the e2e tests. Expected an isolated 
 		echo "Creating e2e Kind cluster '$(KIND_CLUSTER_E2E)' ..."; \
 		$(GO_TOOL) kind create cluster --name $(KIND_CLUSTER_E2E) --config $(SRC_ROOT)/kind/kind-config.yaml; \
 	fi
-	KIND_CLUSTER=$(KIND_CLUSTER_E2E) $(GOCMD) test -tags=e2e ./test/e2e/ -v -ginkgo.v
+	env \
+		IMAGE=$(IMAGE) \
+		KIND=$(shell $(GOCMD) tool -modfile $(TOOLS_MOD_FILE) -n kind) \
+		KIND_CLUSTER=$(KIND_CLUSTER_E2E) \
+		CERT_MANAGER_INSTALL_SKIP=true \
+		$(GOCMD) test -tags=e2e ./test/e2e/ -v -ginkgo.v
 	@$(GO_TOOL) kind delete cluster --name $(KIND_CLUSTER_E2E)
 
 .PHONY: lint
@@ -194,10 +199,18 @@ deploy: manifests ## Deploy controller to the K8s cluster specified in ~/.kube/c
 	cd config/manager && $(GO_TOOL) kustomize edit set image controller=${IMAGE}
 	$(GO_TOOL) kustomize build config/default | $(KUBECTL) apply -f -
 
+.PHONY: deploy-e2e
+deploy-e2e: manifests ## Deploy controller to the e2e test K8s cluster.
+	cd config/manager && $(GO_TOOL) kustomize edit set image controller=${IMAGE}
+	$(GO_TOOL) kustomize build config/e2e | $(KUBECTL) apply -f -
+
 .PHONY: undeploy
 undeploy:  ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	$(GO_TOOL) kustomize build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
+.PHONY: undeploy-e2e
+undeploy-e2e:  ## Undeploy controller from the e2e test K8s cluster.
+	$(GO_TOOL) kustomize build config/e2e | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
 ##@ Helm Deployment
 

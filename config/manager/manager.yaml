@@ -61,8 +61,11 @@ spec:
       - command:
         - /manager
         args:
-          - --leader-elect
+          - --leader-elect=true
           - --health-probe-bind-address=:8081
+          - --metrics-bind-address=:9090
+          - --ca-cert-path=/app/signer/ca/tls.crt
+          - --ca-key-path=/app/signer/ca/tls.key
         image: controller:latest
         name: manager
         ports: []
