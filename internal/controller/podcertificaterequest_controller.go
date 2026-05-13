@@ -126,6 +126,7 @@ var statusMap = map[string]StatusConfig{
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests/status,verbs=patch
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=signers,verbs=sign
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;delete;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 
@@ -189,7 +190,13 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, nil
 	}
 
-	publicKey, publicKeyAlgorithm, err := r.Signer.ParsePkixPublicKey(pcr.Spec.StubPKCS10Request)
+	var publicKeyData []byte
+	if len(pcr.Spec.StubPKCS10Request) > 0 {
+		publicKeyData = pcr.Spec.StubPKCS10Request
+	} else {
+		publicKeyData = pcr.Spec.PKIXPublicKey // nolint
+	}
+	publicKey, publicKeyAlgorithm, err := r.Signer.ParsePkixPublicKey(publicKeyData)
 	if err != nil {
 		r.Log.Error(err, "Public key is not supported/invalid")
 		if err := r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonUnsupportedKeyType); err != nil {
