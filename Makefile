@@ -179,3 +179,40 @@ deploy: manifests ## Deploy controller to the K8s cluster specified in ~/.kube/c
 .PHONY: undeploy
 undeploy:  ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	$(GO_TOOL) kustomize build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
+
+
+##@ Helm Deployment
+
+## Namespace to deploy the Helm release
+HELM_NAMESPACE ?= pcs-system
+## Name of the Helm release
+HELM_RELEASE ?= podcertificate-signer
+## Additional arguments to pass to helm commands
+HELM_EXTRA_ARGS ?=
+
+.PHONY: helm-deploy
+helm-deploy:  ## Deploy manager to the K8s cluster via Helm. Specify an image with IMAGE env var.
+	$(GO_TOOL) helm upgrade --install $(HELM_RELEASE) $(SRC_ROOT/charts/podcertificate-signer \
+		--namespace $(HELM_NAMESPACE) \
+		--create-namespace \
+		--set image.repository=$${IMAGE%:*} \
+		--set image.tag=$${IMAGE##*:} \
+		--wait \
+		--timeout 5m \
+		$(HELM_EXTRA_ARGS)
+
+.PHONY: helm-uninstall
+helm-uninstall: ## Uninstall the Helm release from the K8s cluster.
+	$(GO_TOOL) helm uninstall $(HELM_RELEASE) --namespace $(HELM_NAMESPACE)
+
+.PHONY: helm-status
+helm-status: ## Show Helm release status.
+	$(GO_TOOL) helm status $(HELM_RELEASE) --namespace $(HELM_NAMESPACE)
+
+.PHONY: helm-history
+helm-history: ## Show Helm release history.
+	$(GO_TOOL) helm history $(HELM_RELEASE) --namespace $(HELM_NAMESPACE)
+
+.PHONY: helm-rollback
+helm-rollback: ## Rollback to previous Helm release.
+	$(GO_TOOL) helm rollback $(HELM_RELEASE) --namespace $(HELM_NAMESPACE)
