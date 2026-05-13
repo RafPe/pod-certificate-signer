@@ -124,7 +124,7 @@ func main() {
 		Scheme:        mgr.GetScheme(),
 		Signer:        pcrSigner,
 		ClusterFqdn:   clusterFqdn,
-		EventRecorder: mgr.GetEventRecorderFor(DefaultControllerName),
+		EventRecorder: mgr.GetEventRecorder(DefaultControllerName),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PodCertificateSignerReconciler")
 		os.Exit(1)

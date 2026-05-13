@@ -21,28 +21,21 @@ import (
 	"fmt"
 	"time"
 
-	// "crypto/ed25519"
-	// "crypto/rsa"
-	// "crypto/x509"
-
 	"github.com/go-logr/logr"
+	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/api"
 	podcertificate "github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
-
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
-
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // PodCertificateRequestReconciler reconciles a PodCertificateRequest object
@@ -52,7 +45,7 @@ type PodCertificateRequestReconciler struct {
 	Scheme        *runtime.Scheme
 	Signer        *signer.Signer
 	ClusterFqdn   string
-	EventRecorder record.EventRecorder
+	EventRecorder events.EventRecorder
 }
 type StatusConfig struct {
 	ConditionType    string
@@ -308,10 +301,12 @@ func (r *PodCertificateRequestReconciler) patchPodCertificateRequestStatusWithRe
 		config.ConditionMessage,
 	)
 
-	r.EventRecorder.Event(
+	r.EventRecorder.Eventf(
 		pcr,
+		nil,
 		config.EventType,
 		config.EventReason,
+		"SignPodCertificateRequest",
 		config.EventMessage,
 	)
 
