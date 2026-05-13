@@ -16,6 +16,8 @@ LOCALBIN ?= $(SRC_ROOT)/bin
 
 # Image URL to use all building/pushing image targets
 IMAGE ?= ghcr.io/dnaeon/podcertificate-signer:latest
+IMAGE_REPO = $(firstword $(subst :, ,$(IMAGE)))
+IMAGE_TAG = $(lastword $(subst :, ,$(IMAGE)))
 
 # CONTAINER_TOOL defines the container tool to be used for building images.
 # Be aware that the target commands are only tested with Docker which is
@@ -222,14 +224,16 @@ HELM_RELEASE ?= podcertificate-signer
 HELM_EXTRA_ARGS ?=
 
 .PHONY: helm-deploy
-helm-deploy:  ## Deploy manager to the K8s cluster via Helm. Specify an image with IMAGE env var.
-	$(GO_TOOL) helm upgrade --install $(HELM_RELEASE) $(SRC_ROOT/charts/podcertificate-signer \
+helm-deploy: kind-load-image  ## Deploy manager to the dev K8s cluster via Helm. Specify an image with IMAGE env var.
+	$(KUBECTL) create ns $(HELM_NAMESPACE)
+	$(KUBECTL) --namespace $(HELM_NAMESPACE) apply -f examples/ca_tls_secret.yaml
+	$(GO_TOOL) helm upgrade --install $(HELM_RELEASE) $(SRC_ROOT)/charts/podcertificate-signer \
 		--namespace $(HELM_NAMESPACE) \
-		--create-namespace \
-		--set image.repository=$${IMAGE%:*} \
-		--set image.tag=$${IMAGE##*:} \
+		--set image.repository=$(IMAGE_REPO) \
+		--set image.tag=$(IMAGE_TAG) \
 		--wait \
 		--timeout 5m \
+		--values examples/helm-values.yaml \
 		$(HELM_EXTRA_ARGS)
 
 .PHONY: helm-uninstall
