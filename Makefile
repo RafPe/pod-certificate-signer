@@ -225,7 +225,7 @@ HELM_EXTRA_ARGS ?=
 
 .PHONY: helm-deploy
 helm-deploy: kind-load-image  ## Deploy manager to the dev K8s cluster via Helm. Specify an image with IMAGE env var.
-	$(KUBECTL) create ns $(HELM_NAMESPACE)
+	$(KUBECTL) get ns $(HELM_NAMESPACE) || $(KUBECTL) create ns $(HELM_NAMESPACE)
 	$(KUBECTL) --namespace $(HELM_NAMESPACE) apply -f examples/ca_tls_secret.yaml
 	$(GO_TOOL) helm upgrade --install $(HELM_RELEASE) $(SRC_ROOT)/charts/podcertificate-signer \
 		--namespace $(HELM_NAMESPACE) \

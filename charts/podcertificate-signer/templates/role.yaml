@@ -11,13 +11,14 @@ rules:
   - coordination.k8s.io
   resources:
   - leases
+  verbs:
+  - create
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
   resourceNames:
   - {{ include "podcertificate-signer.fullname" . | quote }}
   verbs:
   - get
-  - list
-  - watch
-  - create
   - update
-  - delete
-  - patch
