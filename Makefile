@@ -113,6 +113,20 @@ lint-fix:  ## Run golangci-lint linter and perform fixes
 lint-config:  ## Verify golangci-lint linter configuration
 	$(GO_TOOL) golangci-lint config verify
 
+.PHONY: kind-start
+kind-start:  ## Start a local development Kind cluster.
+	@if ! $(GO_TOOL) kind get clusters | grep $(KIND_CLUSTER_DEV); then \
+		echo "Creating dev Kind cluster '$(KIND_CLUSTER_DEV)' ..."; \
+		$(GO_TOOL) kind create cluster --name $(KIND_CLUSTER_DEV) --config $(SRC_ROOT)/kind/kind-config.yaml; \
+	fi
+
+.PHONY: kind-stop
+kind-stop:  ## Tear down the local development Kind cluster.
+	@if $(GO_TOOL) kind get clusters | grep $(KIND_CLUSTER_DEV); then \
+		echo "Tearing down dev Kind cluster '$(KIND_CLUSTER_DEV)' ..."; \
+		$(GO_TOOL) kind delete cluster --name $(KIND_CLUSTER_DEV); \
+	fi
+
 ##@ Build
 
 .PHONY: build
