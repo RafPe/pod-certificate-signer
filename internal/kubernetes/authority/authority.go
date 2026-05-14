@@ -11,27 +11,7 @@ import (
 	"math/big"
 	"time"
 
-	// "k8s.io/client-go/util/cert"
-	// "k8s.io/client-go/util/keyutil"
-
-	podcertificate "github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
-)
-
-// Well-known key sizes for Kubernetes 1.34 PodCertificateRequest compliance
-const (
-	// RSA key sizes (in bits)
-	RSAKeySize3072 = 3072
-	RSAKeySize4096 = 4096
-
-	// ECDSA curve sizes (in bits)
-	ECDSAKeySizeP256 = 256 // P-256 curve
-	ECDSAKeySizeP384 = 384 // P-384 curve
-)
-
-// Well-known key type identifiers
-const (
-	KeyTypeRSA   = "RSA"
-	KeyTypeECDSA = "ECDSA"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
 )
 
 var serialNumberLimit = new(big.Int).Lsh(big.NewInt(1), 128)
