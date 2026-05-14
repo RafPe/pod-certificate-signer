@@ -230,10 +230,12 @@ L:
 		select {
 		case <-ctx.Done():
 			break L
-		case <-watcher.Events:
+		case event := <-watcher.Events:
+			if !event.Has(fsnotify.Create) && !event.Has(fsnotify.Write) && !event.Has(fsnotify.Rename) {
+				continue
+			}
 			logger.Info("ca-watcher: reloading CA certificate")
-			err := ca.load()
-			if err != nil {
+			if err := ca.load(); err != nil {
 				logger.Error(err, "ca-watcher: failed to reload CA certificate")
 			} else {
 				logger.Info("ca-watcher: CA certificate reloaded successfully")
