@@ -44,6 +44,7 @@ spec:
             - /manager
             - --leader-elect={{ .Values.leader_election.enabled }}
             - --leader-election-id={{ include "podcertificate-signer.fullname" . }}
+            - --leader-election-namespace={{ .Release.Namespace }}
             - --ca-cert-path={{ .Values.signer.ca_cert_path }}
             - --ca-key-path={{ .Values.signer.ca_key_path }}
             - --signer-name={{ .Values.signer.name }}
