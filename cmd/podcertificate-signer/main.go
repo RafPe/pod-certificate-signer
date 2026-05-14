@@ -66,7 +66,7 @@ func main() {
 	var enableLeaderElection bool
 	var reconcileTimeout time.Duration
 
-	flag.StringVar(&signerName, "signer-name", "", "Only sign CSR with this .spec.signerName.")
+	flag.StringVar(&signerName, "signer-name", "example.org/signer", "Only sign CSR with this .spec.signerName.")
 	flag.StringVar(&caCertPath, "ca-cert-path", "", "CA certificate file.")
 	flag.StringVar(&caKeyPath, "ca-key-path", "", "CA private key file.")
 	flag.StringVar(&clusterFqdn, "cluster-fqdn", "cluster.local", "The FQDN of the cluster")

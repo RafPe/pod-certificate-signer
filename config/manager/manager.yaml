@@ -63,6 +63,7 @@ spec:
         args:
           - --leader-elect=true
           - --health-probe-bind-address=:8081
+          - --signer-name=example.org/signer
           - --metrics-bind-address=:9090
           - --ca-cert-path=/app/signer/ca/tls.crt
           - --ca-key-path=/app/signer/ca/tls.key
