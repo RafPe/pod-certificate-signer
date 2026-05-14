@@ -219,6 +219,7 @@ func (ca *CertificateAuthority) Watch(ctx context.Context) error {
 	slices.Sort(paths)
 
 	for _, path := range slices.Compact(paths) {
+		logger.Info("ca-watcher: watching CA directory for changes", "path", path)
 		if err := watcher.Add(path); err != nil {
 			return fmt.Errorf("ca-watcher: unable to add watch directory %s: %w", path, err)
 		}
@@ -231,8 +232,11 @@ L:
 			break L
 		case <-watcher.Events:
 			logger.Info("ca-watcher: reloading CA certificate")
-			if err := ca.load(); err != nil {
+			err := ca.load()
+			if err != nil {
 				logger.Error(err, "ca-watcher: failed to reload CA certificate")
+			} else {
+				logger.Error(err, "ca-watcher: CA certificate reloaded successfully")
 			}
 		case err := <-watcher.Errors:
 			logger.Error(err, "ca-watcher: error watching CA certificate")

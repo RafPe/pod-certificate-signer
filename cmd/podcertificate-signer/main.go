@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 	"time"
@@ -33,9 +34,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/controller"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
 	// +kubebuilder:scaffold:imports
 )
@@ -109,7 +112,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	pcrSigner, err := signer.New(caCertPath, caKeyPath, signerName)
+	ca, err := authority.New(caCertPath, caKeyPath)
+	if err != nil {
+		setupLog.Error(err, "unable to create certificate authority")
+		os.Exit(1)
+	}
+
+	// Watch CA certificate and key for changes and reload the CA
+	caWatcher := func(ctx context.Context) error {
+		return ca.Watch(ctx)
+	}
+	if err := mgr.Add(manager.RunnableFunc(caWatcher)); err != nil {
+		setupLog.Error(err, "unable to add CA watcher runnable")
+		os.Exit(1)
+	}
+
+	pcrSigner, err := signer.New(signerName, ca)
 	if err != nil {
 		setupLog.Error(err, "unable to create signer")
 		os.Exit(1)
