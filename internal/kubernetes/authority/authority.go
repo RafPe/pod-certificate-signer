@@ -236,7 +236,7 @@ L:
 			if err != nil {
 				logger.Error(err, "ca-watcher: failed to reload CA certificate")
 			} else {
-				logger.Error(err, "ca-watcher: CA certificate reloaded successfully")
+				logger.Info("ca-watcher: CA certificate reloaded successfully")
 			}
 		case err := <-watcher.Errors:
 			logger.Error(err, "ca-watcher: error watching CA certificate")
