@@ -234,6 +234,26 @@ L:
 			if !event.Has(fsnotify.Create) && !event.Has(fsnotify.Write) && !event.Has(fsnotify.Rename) {
 				continue
 			}
+
+			// Drain the filesystem events channel in order to avoid
+			// needless reloads in a short time window, as multiple
+			// events will be triggered when the CA cert and key are
+			// updated.
+			draining := true
+			drainTimer := time.NewTimer(500 * time.Millisecond)
+			for draining {
+				select {
+				case <-ctx.Done():
+					drainTimer.Stop()
+					break L
+				case e := <-watcher.Events:
+					logger.V(1).Info("ca-watcher: draining fsnotify event", "event", e.Op.String(), "name", e.Name)
+					continue
+				case <-drainTimer.C:
+					draining = false
+				}
+			}
+
 			logger.Info("ca-watcher: reloading CA certificate")
 			if err := ca.load(); err != nil {
 				logger.Error(err, "ca-watcher: failed to reload CA certificate")
