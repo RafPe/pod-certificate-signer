@@ -173,9 +173,13 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 
 }
 
+// CertificateToPEM returns the CA certificate in PEM format.
 func (ca *CertificateAuthority) CertificateToPEM() []byte {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 
-	return ca.certificate.Raw
+	return pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: ca.certificate.Raw,
+	})
 }
