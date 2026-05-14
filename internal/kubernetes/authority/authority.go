@@ -7,8 +7,10 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
@@ -17,21 +19,24 @@ import (
 var serialNumberLimit = new(big.Int).Lsh(big.NewInt(1), 128)
 
 // Option is a function which configures the [CertificateAuthority].
-type Option func(c *CertificateAuthority) error
+type Option func(ca *CertificateAuthority) error
 
 // CertificateAuthority is a CA which signs Pod Certificate Requests.
 type CertificateAuthority struct {
+	certFile    string
+	privKeyFile string
 	certificate *x509.Certificate
-	privateKey  crypto.Signer
-	now         func() time.Time
+	signer      crypto.Signer
+	nowFunc     func() time.Time
 	backDate    time.Duration
+	mu          sync.Mutex
 }
 
 // WithBackDate is an [Option], which configures the [CertificateAuthority] to
 // use the given backdate when signing certificate requests.
 func WithBackDate(val time.Duration) Option {
-	opt := func(c *CertificateAuthority) error {
-		c.backDate = val
+	opt := func(ca *CertificateAuthority) error {
+		ca.backDate = val
 
 		return nil
 	}
@@ -41,35 +46,11 @@ func WithBackDate(val time.Duration) Option {
 
 // New creates a new [CertificateAuthority].
 func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error) {
-	caCert, err := tls.LoadX509KeyPair(caFile, caKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load key pair: %w", err)
-	}
-
-	caX509Cert, err := x509.ParseCertificate(caCert.Certificate[0])
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse certificate: %w", err)
-	}
-
-	// Validate: CA
-	if !caX509Cert.BasicConstraintsValid || !caX509Cert.IsCA {
-		return nil, fmt.Errorf("certificate is not a valid CA certificate")
-	}
-
-	// Validate: key usage
-	if (caX509Cert.KeyUsage & x509.KeyUsageCertSign) == 0 {
-		return nil, fmt.Errorf("CA certificate cannot sign certificates")
-	}
-
-	// Validate: not expired
-	if time.Now().After(caX509Cert.NotAfter) {
-		return nil, fmt.Errorf("CA certificate has expired")
-	}
-
 	ca := &CertificateAuthority{
-		certificate: caX509Cert,
-		privateKey:  caCert.PrivateKey.(crypto.Signer),
+		certFile:    caFile,
+		privKeyFile: caKeyFile,
 		backDate:    1 * time.Minute,
+		nowFunc:     time.Now,
 	}
 
 	// Additional configuration of the CA with the given options.
@@ -79,15 +60,61 @@ func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error
 		}
 	}
 
+	if err := ca.load(); err != nil {
+		return nil, err
+	}
+
 	return ca, nil
 }
 
-// Main method responsible for signing our certificate request configureation
+// load loads the certificate and key for the [CertificateAuthority].
+func (ca *CertificateAuthority) load() error {
+	caCert, err := tls.LoadX509KeyPair(ca.certFile, ca.privKeyFile)
+	if err != nil {
+		return fmt.Errorf("failed to load key pair: %w", err)
+	}
+
+	caX509Cert, err := x509.ParseCertificate(caCert.Certificate[0])
+	if err != nil {
+		return fmt.Errorf("failed to parse certificate: %w", err)
+	}
+
+	// Validate: CA
+	if !caX509Cert.BasicConstraintsValid || !caX509Cert.IsCA {
+		return errors.New("certificate is not a valid CA certificate")
+	}
+
+	// Validate: key usage
+	if (caX509Cert.KeyUsage & x509.KeyUsageCertSign) == 0 {
+		return errors.New("CA certificate cannot sign certificates")
+	}
+
+	// Validate: not expired
+	if time.Now().After(caX509Cert.NotAfter) {
+		return errors.New("CA certificate has expired")
+	}
+
+	signer, ok := caCert.PrivateKey.(crypto.Signer)
+	if !ok {
+		return errors.New("private key does not implement crypto.Signer interface")
+	}
+
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
+	ca.certificate = caX509Cert
+	ca.signer = signer
+
+	return nil
+}
+
+// Sign is responsible for signing our certificate request configuration.
 func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConfig) (*podcertificate.PodCertificate, error) {
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
 
 	now := time.Now()
-	if ca.now != nil {
-		now = ca.now()
+	if ca.nowFunc != nil {
+		now = ca.nowFunc()
 	}
 
 	nbf := now.Add(-ca.backDate)
@@ -123,7 +150,7 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 		NotAfter:           naf,
 	}
 
-	issuedCertificate, err := x509.CreateCertificate(rand.Reader, template, ca.certificate, pcConfig.PublicKey, ca.privateKey)
+	issuedCertificate, err := x509.CreateCertificate(rand.Reader, template, ca.certificate, pcConfig.PublicKey, ca.signer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create certificate for public key type %T: %w", pcConfig.PublicKey, err)
 	}
@@ -147,5 +174,8 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 }
 
 func (ca *CertificateAuthority) CertificateToPEM() []byte {
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
+
 	return ca.certificate.Raw
 }
