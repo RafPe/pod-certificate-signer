@@ -18,7 +18,7 @@ type Signer struct {
 }
 
 func NewSigner(caFile, caKeyFile, signerName string) (*Signer, error) {
-	caAuthority, err := authority.NewCertificateAuthority(caFile, caKeyFile)
+	caAuthority, err := authority.New(caFile, caKeyFile)
 	if err != nil {
 		return nil, err
 	}

@@ -16,14 +16,19 @@ import (
 
 var serialNumberLimit = new(big.Int).Lsh(big.NewInt(1), 128)
 
+// Option is a function which configures the [CertificateAuthority].
+type Option func(c *CertificateAuthority) error
+
+// CertificateAuthority is a CA which signs Pod Certificate Requests.
 type CertificateAuthority struct {
-	Certificate *x509.Certificate
-	PrivateKey  crypto.Signer
-	Now         func() time.Time
-	Backdate    time.Duration
+	certificate *x509.Certificate
+	privateKey  crypto.Signer
+	now         func() time.Time
+	backDate    time.Duration
 }
 
-func NewCertificateAuthority(caFile, caKeyFile string) (*CertificateAuthority, error) {
+// New creates a new [CertificateAuthority].
+func New(caFile, caKeyFile string) (*CertificateAuthority, error) {
 	caCert, err := tls.LoadX509KeyPair(caFile, caKeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load key pair: %w", err)
@@ -50,9 +55,9 @@ func NewCertificateAuthority(caFile, caKeyFile string) (*CertificateAuthority, e
 	}
 
 	return &CertificateAuthority{
-		Certificate: caX509Cert,
-		PrivateKey:  caCert.PrivateKey.(crypto.Signer),
-		Backdate:    1 * time.Minute, // TODO: Make CA Backdate configurable
+		certificate: caX509Cert,
+		privateKey:  caCert.PrivateKey.(crypto.Signer),
+		backDate:    1 * time.Minute, // TODO: Make CA Backdate configurable
 	}, nil
 }
 
@@ -60,18 +65,18 @@ func NewCertificateAuthority(caFile, caKeyFile string) (*CertificateAuthority, e
 func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConfig) (*podcertificate.PodCertificate, error) {
 
 	now := time.Now()
-	if ca.Now != nil {
-		now = ca.Now()
+	if ca.now != nil {
+		now = ca.now()
 	}
 
-	nbf := now.Add(-ca.Backdate)
-	if !nbf.Before(ca.Certificate.NotAfter) {
-		return nil, fmt.Errorf("the signer has expired: NotAfter=%v", ca.Certificate.NotAfter)
+	nbf := now.Add(-ca.backDate)
+	if !nbf.Before(ca.certificate.NotAfter) {
+		return nil, fmt.Errorf("the signer has expired: NotAfter=%v", ca.certificate.NotAfter)
 	}
 
 	naf := nbf.Add(pcConfig.Duration)
-	if naf.After(ca.Certificate.NotAfter) {
-		return nil, fmt.Errorf("certificate validity period exceeds the signer CA validity: notAfter=%v, caNotAfter=%v", naf, ca.Certificate.NotAfter)
+	if naf.After(ca.certificate.NotAfter) {
+		return nil, fmt.Errorf("certificate validity period exceeds the signer CA validity: notAfter=%v, caNotAfter=%v", naf, ca.certificate.NotAfter)
 	}
 	if naf.Before(now) {
 		return nil, fmt.Errorf("certificate not after is in the past: %v", naf)
@@ -97,7 +102,7 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 		NotAfter:           naf,
 	}
 
-	issuedCertificate, err := x509.CreateCertificate(rand.Reader, template, ca.Certificate, pcConfig.PublicKey, ca.PrivateKey)
+	issuedCertificate, err := x509.CreateCertificate(rand.Reader, template, ca.certificate, pcConfig.PublicKey, ca.privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create certificate for public key type %T: %w", pcConfig.PublicKey, err)
 	}
@@ -121,5 +126,5 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 }
 
 func (ca *CertificateAuthority) CertificateToPEM() []byte {
-	return ca.Certificate.Raw
+	return ca.certificate.Raw
 }
