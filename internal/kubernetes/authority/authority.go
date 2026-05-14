@@ -52,6 +52,13 @@ func WithBackDate(val time.Duration) Option {
 
 // New creates a new [CertificateAuthority].
 func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error) {
+	if caFile == "" {
+		return nil, errors.New("invalid CA certificate path specified")
+	}
+	if caKeyFile == "" {
+		return nil, errors.New("invalid CA private key path specified")
+	}
+
 	ca := &CertificateAuthority{
 		certFile:    caFile,
 		privKeyFile: caKeyFile,

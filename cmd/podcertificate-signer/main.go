@@ -105,13 +105,13 @@ func main() {
 	})
 
 	if err != nil {
-		setupLog.Error(err, "unable to start manager")
+		setupLog.Error(err, "unable to create controller manager")
 		os.Exit(1)
 	}
 
 	pcrSigner, err := signer.NewSigner(caCertPath, caKeyPath, signerName)
 	if err != nil {
-		setupLog.Error(err, "failed to create signer")
+		setupLog.Error(err, "unable to create signer")
 		os.Exit(1)
 	}
 
@@ -140,7 +140,7 @@ func main() {
 	displayCommandlineFlags()
 
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
-		setupLog.Error(err, "problem running manager")
+		setupLog.Error(err, "unable to start controller manager")
 		os.Exit(1)
 	}
 }

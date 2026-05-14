@@ -33,7 +33,6 @@ func NewSigner(caFile, caKeyFile, signerName string) (*Signer, error) {
 
 // Our main signing method. At this stage the configuration should have already been verified before ending up here.
 func (s *Signer) SignPodCertificate(pcrConfig *podcertificate.PodCertificateConfig) (*podcertificate.PodCertificate, error) {
-
 	pCertificate, err := s.certificateAuthority.Sign(pcrConfig)
 	if err != nil {
 		return nil, err
