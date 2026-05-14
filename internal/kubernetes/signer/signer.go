@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
+	"errors"
 	"fmt"
 
 	authority "github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
@@ -17,14 +18,19 @@ type Signer struct {
 	signerName           string
 }
 
-func NewSigner(caFile, caKeyFile, signerName string) (*Signer, error) {
-	caAuthority, err := authority.New(caFile, caKeyFile)
-	if err != nil {
-		return nil, err
+// New creates a new [Signer] with the given name, and uses CA for signing pod
+// certificate requests.
+func New(signerName string, ca *authority.CertificateAuthority) (*Signer, error) {
+	if signerName == "" {
+		return nil, errors.New("invalid signer name specified")
+	}
+
+	if ca == nil {
+		return nil, errors.New("invalid CA specified")
 	}
 
 	ret := &Signer{
-		certificateAuthority: caAuthority,
+		certificateAuthority: ca,
 		signerName:           signerName,
 	}
 

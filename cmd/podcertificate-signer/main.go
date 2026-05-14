@@ -109,7 +109,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	pcrSigner, err := signer.NewSigner(caCertPath, caKeyPath, signerName)
+	pcrSigner, err := signer.New(caCertPath, caKeyPath, signerName)
 	if err != nil {
 		setupLog.Error(err, "unable to create signer")
 		os.Exit(1)
