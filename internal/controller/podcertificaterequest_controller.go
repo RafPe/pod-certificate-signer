@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"crypto"
+	"crypto/x509"
 	"fmt"
 	"time"
 
@@ -190,15 +192,16 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, nil
 	}
 
-	var publicKeyData []byte
+	var publicKey crypto.PublicKey
+	var publicKeyAlgorithm x509.PublicKeyAlgorithm
+	var eerr error
 	if len(pcr.Spec.StubPKCS10Request) > 0 {
-		publicKeyData = pcr.Spec.StubPKCS10Request
+		publicKey, publicKeyAlgorithm, eerr = r.Signer.ParseCSRPublicKey(pcr.Spec.StubPKCS10Request)
 	} else {
-		publicKeyData = pcr.Spec.PKIXPublicKey // nolint
+		publicKey, publicKeyAlgorithm, eerr = r.Signer.ParsePkixPublicKey(pcr.Spec.PKIXPublicKey) // nolint
 	}
-	publicKey, publicKeyAlgorithm, err := r.Signer.ParsePkixPublicKey(publicKeyData)
-	if err != nil {
-		r.Log.Error(err, "Public key is not supported/invalid")
+	if eerr != nil {
+		r.Log.Error(eerr, "Public key is not supported/invalid")
 		if err := r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonUnsupportedKeyType); err != nil {
 			return ctrl.Result{}, err
 		}

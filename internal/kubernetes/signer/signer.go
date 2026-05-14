@@ -71,18 +71,27 @@ func (s *Signer) ParsePkixPublicKey(pkixPublicKey []byte) (crypto.PublicKey, x50
 		return nil, 0, fmt.Errorf("unable to parse public key: %v", err)
 	}
 
-	// Determine the algorithm based on the key type
-	var publicKeyAlgorithm x509.PublicKeyAlgorithm
+	return classifyPublicKey(publicKey)
+}
+
+func (s *Signer) ParseCSRPublicKey(csrDER []byte) (crypto.PublicKey, x509.PublicKeyAlgorithm, error) {
+	csr, err := x509.ParseCertificateRequest(csrDER)
+	if err != nil {
+		return nil, 0, fmt.Errorf("unable to parse PKCS#10 CSR: %v", err)
+	}
+
+	return classifyPublicKey(csr.PublicKey)
+}
+
+func classifyPublicKey(publicKey crypto.PublicKey) (crypto.PublicKey, x509.PublicKeyAlgorithm, error) {
 	switch publicKey.(type) {
 	case *rsa.PublicKey:
-		publicKeyAlgorithm = x509.RSA
+		return publicKey, x509.RSA, nil
 	case *ecdsa.PublicKey:
-		publicKeyAlgorithm = x509.ECDSA
+		return publicKey, x509.ECDSA, nil
 	case ed25519.PublicKey:
-		publicKeyAlgorithm = x509.Ed25519
+		return publicKey, x509.Ed25519, nil
 	default:
 		return nil, 0, fmt.Errorf("unsupported public key type: %T", publicKey)
 	}
-
-	return publicKey, publicKeyAlgorithm, nil
 }
