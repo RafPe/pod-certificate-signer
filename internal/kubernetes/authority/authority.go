@@ -203,7 +203,7 @@ func (ca *CertificateAuthority) Watch(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ca-watcher: unable to create fsnotify.Watcher: %w", err)
 	}
-	defer watcher.Close()
+	defer watcher.Close() // nolint:errcheck
 
 	paths := []string{
 		filepath.Dir(ca.certFile),

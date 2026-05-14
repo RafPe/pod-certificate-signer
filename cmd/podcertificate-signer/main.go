@@ -55,17 +55,12 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
-// nolint:gocyclo
 func main() {
-	var signerName string
-	var caCertPath string
-	var caKeyPath string
-
-	var clusterFqdn string
-	var enableLeaderElection bool
-	var leaderElectionID string
+	var signerName, caCertPath, caKeyPath, clusterFqdn string
+	var leaderElectionID, leaderElectionNamespace string
 	var healthProbeBindAddress, metricsBindAddress string
 	var maxConcurrentReconciles int
+	var enableLeaderElection bool
 	var reconcileTimeout time.Duration
 
 	flag.StringVar(&signerName, "signer-name", "", "Only sign CSR with this .spec.signerName.")
@@ -74,6 +69,7 @@ func main() {
 	flag.StringVar(&clusterFqdn, "cluster-fqdn", "cluster.local", "The FQDN of the cluster")
 	flag.StringVar(&leaderElectionID, "leader-election-id", "pcs-leader-election",
 		"The name of the configmap used to coordinate leader election between controller-managers.")
+	flag.StringVar(&leaderElectionNamespace, "leader-election-namespace", "default", "Namespace for leader election to be used.")
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
@@ -93,10 +89,11 @@ func main() {
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
-		HealthProbeBindAddress: healthProbeBindAddress,
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       leaderElectionID,
+		Scheme:                  scheme,
+		HealthProbeBindAddress:  healthProbeBindAddress,
+		LeaderElection:          enableLeaderElection,
+		LeaderElectionID:        leaderElectionID,
+		LeaderElectionNamespace: leaderElectionNamespace,
 		Metrics: server.Options{
 			BindAddress: metricsBindAddress,
 		},
