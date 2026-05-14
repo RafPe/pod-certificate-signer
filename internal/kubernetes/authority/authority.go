@@ -27,8 +27,20 @@ type CertificateAuthority struct {
 	backDate    time.Duration
 }
 
+// WithBackDate is an [Option], which configures the [CertificateAuthority] to
+// use the given backdate when signing certificate requests.
+func WithBackDate(val time.Duration) Option {
+	opt := func(c *CertificateAuthority) error {
+		c.backDate = val
+
+		return nil
+	}
+
+	return opt
+}
+
 // New creates a new [CertificateAuthority].
-func New(caFile, caKeyFile string) (*CertificateAuthority, error) {
+func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error) {
 	caCert, err := tls.LoadX509KeyPair(caFile, caKeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load key pair: %w", err)
@@ -54,11 +66,20 @@ func New(caFile, caKeyFile string) (*CertificateAuthority, error) {
 		return nil, fmt.Errorf("CA certificate has expired")
 	}
 
-	return &CertificateAuthority{
+	ca := &CertificateAuthority{
 		certificate: caX509Cert,
 		privateKey:  caCert.PrivateKey.(crypto.Signer),
-		backDate:    1 * time.Minute, // TODO: Make CA Backdate configurable
-	}, nil
+		backDate:    1 * time.Minute,
+	}
+
+	// Additional configuration of the CA with the given options.
+	for _, opt := range opts {
+		if err := opt(ca); err != nil {
+			return nil, err
+		}
+	}
+
+	return ca, nil
 }
 
 // Main method responsible for signing our certificate request configureation
