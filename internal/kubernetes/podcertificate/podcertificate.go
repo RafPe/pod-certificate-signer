@@ -1,4 +1,4 @@
-package podCertificate
+package podcertificate
 
 import (
 	"context"
