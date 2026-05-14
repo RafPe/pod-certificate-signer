@@ -1,6 +1,7 @@
 package authority
 
 import (
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/tls"
@@ -10,8 +11,13 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"path/filepath"
+	"slices"
 	"sync"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
 )
@@ -155,13 +161,17 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 		return nil, fmt.Errorf("failed to create certificate for public key type %T: %w", pcConfig.PublicKey, err)
 	}
 
-	issuedCertificatePem := pem.EncodeToMemory(&pem.Block{
+	caCertPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: ca.certificate.Raw,
+	})
+	issuedCertificatePEM := pem.EncodeToMemory(&pem.Block{
 		Type:  "CERTIFICATE",
 		Bytes: issuedCertificate,
 	})
 
 	// Certificate chain: issued cert + CA cert
-	certificateChain := string(issuedCertificatePem) + string(ca.CertificateToPEM())
+	certificateChain := string(issuedCertificatePEM) + string(caCertPEM)
 
 	return podcertificate.NewPodCertificate(
 		issuedCertificate,
@@ -182,4 +192,45 @@ func (ca *CertificateAuthority) CertificateToPEM() []byte {
 		Type:  "CERTIFICATE",
 		Bytes: ca.certificate.Raw,
 	})
+}
+
+// Watch starts a [fsnotify.Watcher], which reloads the CA cert and private key
+// when the underlying files change. This method blocks until the given
+// [context.Context] is canceled.
+func (ca *CertificateAuthority) Watch(ctx context.Context) error {
+	logger := log.FromContext(ctx)
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return fmt.Errorf("ca-watcher: unable to create fsnotify.Watcher: %w", err)
+	}
+	defer watcher.Close()
+
+	paths := []string{
+		filepath.Dir(ca.certFile),
+		filepath.Dir(ca.privKeyFile),
+	}
+	slices.Sort(paths)
+
+	for _, path := range slices.Compact(paths) {
+		if err := watcher.Add(path); err != nil {
+			return fmt.Errorf("ca-watcher: unable to add watch directory %s: %w", path, err)
+		}
+	}
+
+L:
+	for {
+		select {
+		case <-ctx.Done():
+			break L
+		case <-watcher.Events:
+			logger.Info("ca-watcher: reloading CA certificate")
+			if err := ca.load(); err != nil {
+				logger.Error(err, "ca-watcher: failed to reload CA certificate")
+			}
+		case err := <-watcher.Errors:
+			logger.Error(err, "ca-watcher: error watching CA certificate")
+		}
+	}
+
+	return nil
 }
