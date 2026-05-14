@@ -168,10 +168,7 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 		return nil, fmt.Errorf("failed to create certificate for public key type %T: %w", pcConfig.PublicKey, err)
 	}
 
-	caCertPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: ca.certificate.Raw,
-	})
+	caCertPEM := ca.certificateToPEM()
 	issuedCertificatePEM := pem.EncodeToMemory(&pem.Block{
 		Type:  "CERTIFICATE",
 		Bytes: issuedCertificate,
@@ -187,7 +184,16 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 		nbf,
 		naf,
 	), nil
+}
 
+// certificateToPEM returns the CA certificate in PEM format. This method is not
+// safe to be called concurrently. Callers should ensure to acquire the lock
+// before calling this method.
+func (ca *CertificateAuthority) certificateToPEM() []byte {
+	return pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: ca.certificate.Raw,
+	})
 }
 
 // CertificateToPEM returns the CA certificate in PEM format.
@@ -195,16 +201,18 @@ func (ca *CertificateAuthority) CertificateToPEM() []byte {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 
-	return pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: ca.certificate.Raw,
-	})
+	return ca.certificateToPEM()
 }
 
 // Watch starts a [fsnotify.Watcher], which reloads the CA cert and private key
-// when the underlying files change. This method blocks until the given
-// [context.Context] is canceled.
-func (ca *CertificateAuthority) Watch(ctx context.Context) error {
+// when the underlying files change.
+//
+// Callers will be notified whenever the CA changes via the provided channel.
+// If notifications are not needed, callers must provide nil as the notification
+// channel.
+//
+// This method blocks until the given [context.Context] is canceled.
+func (ca *CertificateAuthority) Watch(ctx context.Context, notify chan<- struct{}) error {
 	logger := log.FromContext(ctx)
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -259,6 +267,15 @@ L:
 				logger.Error(err, "ca-watcher: failed to reload CA certificate")
 			} else {
 				logger.Info("ca-watcher: CA certificate reloaded successfully")
+				// Don't block here, so that reloading the CA
+				// can proceed as usual, even if we have slow
+				// consumers.
+				if notify != nil {
+					select {
+					case notify <- struct{}{}:
+					default:
+					}
+				}
 			}
 		case err := <-watcher.Errors:
 			logger.Error(err, "ca-watcher: error watching CA certificate")
