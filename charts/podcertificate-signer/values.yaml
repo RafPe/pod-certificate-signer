@@ -17,7 +17,7 @@ leader_election:
 log:
   encoder: console        # json or console
   level: info             # info, error, debug or panic
-  time_encoding: epoch    # epoch, millis, nano, iso8601, rfc3339 or rfc3339nano
+  time_encoding: rfc3339  # epoch, millis, nano, iso8601, rfc3339 or rfc3339nano
 
 # Metrics settings
 metrics:
