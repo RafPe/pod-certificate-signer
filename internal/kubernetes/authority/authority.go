@@ -29,13 +29,15 @@ type Option func(ca *CertificateAuthority) error
 
 // CertificateAuthority is a CA which signs Pod Certificate Requests.
 type CertificateAuthority struct {
-	certFile    string
-	privKeyFile string
-	certificate *x509.Certificate
-	signer      crypto.Signer
-	nowFunc     func() time.Time
-	backDate    time.Duration
-	mu          sync.Mutex
+	certFile             string
+	privKeyFile          string
+	certificate          *x509.Certificate
+	signer               crypto.Signer
+	previousCertificates []*x509.Certificate
+	maxPreviousCerts     int
+	nowFunc              func() time.Time
+	backDate             time.Duration
+	mu                   sync.Mutex
 }
 
 // WithBackDate is an [Option], which configures the [CertificateAuthority] to
@@ -43,6 +45,35 @@ type CertificateAuthority struct {
 func WithBackDate(val time.Duration) Option {
 	opt := func(ca *CertificateAuthority) error {
 		ca.backDate = val
+
+		return nil
+	}
+
+	return opt
+}
+
+// WithPreviousCABundle is an [Option], which seeds the [CertificateAuthority]
+// with previously known CA certificates. This is useful for bootstrapping the
+// trust bundle from an external source (e.g. an existing ClusterTrustBundle)
+// so that previous CAs are retained across process restarts.
+func WithPreviousCABundle(certs []*x509.Certificate) Option {
+	opt := func(ca *CertificateAuthority) error {
+		ca.previousCertificates = certs
+
+		return nil
+	}
+
+	return opt
+}
+
+// WithMaxPreviousCertificates is an [Option], which configures how many
+// previous CA certificates to retain in the rolling window. Defaults to 1.
+func WithMaxPreviousCertificates(n int) Option {
+	opt := func(ca *CertificateAuthority) error {
+		if n < 0 {
+			return errors.New("max previous certificates must be non-negative")
+		}
+		ca.maxPreviousCerts = n
 
 		return nil
 	}
@@ -60,10 +91,12 @@ func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error
 	}
 
 	ca := &CertificateAuthority{
-		certFile:    caFile,
-		privKeyFile: caKeyFile,
-		backDate:    1 * time.Minute,
-		nowFunc:     time.Now,
+		certFile:             caFile,
+		privKeyFile:          caKeyFile,
+		backDate:             1 * time.Minute,
+		nowFunc:              time.Now,
+		maxPreviousCerts:     1,
+		previousCertificates: make([]*x509.Certificate, 0),
 	}
 
 	// Additional configuration of the CA with the given options.
@@ -114,6 +147,15 @@ func (ca *CertificateAuthority) load() error {
 
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
+
+	// Rotate: push current certificate into the history if it changed
+	if ca.certificate != nil && !ca.certificate.Equal(caX509Cert) {
+		ca.previousCertificates = append(ca.previousCertificates, ca.certificate)
+		if len(ca.previousCertificates) > ca.maxPreviousCerts {
+			ca.previousCertificates = ca.previousCertificates[len(ca.previousCertificates)-ca.maxPreviousCerts:]
+		}
+	}
+
 	ca.certificate = caX509Cert
 	ca.signer = signer
 
@@ -202,6 +244,26 @@ func (ca *CertificateAuthority) CertificateToPEM() []byte {
 	defer ca.mu.Unlock()
 
 	return ca.certificateToPEM()
+}
+
+// TrustBundlePEM returns the current CA certificate followed by any previous
+// CA certificates as a concatenated PEM bundle. This is suitable for use in a
+// ClusterTrustBundle where clients need to trust both the current and recently
+// rotated CAs.
+func (ca *CertificateAuthority) TrustBundlePEM() []byte {
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
+
+	var bundle []byte
+	bundle = append(bundle, ca.certificateToPEM()...)
+	for _, prevBundle := range ca.previousCertificates {
+		bundle = append(bundle, pem.EncodeToMemory(&pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: prevBundle.Raw,
+		})...)
+	}
+
+	return bundle
 }
 
 // Watch starts a [fsnotify.Watcher], which reloads the CA cert and private key
