@@ -297,8 +297,8 @@ func (ca *CertificateAuthority) Watch(ctx context.Context, notify chan<- struct{
 		filepath.Dir(ca.certFile),
 		filepath.Dir(ca.privKeyFile),
 	}
-	slices.Sort(paths)
 
+	slices.Sort(paths)
 	for _, path := range slices.Compact(paths) {
 		logger.Info("watching CA directory for changes", "path", path)
 		if err := watcher.Add(path); err != nil {
@@ -338,16 +338,16 @@ L:
 			logger.Info("reloading CA certificate")
 			if err := ca.load(); err != nil {
 				logger.Error(err, "failed to reload CA certificate")
-			} else {
-				logger.Info("CA certificate reloaded successfully")
-				// Don't block here, so that reloading the CA
-				// can proceed as usual, even if we have slow
-				// consumers.
-				if notify != nil {
-					select {
-					case notify <- struct{}{}:
-					default:
-					}
+				continue
+			}
+
+			// Don't block here, so that reloading the CA can
+			// proceed as usual, even if we have slow consumers.
+			logger.Info("CA certificate reloaded successfully")
+			if notify != nil {
+				select {
+				case notify <- struct{}{}:
+				default:
 				}
 			}
 		case err := <-watcher.Errors:
