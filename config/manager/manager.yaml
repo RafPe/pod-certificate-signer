@@ -67,6 +67,8 @@ spec:
           - --metrics-bind-address=:9090
           - --ca-cert-path=/app/signer/ca/tls.crt
           - --ca-key-path=/app/signer/ca/tls.key
+          - --max-concurrent-reconciles=5
+          - --max-previous-ca-certs=2
         image: controller:latest
         name: manager
         ports: []
