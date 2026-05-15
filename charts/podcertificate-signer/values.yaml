@@ -33,6 +33,9 @@ signer:
   # Name of the signer
   name: example.org/signer
 
+  # Max number of previous CA certificates to keep during a CA cert reload
+  max_previous_ca_certs: 2
+
 # Controller manager settings
 manager:
   # Max concurrent reconciles
