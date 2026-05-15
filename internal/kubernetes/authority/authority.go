@@ -150,14 +150,25 @@ func (ca *CertificateAuthority) load() error {
 
 	// Rotate: push current certificate into the history if it changed
 	if ca.certificate != nil && !ca.certificate.Equal(caX509Cert) {
-		ca.previousCertificates = append(ca.previousCertificates, ca.certificate)
+		if !slices.ContainsFunc(ca.previousCertificates, func(item *x509.Certificate) bool {
+			return item.Equal(ca.certificate)
+		}) {
+			ca.previousCertificates = append(ca.previousCertificates, ca.certificate)
+		}
 		if len(ca.previousCertificates) > ca.maxPreviousCerts {
 			ca.previousCertificates = ca.previousCertificates[len(ca.previousCertificates)-ca.maxPreviousCerts:]
 		}
 	}
 
+	// Set new cert and signer
 	ca.certificate = caX509Cert
 	ca.signer = signer
+
+	// Remove the current cert from the previous CA certs, in order to avoid
+	// duplicate entries in the trust bundle.
+	ca.previousCertificates = slices.DeleteFunc(ca.previousCertificates, func(item *x509.Certificate) bool {
+		return item.Equal(ca.certificate)
+	})
 
 	return nil
 }

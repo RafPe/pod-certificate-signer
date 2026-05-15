@@ -112,7 +112,7 @@ func (s *Signer) ClusterTrustBundle() *certificatesv1beta1.ClusterTrustBundle {
 	// Name of the resource should follow the
 	// <domain>:<signerName>:<arbitrary-name> convention.
 	//
-	//https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#cluster-trust-bundles
+	// https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#cluster-trust-bundles
 	normalizedName := strings.ReplaceAll(s.signerName, "/", ":")
 	bundleName := fmt.Sprintf("%s:bundle", normalizedName)
 
