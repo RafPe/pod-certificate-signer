@@ -15,7 +15,7 @@ GO_TOOL := $(GOCMD) tool -modfile $(TOOLS_MOD_FILE)
 LOCALBIN ?= $(SRC_ROOT)/bin
 
 # Image URL to use all building/pushing image targets
-IMAGE ?= ghcr.io/dnaeon/podcertificate-signer:latest
+IMAGE ?= ghcr.io/rafpe/pod-certificate-signer:latest
 IMAGE_REPO = $(firstword $(subst :, ,$(IMAGE)))
 IMAGE_TAG = $(lastword $(subst :, ,$(IMAGE)))
 
