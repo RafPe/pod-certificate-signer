@@ -39,8 +39,18 @@ rules:
 - apiGroups:
   - certificates.k8s.io
   resources:
+  - clustertrustbundles
+  verbs:
+  - get
+  - create
+  - update
+  - patch
+- apiGroups:
+  - certificates.k8s.io
+  resources:
   - signers
   resourceNames:
   - {{ .Values.signer.name | quote }}
   verbs:
   - sign
+  - attest

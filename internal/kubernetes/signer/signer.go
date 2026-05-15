@@ -8,6 +8,10 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"strings"
+
+	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	authority "github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
 	podcertificate "github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
@@ -99,4 +103,29 @@ func classifyPublicKey(publicKey crypto.PublicKey) (crypto.PublicKey, x509.Publi
 	default:
 		return nil, 0, fmt.Errorf("unsupported public key type: %T", publicKey)
 	}
+}
+
+// ClusterTrustBundle returns a [certificatesv1beta1.ClusterTrustBundle] derived
+// from the [Signer] and the [authority.CertificateAuthority] used by it for
+// signing certificates.
+func (s *Signer) ClusterTrustBundle() *certificatesv1beta1.ClusterTrustBundle {
+	// Name of the resource should follow the
+	// <domain>:<signerName>:<arbitrary-name> convention.
+	//
+	//https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#cluster-trust-bundles
+	normalizedName := strings.ReplaceAll(s.signerName, "/", ":")
+	bundleName := fmt.Sprintf("%s:bundle", normalizedName)
+
+	data := s.certificateAuthority.CertificateToPEM()
+	bundle := &certificatesv1beta1.ClusterTrustBundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: bundleName,
+		},
+		Spec: certificatesv1beta1.ClusterTrustBundleSpec{
+			TrustBundle: string(data),
+			SignerName:  s.signerName,
+		},
+	}
+
+	return bundle
 }

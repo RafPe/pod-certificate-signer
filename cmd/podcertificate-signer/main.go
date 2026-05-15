@@ -30,9 +30,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/config"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -118,18 +121,51 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Watch CA certificate and key for changes and reload the CA
-	caWatcher := func(ctx context.Context) error {
-		return ca.Watch(ctx)
-	}
-	if err := mgr.Add(manager.RunnableFunc(caWatcher)); err != nil {
-		setupLog.Error(err, "unable to add CA watcher runnable")
-		os.Exit(1)
-	}
-
 	pcrSigner, err := signer.New(signerName, ca)
 	if err != nil {
 		setupLog.Error(err, "unable to create signer")
+		os.Exit(1)
+	}
+
+	// caTrustBundleUpdater is a [manager.Runnable] which will update the
+	// ClusterTrustBundle of our signer whenever the CA has been reloaded.
+	caTrustBundleUpdater := func(ctx context.Context) error {
+		logger := log.FromContext(ctx).WithName("cluster-trust-bundle")
+		logger.Info("starting ClusterTrustBundle updater")
+		events := make(chan struct{}, 2)
+
+		// Start the CA watcher and listen for any CA reload events
+		go func() {
+			if err := ca.Watch(ctx, events); err != nil {
+				logger.Error(err, "failed to start ca-watcher")
+			}
+		}()
+
+		// We want the trust bundle updated on startup, so emit an event
+		// here.
+		events <- struct{}{}
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-events:
+				err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+					logger.Info("updating ClusterTrustBundle with new CA certificate")
+					bundle := pcrSigner.ClusterTrustBundle()
+					_, err := controllerutil.CreateOrPatch(ctx, mgr.GetClient(), bundle, func() error {
+						bundle.Spec.TrustBundle = string(ca.CertificateToPEM())
+						return nil
+					})
+					return err
+				})
+				if err != nil {
+					logger.Error(err, "unable to update ClusterTrustBundle")
+				}
+			}
+		}
+	}
+	if err := mgr.Add(manager.RunnableFunc(caTrustBundleUpdater)); err != nil {
+		setupLog.Error(err, "unable to add ClusterTrustBundle updater runnable")
 		os.Exit(1)
 	}
 

@@ -23,6 +23,15 @@ rules:
 - apiGroups:
   - certificates.k8s.io
   resources:
+  - clustertrustbundles
+  verbs:
+  - create
+  - get
+  - patch
+  - update
+- apiGroups:
+  - certificates.k8s.io
+  resources:
   - podcertificaterequests
   verbs:
   - get
@@ -39,6 +48,7 @@ rules:
   resources:
   - signers
   verbs:
+  - attest
   - sign
 - apiGroups:
   - coordination.k8s.io

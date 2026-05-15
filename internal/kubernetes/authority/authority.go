@@ -213,7 +213,7 @@ func (ca *CertificateAuthority) CertificateToPEM() []byte {
 //
 // This method blocks until the given [context.Context] is canceled.
 func (ca *CertificateAuthority) Watch(ctx context.Context, notify chan<- struct{}) error {
-	logger := log.FromContext(ctx)
+	logger := log.FromContext(ctx).WithName("ca-watcher")
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("ca-watcher: unable to create fsnotify.Watcher: %w", err)
@@ -227,7 +227,7 @@ func (ca *CertificateAuthority) Watch(ctx context.Context, notify chan<- struct{
 	slices.Sort(paths)
 
 	for _, path := range slices.Compact(paths) {
-		logger.Info("ca-watcher: watching CA directory for changes", "path", path)
+		logger.Info("watching CA directory for changes", "path", path)
 		if err := watcher.Add(path); err != nil {
 			return fmt.Errorf("ca-watcher: unable to add watch directory %s: %w", path, err)
 		}
@@ -255,18 +255,18 @@ L:
 					drainTimer.Stop()
 					break L
 				case e := <-watcher.Events:
-					logger.V(1).Info("ca-watcher: draining fsnotify event", "event", e.Op.String(), "name", e.Name)
+					logger.V(1).Info("draining fsnotify event", "event", e.Op.String(), "name", e.Name)
 					continue
 				case <-drainTimer.C:
 					draining = false
 				}
 			}
 
-			logger.Info("ca-watcher: reloading CA certificate")
+			logger.Info("reloading CA certificate")
 			if err := ca.load(); err != nil {
-				logger.Error(err, "ca-watcher: failed to reload CA certificate")
+				logger.Error(err, "failed to reload CA certificate")
 			} else {
-				logger.Info("ca-watcher: CA certificate reloaded successfully")
+				logger.Info("CA certificate reloaded successfully")
 				// Don't block here, so that reloading the CA
 				// can proceed as usual, even if we have slow
 				// consumers.
@@ -278,7 +278,7 @@ L:
 				}
 			}
 		case err := <-watcher.Errors:
-			logger.Error(err, "ca-watcher: error watching CA certificate")
+			logger.Error(err, "error watching CA certificate")
 		}
 	}
 
