@@ -265,7 +265,7 @@ func (ca *CertificateAuthority) TrustBundlePEM() []byte {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 
-	var bundle []byte
+	var bundle []byte // nolint:prealloc
 	bundle = append(bundle, ca.certificateToPEM()...)
 	for _, prevBundle := range ca.previousCertificates {
 		bundle = append(bundle, pem.EncodeToMemory(&pem.Block{
