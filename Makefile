@@ -127,7 +127,7 @@ kind-start:  ## Start a local development Kind cluster.
 		$(GO_TOOL) kind create cluster --name $(KIND_CLUSTER_DEV) --config $(SRC_ROOT)/kind/kind-config.yaml; \
 	fi
 
-.PHONY: kind-start
+.PHONY: kind-load-image
 kind-load-image: kind-start docker-build  ## Load OCI image into the dev Kind cluster.
 	@$(GO_TOOL) kind load docker-image --name $(KIND_CLUSTER_DEV) $(IMAGE)
 

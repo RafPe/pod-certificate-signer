@@ -48,7 +48,6 @@ spec:
             - --ca-cert-path={{ .Values.signer.ca_cert_path }}
             - --ca-key-path={{ .Values.signer.ca_key_path }}
             - --signer-name={{ .Values.signer.name }}
-            - --zap-encoder={{ .Values.log.encoder }}
             - --zap-log-level={{ .Values.log.level }}
             - --zap-encoder={{ .Values.log.encoder }}
             - --zap-time-encoding={{ .Values.log.time_encoding }}
