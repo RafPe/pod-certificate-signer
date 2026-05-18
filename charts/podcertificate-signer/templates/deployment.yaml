@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "podcertificate-signer.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "podcertificate-signer.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "podcertificate-signer.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- if .Values.metrics.enable_scraping }}
+        prometheus.io/name: {{ include "podcertificate-signer.fullname" . }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.metrics.bind_address | trimPrefix ":" | quote }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "podcertificate-signer.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "podcertificate-signer.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          command:
+            - /manager
+            - --leader-elect={{ .Values.leader_election.enabled }}
+            - --leader-election-id={{ include "podcertificate-signer.fullname" . }}
+            - --leader-election-namespace={{ .Release.Namespace }}
+            - --ca-cert-path={{ .Values.signer.ca_cert_path }}
+            - --ca-key-path={{ .Values.signer.ca_key_path }}
+            - --signer-name={{ .Values.signer.name }}
+            - --zap-log-level={{ .Values.log.level }}
+            - --zap-encoder={{ .Values.log.encoder }}
+            - --zap-time-encoding={{ .Values.log.time_encoding }}
+            - --metrics-bind-address={{ .Values.metrics.bind_address }}
+            - --max-concurrent-reconciles={{ .Values.manager.max_concurrent_reconciles }}
+            - --reconcile-timeout={{ .Values.manager.reconcile_timeout }}
+            - --max-previous-ca-certs={{ .Values.signer.max_previous_ca_certs }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if hasPrefix "sha256:" .Values.image.tag }}
+          image: "{{ .Values.image.repository }}@{{ .Values.image.tag }}"
+          {{- else }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          {{- end }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            {{- if .Values.metrics.enable_scraping }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.bind_address | trimPrefix ":" }}
+              protocol: TCP
+            {{- end }}
+            - name: http
+              containerPort: {{ .Values.health.bind_address | trimPrefix ":" }}
+              protocol: TCP
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

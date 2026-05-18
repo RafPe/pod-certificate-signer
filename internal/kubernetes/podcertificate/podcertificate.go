@@ -1,4 +1,4 @@
-package podCertificate
+package podcertificate
 
 import (
 	"context"
@@ -28,8 +28,8 @@ type PodCertificateConfig struct {
 	URIs               []*url.URL
 	Duration           time.Duration
 	RefreshBefore      time.Duration
-	KeyUsage           x509.KeyUsage      //TODO: Customizable Key Usage via Policies
-	ExtKeyUsage        []x509.ExtKeyUsage //TODO: Customizable Ext Key Usage via Policies or other aliases i.e. client-server-auth , ssl ,
+	KeyUsage           x509.KeyUsage      // TODO: Customizable Key Usage via Policies
+	ExtKeyUsage        []x509.ExtKeyUsage // TODO: Customizable Ext Key Usage via Policies or other aliases i.e. client-server-auth , ssl ,
 	PublicKey          crypto.PublicKey   // Change from PKIXPublicKey []byte
 	PublicKeyAlgorithm x509.PublicKeyAlgorithm
 }
@@ -97,7 +97,7 @@ func (pc *PodCertificate) CertificateChainToPEM() []byte {
 }
 
 func (pc *PodCertificate) CertificateToPEM() []byte {
-	return []byte(pc.certificate)
+	return pc.certificate
 }
 
 // -- Config
@@ -184,13 +184,13 @@ func getConfigFromAnnotationsRefreshBefore(pod *corev1.Pod, signerName string) t
 			return refresh
 		}
 	}
-	//TODO: Default value here
+	// TODO: Default value here
 	// As a ref certificate minimum duration is 1 hour - so we can safely say 15 min - the field is only a hint so
 	// this is not 100% deterministic value for the kube-api.
 	return 15 * time.Minute // Default
 }
 
-//TODO: Implement these :)
+// TODO: Implement these :)
 // Helper Methods:
 // PodCertificate.IsValid() bool
 // PodCertificate.ExpiresIn() time.Duration

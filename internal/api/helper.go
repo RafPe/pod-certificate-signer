@@ -4,22 +4,22 @@ import (
 	"context"
 	"fmt"
 
-	capiv1alpha1 "k8s.io/api/certificates/v1alpha1"
+	capiv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func IsPodCertificateRequestImmutable(pcr *capiv1alpha1.PodCertificateRequest) bool {
+func IsPodCertificateRequestImmutable(pcr *capiv1beta1.PodCertificateRequest) bool {
 	return GetPodCertificateRequestConditionType(&pcr.Status) != ""
 }
 
-func IsPodCertificateStatusIssued(pcr *capiv1alpha1.PodCertificateRequest) bool {
-	return GetPodCertificateRequestConditionType(&pcr.Status) == capiv1alpha1.PodCertificateRequestConditionTypeIssued
+func IsPodCertificateStatusIssued(pcr *capiv1beta1.PodCertificateRequest) bool {
+	return GetPodCertificateRequestConditionType(&pcr.Status) == capiv1beta1.PodCertificateRequestConditionTypeIssued
 }
 
-func GetPodCertificateRequestConditionType(status *capiv1alpha1.PodCertificateRequestStatus) string {
+func GetPodCertificateRequestConditionType(status *capiv1beta1.PodCertificateRequestStatus) string {
 	// Fail safe if the object would be set to nil
 	if status.Conditions == nil {
 		return ""
@@ -36,14 +36,14 @@ func GetPodCertificateRequestConditionType(status *capiv1alpha1.PodCertificateRe
 	// )
 
 	for _, c := range status.Conditions {
-		if c.Type == capiv1alpha1.PodCertificateRequestConditionTypeIssued {
-			return capiv1alpha1.PodCertificateRequestConditionTypeIssued
+		if c.Type == capiv1beta1.PodCertificateRequestConditionTypeIssued {
+			return capiv1beta1.PodCertificateRequestConditionTypeIssued
 		}
-		if c.Type == capiv1alpha1.PodCertificateRequestConditionTypeDenied {
-			return capiv1alpha1.PodCertificateRequestConditionTypeDenied
+		if c.Type == capiv1beta1.PodCertificateRequestConditionTypeDenied {
+			return capiv1beta1.PodCertificateRequestConditionTypeDenied
 		}
-		if c.Type == capiv1alpha1.PodCertificateRequestConditionTypeFailed {
-			return capiv1alpha1.PodCertificateRequestConditionTypeFailed
+		if c.Type == capiv1beta1.PodCertificateRequestConditionTypeFailed {
+			return capiv1beta1.PodCertificateRequestConditionTypeFailed
 		}
 	}
 
@@ -63,7 +63,7 @@ func GetPodAnnotation(pod *corev1.Pod, annotationKey string) (string, bool) {
 	return value, true
 }
 
-func GetPod(ctx context.Context, client client.Client, podName, podNamespace string) (*corev1.Pod, error) {
+func GetPod(ctx context.Context, c client.Client, podName, podNamespace string) (*corev1.Pod, error) {
 
 	var pod corev1.Pod
 	podKey := types.NamespacedName{
@@ -71,8 +71,8 @@ func GetPod(ctx context.Context, client client.Client, podName, podNamespace str
 		Namespace: podNamespace,
 	}
 
-	if err := client.Get(ctx, podKey, &pod); err != nil {
-		return nil, fmt.Errorf("Failed to get pod %s/%s: %w", podNamespace, podName, err)
+	if err := c.Get(ctx, podKey, &pod); err != nil {
+		return nil, fmt.Errorf("failed to get pod %s/%s: %w", podNamespace, podName, err)
 	}
 
 	return &pod, nil

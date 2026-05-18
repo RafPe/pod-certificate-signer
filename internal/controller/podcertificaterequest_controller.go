@@ -18,32 +18,26 @@ package controller
 
 import (
 	"context"
+	"crypto"
+	"crypto/x509"
 	"fmt"
 	"time"
 
-	// "crypto/ed25519"
-	// "crypto/rsa"
-	// "crypto/x509"
-
 	"github.com/go-logr/logr"
+	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/api"
 	podcertificate "github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
-
-	capiv1alpha1 "k8s.io/api/certificates/v1alpha1"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
-
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // PodCertificateRequestReconciler reconciles a PodCertificateRequest object
@@ -53,7 +47,7 @@ type PodCertificateRequestReconciler struct {
 	Scheme        *runtime.Scheme
 	Signer        *signer.Signer
 	ClusterFqdn   string
-	EventRecorder record.EventRecorder
+	EventRecorder events.EventRecorder
 }
 type StatusConfig struct {
 	ConditionType    string
@@ -81,7 +75,7 @@ const (
 
 var statusMap = map[string]StatusConfig{
 	ReasonCertificateConfigurationInvalid: {
-		ConditionType:    capiv1alpha1.PodCertificateRequestConditionTypeFailed,
+		ConditionType:    capiv1beta1.PodCertificateRequestConditionTypeFailed,
 		ConditionReason:  ReasonCertificateConfigurationInvalid,
 		ConditionMessage: "Certificate configuration is invalid",
 		EventType:        corev1.EventTypeWarning,
@@ -89,7 +83,7 @@ var statusMap = map[string]StatusConfig{
 		EventMessage:     "Certificate configuration is invalid",
 	},
 	ReasonAssociatedPodNotFound: {
-		ConditionType:    capiv1alpha1.PodCertificateRequestConditionTypeFailed,
+		ConditionType:    capiv1beta1.PodCertificateRequestConditionTypeFailed,
 		ConditionReason:  ReasonAssociatedPodNotFound,
 		ConditionMessage: "Pod for associated PodCertificateRequest not found",
 		EventType:        corev1.EventTypeWarning,
@@ -97,7 +91,7 @@ var statusMap = map[string]StatusConfig{
 		EventMessage:     "Pod for associated PodCertificateRequest not found",
 	},
 	ReasonSigningDenied: {
-		ConditionType:    capiv1alpha1.PodCertificateRequestConditionTypeDenied,
+		ConditionType:    capiv1beta1.PodCertificateRequestConditionTypeDenied,
 		ConditionReason:  ReasonSigningDenied,
 		ConditionMessage: "Signing denied",
 		EventType:        corev1.EventTypeWarning,
@@ -105,7 +99,7 @@ var statusMap = map[string]StatusConfig{
 		EventMessage:     "Signing denied",
 	},
 	ReasonSigningFailed: {
-		ConditionType:    capiv1alpha1.PodCertificateRequestConditionTypeFailed,
+		ConditionType:    capiv1beta1.PodCertificateRequestConditionTypeFailed,
 		ConditionReason:  ReasonSigningFailed,
 		ConditionMessage: "Failed to sign certificate",
 		EventType:        corev1.EventTypeWarning,
@@ -113,7 +107,7 @@ var statusMap = map[string]StatusConfig{
 		EventMessage:     "Failed to sign certificate",
 	},
 	ReasonCertificateIssued: {
-		ConditionType:    capiv1alpha1.PodCertificateRequestConditionTypeIssued,
+		ConditionType:    capiv1beta1.PodCertificateRequestConditionTypeIssued,
 		ConditionReason:  ReasonCertificateIssued,
 		ConditionMessage: "Certificate successfully issued",
 		EventType:        corev1.EventTypeNormal,
@@ -121,33 +115,35 @@ var statusMap = map[string]StatusConfig{
 		EventMessage:     "Certificate successfully issued",
 	},
 	ReasonUnsupportedKeyType: {
-		ConditionType:    capiv1alpha1.PodCertificateRequestConditionTypeDenied,
-		ConditionReason:  capiv1alpha1.PodCertificateRequestConditionUnsupportedKeyType,
+		ConditionType:    capiv1beta1.PodCertificateRequestConditionTypeDenied,
+		ConditionReason:  capiv1beta1.PodCertificateRequestConditionUnsupportedKeyType,
 		ConditionMessage: "Unsupported key type",
 		EventType:        corev1.EventTypeWarning,
-		EventReason:      capiv1alpha1.PodCertificateRequestConditionUnsupportedKeyType,
+		EventReason:      capiv1beta1.PodCertificateRequestConditionUnsupportedKeyType,
 		EventMessage:     "Unsupported key type",
 	},
 }
 
-// +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests/finalizers,verbs=update
+// +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests,verbs=get;list;watch
+// +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests/status,verbs=patch
+// +kubebuilder:rbac:groups=certificates.k8s.io,resources=clustertrustbundles,verbs=get;create;update;patch
+// +kubebuilder:rbac:groups=certificates.k8s.io,resources=signers,verbs=sign;attest
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;delete;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
-// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 
 func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		WithOptions(controller.Options{MaxConcurrentReconciles: 2}). //TODO Create a configurable setup for this
-		For(&capiv1alpha1.PodCertificateRequest{}).
+		For(&capiv1beta1.PodCertificateRequest{}).
 		WithEventFilter(predicate.Funcs{
 			// Allow create events
 			CreateFunc: func(e event.CreateEvent) bool {
 
-				isPcrImmutable := api.IsPodCertificateRequestImmutable(e.Object.(*capiv1alpha1.PodCertificateRequest))
+				isPcrImmutable := api.IsPodCertificateRequestImmutable(e.Object.(*capiv1beta1.PodCertificateRequest))
 
 				// V(1) - Debug level (basic debugging)
-				r.Log.Info("Check if PodCertificateRequest is immutable", "immutable", isPcrImmutable, "event", "create", "request-name", e.Object.(*capiv1alpha1.PodCertificateRequest).Name)
+				r.Log.Info("Check if PodCertificateRequest is immutable", "immutable", isPcrImmutable, "event", "create", "request-name", e.Object.(*capiv1beta1.PodCertificateRequest).Name)
 				return !isPcrImmutable // True for processing request ; False for skipping request
 			},
 		}).
@@ -158,8 +154,8 @@ func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) err
 // move the current state of the cluster closer to the desired state.
 func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 
-	var pcr capiv1alpha1.PodCertificateRequest
-	if err := r.Client.Get(ctx, req.NamespacedName, &pcr); client.IgnoreNotFound(err) != nil {
+	var pcr capiv1beta1.PodCertificateRequest
+	if err := r.Get(ctx, req.NamespacedName, &pcr); client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
 
@@ -185,7 +181,9 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 	crPod, err := api.GetPod(ctx, r.Client, pcr.Spec.PodName, pcr.Namespace)
 	if err != nil {
 		r.Log.Error(err, "Failed to retrieve pod associated with PodCertificateRequest")
-		r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonAssociatedPodNotFound, "", true)
+		if err := r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonAssociatedPodNotFound); err != nil {
+			return ctrl.Result{}, err
+		}
 
 		return ctrl.Result{}, nil
 	}
@@ -195,10 +193,20 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, nil
 	}
 
-	publicKey, publicKeyAlgorithm, err := r.Signer.ParsePkixPublicKey(pcr.Spec.PKIXPublicKey)
-	if err != nil {
-		r.Log.Error(err, "Public key is not supported/invalid")
-		r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonUnsupportedKeyType, "", true)
+	var publicKey crypto.PublicKey
+	var publicKeyAlgorithm x509.PublicKeyAlgorithm
+	var eerr error
+	if len(pcr.Spec.StubPKCS10Request) > 0 {
+		publicKey, publicKeyAlgorithm, eerr = r.Signer.ParseCSRPublicKey(pcr.Spec.StubPKCS10Request)
+	} else {
+		publicKey, publicKeyAlgorithm, eerr = r.Signer.ParsePkixPublicKey(pcr.Spec.PKIXPublicKey) // nolint
+	}
+	if eerr != nil {
+		r.Log.Error(eerr, "Public key is not supported/invalid")
+		if err := r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonUnsupportedKeyType); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
 
@@ -209,21 +217,29 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		publicKeyAlgorithm)
 	if err != nil {
 		r.Log.Error(err, "Failed to create PodCertificateConfig")
-		r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonCertificateConfigurationInvalid, "", true)
+		if err := r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonCertificateConfigurationInvalid); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
 	pcConfig.LogConfiguration(ctx)
 
 	if err := r.Signer.ValidatePodCertificateConfig(pcConfig); err != nil {
 		r.Log.Error(err, "Failed to validate the PodCertificateConfig")
-		r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonCertificateConfigurationInvalid, "", true)
+		if err := r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonCertificateConfigurationInvalid); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
 
 	podCertificate, err := r.Signer.SignPodCertificate(pcConfig)
 	if err != nil {
 		r.Log.Error(err, "Failed to sign the certificate")
-		r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonSigningFailed, "", true)
+		if err := r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonSigningFailed); err != nil {
+			return ctrl.Result{}, err
+		}
 
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
@@ -231,7 +247,9 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 
 	if err := r.issueCertificate(ctx, &pcr, podCertificate); err != nil {
 		r.Log.Error(err, "failed to update the PodCertificateRequest status")
-		r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonCertificateConfigurationInvalid, "", true)
+		if err := r.updatePodCertificateRequestStatusWithReason(ctx, &pcr, ReasonCertificateConfigurationInvalid); err != nil {
+			return ctrl.Result{}, err
+		}
 
 		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
 	}
@@ -241,16 +259,17 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 
 }
 
-func (r *PodCertificateRequestReconciler) issueCertificate(ctx context.Context, pcr *capiv1alpha1.PodCertificateRequest, podCertificate *podcertificate.PodCertificate) error {
+func (r *PodCertificateRequestReconciler) issueCertificate(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, podCertificate *podcertificate.PodCertificate) error {
 
+	patch := client.MergeFrom(pcr.DeepCopy())
 	r.setCertificateOnPodCertificateRequest(pcr, podCertificate)
 
-	return r.updatePodCertificateRequestStatusWithReason(ctx, pcr, ReasonCertificateIssued, "", false)
+	return r.patchPodCertificateRequestStatusWithReason(ctx, pcr, patch, ReasonCertificateIssued, false)
 }
 
-func (r *PodCertificateRequestReconciler) setCertificateOnPodCertificateRequest(pcr *capiv1alpha1.PodCertificateRequest, podCertificate *podcertificate.PodCertificate) {
+func (r *PodCertificateRequestReconciler) setCertificateOnPodCertificateRequest(pcr *capiv1beta1.PodCertificateRequest, podCertificate *podcertificate.PodCertificate) {
 
-	//TODO: For validation of config!
+	// TODO: For validation of config!
 	beginRefreshAt := podCertificate.NotAfter().Add(-podCertificate.Config().RefreshBefore)
 
 	r.Log.V(1).Info("Setting the certificate in the PodCertificateRequest",
@@ -270,7 +289,13 @@ func (r *PodCertificateRequestReconciler) setCertificateOnPodCertificateRequest(
 
 // ------------------------------------------------ GENERIC FUNCTIONS  ------------------------------------------------
 
-func (r *PodCertificateRequestReconciler) updatePodCertificateRequestStatusWithReason(ctx context.Context, pcr *capiv1alpha1.PodCertificateRequest, reason string, customMessage string, clearFields bool) error {
+func (r *PodCertificateRequestReconciler) updatePodCertificateRequestStatusWithReason(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, reason string) error {
+	patch := client.MergeFrom(pcr.DeepCopy())
+
+	return r.patchPodCertificateRequestStatusWithReason(ctx, pcr, patch, reason, true)
+}
+
+func (r *PodCertificateRequestReconciler) patchPodCertificateRequestStatusWithReason(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, patch client.Patch, reason string, clearFields bool) error {
 	config, exists := statusMap[reason]
 	if !exists {
 		return fmt.Errorf("unknown reason: %s", reason)
@@ -280,32 +305,26 @@ func (r *PodCertificateRequestReconciler) updatePodCertificateRequestStatusWithR
 		r.clearPodCertificateRequestStatusFields(pcr)
 	}
 
-	// Use custom message if provided, otherwise use default
-	conditionMessage := customMessage
-	eventMessage := customMessage
-	if customMessage == "" {
-		conditionMessage = config.ConditionMessage
-		eventMessage = config.EventMessage
-	}
-
 	r.setPodCertificateRequestStatusCondition(
 		pcr,
 		config.ConditionType,
 		config.ConditionReason,
-		conditionMessage,
+		config.ConditionMessage,
 	)
 
-	r.EventRecorder.Event(
+	r.EventRecorder.Eventf(
 		pcr,
+		nil,
 		config.EventType,
 		config.EventReason,
-		eventMessage,
+		"SignPodCertificateRequest",
+		config.EventMessage,
 	)
 
-	return r.updatePodCertificateRequestStatus(ctx, pcr)
+	return r.patchPodCertificateRequestStatus(ctx, pcr, patch)
 }
 
-func (r *PodCertificateRequestReconciler) setPodCertificateRequestStatusCondition(pcr *capiv1alpha1.PodCertificateRequest, conditionType, reason, message string) {
+func (r *PodCertificateRequestReconciler) setPodCertificateRequestStatusCondition(pcr *capiv1beta1.PodCertificateRequest, conditionType, reason, message string) {
 	pcr.Status.Conditions = []metav1.Condition{
 		{
 			Type:               conditionType,
@@ -317,13 +336,13 @@ func (r *PodCertificateRequestReconciler) setPodCertificateRequestStatusConditio
 	}
 }
 
-func (r *PodCertificateRequestReconciler) clearPodCertificateRequestStatusFields(pcr *capiv1alpha1.PodCertificateRequest) {
+func (r *PodCertificateRequestReconciler) clearPodCertificateRequestStatusFields(pcr *capiv1beta1.PodCertificateRequest) {
 	pcr.Status.CertificateChain = ""
 	pcr.Status.NotBefore = nil
 	pcr.Status.NotAfter = nil
 	pcr.Status.BeginRefreshAt = nil
 }
 
-func (r *PodCertificateRequestReconciler) updatePodCertificateRequestStatus(ctx context.Context, pcr *capiv1alpha1.PodCertificateRequest) error {
-	return r.Status().Update(ctx, pcr)
+func (r *PodCertificateRequestReconciler) patchPodCertificateRequestStatus(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, patch client.Patch) error {
+	return r.Status().Patch(ctx, pcr, patch)
 }

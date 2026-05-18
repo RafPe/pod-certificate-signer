@@ -1,0 +1,33 @@
+name: Test Chart
+
+on:
+  push:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  test-e2e:
+    permissions:
+      contents: read
+    name: Run on Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build and load image into Kind
+        run: make kind-load-image
+
+      - name: Deploy manager via Helm
+        run: make helm-deploy
+
+      - name: Check Helm release status
+        run: make helm-status
