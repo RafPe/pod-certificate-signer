@@ -61,10 +61,6 @@ func NewPodCertificate(certificate []byte, certificateChain string, config *PodC
 }
 
 // -- getters :)
-func (pc *PodCertificate) Certificate() []byte {
-	return pc.certificate
-}
-
 func (pc *PodCertificate) CertificateChain() string {
 	return pc.certificateChain
 }
@@ -79,24 +75,6 @@ func (pc *PodCertificate) NotBefore() time.Time {
 
 func (pc *PodCertificate) NotAfter() time.Time {
 	return pc.notAfter
-}
-
-// -- validators :)
-func (pc *PodCertificate) IsValid() bool {
-	now := time.Now()
-	return now.After(pc.notBefore) && now.Before(pc.notAfter)
-}
-
-func (pc *PodCertificate) ExpiresIn() time.Duration {
-	return time.Until(pc.notAfter)
-}
-
-func (pc *PodCertificate) CertificateChainToPEM() []byte {
-	return []byte(pc.certificateChain)
-}
-
-func (pc *PodCertificate) CertificateToPEM() []byte {
-	return pc.certificate
 }
 
 func annotationKey(signerName, suffix string) string {
@@ -192,10 +170,3 @@ func getConfigFromAnnotationsRefreshBefore(ctx context.Context, pod *corev1.Pod,
 	}
 	return def
 }
-
-// TODO: Implement these :)
-// Helper Methods:
-// PodCertificate.IsValid() bool
-// PodCertificate.ExpiresIn() time.Duration
-// PodCertificateConfig.Validate() error
-// PodCertificate.ToPEM() []byte
