@@ -71,7 +71,7 @@ func (s *Signer) ValidatePodCertificateConfig(config *podcertificate.PodCertific
 func (s *Signer) ParsePkixPublicKey(pkixPublicKey []byte) (crypto.PublicKey, x509.PublicKeyAlgorithm, error) {
 	publicKey, err := x509.ParsePKIXPublicKey(pkixPublicKey)
 	if err != nil {
-		return nil, 0, fmt.Errorf("unable to parse public key: %v", err)
+		return nil, 0, fmt.Errorf("unable to parse public key: %w", err)
 	}
 
 	// Determine the algorithm based on the key type

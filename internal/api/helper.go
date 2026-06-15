@@ -72,7 +72,7 @@ func GetPod(ctx context.Context, client client.Client, podName, podNamespace str
 	}
 
 	if err := client.Get(ctx, podKey, &pod); err != nil {
-		return nil, fmt.Errorf("Failed to get pod %s/%s: %w", podNamespace, podName, err)
+		return nil, fmt.Errorf("get pod %s/%s: %w", podNamespace, podName, err)
 	}
 
 	return &pod, nil
