@@ -5,8 +5,7 @@ featureGates:
   "ClusterTrustBundle": true
   "ClusterTrustBundleProjection": true
 runtimeConfig:
-  "api/alpha": "true"
-  "certificates.k8s.io/v1beta1/clustertrustbundles": "true"
+  "certificates.k8s.io/v1beta1": "true"
 nodes:
 - role: control-plane
-  image: "kindest/node:v1.34.1"
+  image: "kindest/node:v1.35.1"

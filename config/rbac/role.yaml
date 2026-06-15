@@ -7,24 +7,53 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  - events.k8s.io
+  resources:
   - events
   verbs:
   - create
   - patch
 - apiGroups:
-  - ""
+  - certificates.k8s.io
   resources:
-  - pods
+  - clustertrustbundles
   verbs:
+  - create
   - get
-  - list
   - patch
   - update
-  - watch
 - apiGroups:
   - certificates.k8s.io
   resources:
   - podcertificaterequests
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - podcertificaterequests/status
+  verbs:
+  - patch
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - signers
+  verbs:
+  - attest
+  - sign
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
   verbs:
   - create
   - delete
@@ -33,17 +62,3 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - certificates.k8s.io
-  resources:
-  - podcertificaterequests/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - certificates.k8s.io
-  resources:
-  - podcertificaterequests/status
-  verbs:
-  - get
-  - patch
-  - update

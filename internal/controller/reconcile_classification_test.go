@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
-	capiv1alpha1 "k8s.io/api/certificates/v1alpha1"
+	capiv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,10 +17,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
-func testPCR(name string) *capiv1alpha1.PodCertificateRequest {
-	return &capiv1alpha1.PodCertificateRequest{
+func testPCR(name string) *capiv1beta1.PodCertificateRequest {
+	return &capiv1beta1.PodCertificateRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},
-		Spec:       capiv1alpha1.PodCertificateRequestSpec{PodName: "mypod"},
+		Spec:       capiv1beta1.PodCertificateRequestSpec{PodName: "mypod"},
 	}
 }
 
@@ -88,7 +88,7 @@ func TestRecordFailureTerminalWritesCondition(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(newTestScheme(t)).
 		WithObjects(pcr).
-		WithStatusSubresource(&capiv1alpha1.PodCertificateRequest{}).
+		WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
 		Build()
 	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: record.NewFakeRecorder(10)}
 
@@ -99,7 +99,7 @@ func TestRecordFailureTerminalWritesCondition(t *testing.T) {
 	if res != (ctrl.Result{}) {
 		t.Fatalf("result = %+v, want empty (no requeue)", res)
 	}
-	got := &capiv1alpha1.PodCertificateRequest{}
+	got := &capiv1beta1.PodCertificateRequest{}
 	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(pcr), got); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestRecordFailureTransientRequeues(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(newTestScheme(t)).
 		WithObjects(pcr).
-		WithStatusSubresource(&capiv1alpha1.PodCertificateRequest{}).
+		WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
 		Build()
 	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: record.NewFakeRecorder(10)}
 
@@ -122,7 +122,7 @@ func TestRecordFailureTransientRequeues(t *testing.T) {
 	if _, err := r.recordFailure(context.Background(), pcr, sentinel); !errors.Is(err, sentinel) {
 		t.Fatalf("err = %v, want sentinel returned for requeue", err)
 	}
-	got := &capiv1alpha1.PodCertificateRequest{}
+	got := &capiv1beta1.PodCertificateRequest{}
 	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(pcr), got); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestRecordFailureWriteErrorRequeues(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(newTestScheme(t)).
 		WithObjects(pcr).
-		WithStatusSubresource(&capiv1alpha1.PodCertificateRequest{}).
+		WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
 		WithInterceptorFuncs(interceptor.Funcs{
 			SubResourceUpdate: func(ctx context.Context, c client.Client, subResourceName string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
 				return writeErr

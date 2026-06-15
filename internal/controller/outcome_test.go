@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
-	capiv1alpha1 "k8s.io/api/certificates/v1alpha1"
+	capiv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -20,8 +20,8 @@ import (
 func newTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
-	if err := capiv1alpha1.AddToScheme(scheme); err != nil {
-		t.Fatalf("add capiv1alpha1: %v", err)
+	if err := capiv1beta1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add capiv1beta1: %v", err)
 	}
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add corev1: %v", err)
@@ -57,7 +57,7 @@ func TestOutcomesTable(t *testing.T) {
 		if o.eventType() != exp.eventType {
 			t.Errorf("%s: eventType=%s want %s", reason, o.eventType(), exp.eventType)
 		}
-		clears := o.ConditionType != capiv1alpha1.PodCertificateRequestConditionTypeIssued
+		clears := o.ConditionType != capiv1beta1.PodCertificateRequestConditionTypeIssued
 		if clears != exp.clears {
 			t.Errorf("%s: clears=%v want %v", reason, clears, exp.clears)
 		}
@@ -81,14 +81,14 @@ func TestApplyOutcome(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			pcr := &capiv1alpha1.PodCertificateRequest{
+			pcr := &capiv1beta1.PodCertificateRequest{
 				ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns"},
-				Status:     capiv1alpha1.PodCertificateRequestStatus{CertificateChain: "preexisting"},
+				Status:     capiv1beta1.PodCertificateRequestStatus{CertificateChain: "preexisting"},
 			}
 			cl := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithObjects(pcr).
-				WithStatusSubresource(&capiv1alpha1.PodCertificateRequest{}).
+				WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
 				Build()
 			rec := record.NewFakeRecorder(10)
 			r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: rec}
@@ -97,7 +97,7 @@ func TestApplyOutcome(t *testing.T) {
 				t.Fatalf("applyOutcome: %v", err)
 			}
 
-			got := &capiv1alpha1.PodCertificateRequest{}
+			got := &capiv1beta1.PodCertificateRequest{}
 			if err := cl.Get(context.Background(), client.ObjectKeyFromObject(pcr), got); err != nil {
 				t.Fatalf("get: %v", err)
 			}

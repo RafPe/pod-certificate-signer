@@ -1,0 +1,10 @@
+namespace: pcs-system
+
+resources:
+- ../default
+- ca_tls_secret.yaml
+
+patches:
+- path: manager_ca_secret_patch.yaml
+  target:
+    kind: Deployment

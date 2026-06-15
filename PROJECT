@@ -14,6 +14,6 @@ resources:
   domain: k8s.io
   group: certificates
   kind: PodCertificateRequest
-  path: k8s.io/api/certificates/v1alpha1
-  version: v1alpha1
+  path: k8s.io/api/certificates/v1beta1
+  version: v1beta1
 version: "3"

@@ -1,0 +1,10 @@
+volumes:
+  - name: podcertificate-signer-ca
+    secret:
+      secretName: podcertificate-signer-ca
+      optional: false
+
+volumeMounts:
+  - name: podcertificate-signer-ca
+    mountPath: /app/signer/ca
+    readOnly: true
