@@ -15,25 +15,11 @@ func IsPodCertificateRequestImmutable(pcr *capiv1beta1.PodCertificateRequest) bo
 	return GetPodCertificateRequestConditionType(&pcr.Status) != ""
 }
 
-func IsPodCertificateStatusIssued(pcr *capiv1beta1.PodCertificateRequest) bool {
-	return GetPodCertificateRequestConditionType(&pcr.Status) == capiv1beta1.PodCertificateRequestConditionTypeIssued
-}
-
 func GetPodCertificateRequestConditionType(status *capiv1beta1.PodCertificateRequestStatus) string {
 	// Fail safe if the object would be set to nil
 	if status.Conditions == nil {
 		return ""
 	}
-
-	// // Well-known condition types for PodCertificateRequests
-	// const (
-	// 	// Denied indicates the request was denied by the signer.
-	// 	PodCertificateRequestConditionTypeDenied string = "Denied"
-	// 	// Failed indicates the signer failed to issue the certificate.
-	// 	PodCertificateRequestConditionTypeFailed string = "Failed"
-	// 	// Issued indicates the certificate has been issued.
-	// 	PodCertificateRequestConditionTypeIssued string = "Issued"
-	// )
 
 	for _, c := range status.Conditions {
 		if c.Type == capiv1beta1.PodCertificateRequestConditionTypeIssued {
