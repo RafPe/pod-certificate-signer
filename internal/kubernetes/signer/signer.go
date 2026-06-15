@@ -43,12 +43,7 @@ func New(signerName string, ca *authority.CertificateAuthority) (*Signer, error)
 
 // Our main signing method. At this stage the configuration should have already been verified before ending up here.
 func (s *Signer) SignPodCertificate(pcrConfig *podcertificate.PodCertificateConfig) (*podcertificate.PodCertificate, error) {
-	pCertificate, err := s.certificateAuthority.Sign(pcrConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	return pCertificate, nil
+	return s.certificateAuthority.Sign(pcrConfig)
 }
 
 // Helper check to see if our signer matches the one for the request received.

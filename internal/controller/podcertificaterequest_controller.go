@@ -24,10 +24,6 @@ import (
 	"fmt"
 	"time"
 
-	// "crypto/ed25519"
-	// "crypto/rsa"
-	// "crypto/x509"
-
 	"github.com/go-logr/logr"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/api"

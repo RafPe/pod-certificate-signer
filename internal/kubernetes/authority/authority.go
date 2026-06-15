@@ -178,10 +178,7 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 
-	now := time.Now()
-	if ca.nowFunc != nil {
-		now = ca.nowFunc()
-	}
+	now := ca.nowFunc()
 
 	nbf := now.Add(-ca.backDate)
 	if !nbf.Before(ca.certificate.NotAfter) {
