@@ -81,7 +81,7 @@ func main() {
 	flag.StringVar(&clusterFqdn, "cluster-fqdn", "cluster.local", "The FQDN of the cluster")
 	flag.StringVar(&leaderElectionID, "leader-election-id", "pcs-leader-election",
 		"The name of the configmap used to coordinate leader election between controller-managers.")
-	flag.StringVar(&leaderElectionNamespace, "leader-election-namespace", "default", "Namespace for leader election to be used.")
+	flag.StringVar(&leaderElectionNamespace, "leader-election-namespace", "", "Namespace for leader election. Defaults to the controller's own namespace (in-cluster).")
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
