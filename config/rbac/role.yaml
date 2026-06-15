@@ -42,7 +42,9 @@ rules:
   resources:
   - podcertificaterequests/status
   verbs:
+  - get
   - patch
+  - update
 - apiGroups:
   - certificates.k8s.io
   resources:
