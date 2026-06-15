@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/go-logr/logr"
 	capiv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -27,7 +26,7 @@ func testPCR() *capiv1beta1.PodCertificateRequest {
 // process() must classify a missing pod as terminal AssociatedPodNotFound.
 func TestProcessPodNotFoundIsTerminal(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard()}
+	r := &PodCertificateRequestReconciler{Client: cl}
 
 	cert, err := r.process(context.Background(), testPCR())
 	if cert != nil {
@@ -49,7 +48,7 @@ func TestProcessPodGetErrorIsTransient(t *testing.T) {
 			},
 		}).
 		Build()
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard()}
+	r := &PodCertificateRequestReconciler{Client: cl}
 
 	cert, err := r.process(context.Background(), testPCR())
 	if cert != nil {
@@ -74,7 +73,7 @@ func TestProcessPodBeingDeletedSkips(t *testing.T) {
 		Finalizers:        []string{"keep"}, // fake client requires a finalizer to retain DeletionTimestamp
 	}}
 	cl := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(pod).Build()
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard()}
+	r := &PodCertificateRequestReconciler{Client: cl}
 
 	cert, err := r.process(context.Background(), testPCR())
 	if cert != nil || err != nil {
@@ -90,7 +89,7 @@ func TestRecordFailureTerminalWritesCondition(t *testing.T) {
 		WithObjects(pcr).
 		WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
 		Build()
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
+	r := &PodCertificateRequestReconciler{Client: cl, EventRecorder: events.NewFakeRecorder(10)}
 
 	res, err := r.recordFailure(context.Background(), pcr, terminal(ReasonSigningFailed, errors.New("x")))
 	if err != nil {
@@ -116,7 +115,7 @@ func TestRecordFailureTransientRequeues(t *testing.T) {
 		WithObjects(pcr).
 		WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
 		Build()
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
+	r := &PodCertificateRequestReconciler{Client: cl, EventRecorder: events.NewFakeRecorder(10)}
 
 	sentinel := errors.New("apiserver blip")
 	if _, err := r.recordFailure(context.Background(), pcr, sentinel); !errors.Is(err, sentinel) {
@@ -147,7 +146,7 @@ func TestRecordFailureWriteErrorRequeues(t *testing.T) {
 			},
 		}).
 		Build()
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
+	r := &PodCertificateRequestReconciler{Client: cl, EventRecorder: events.NewFakeRecorder(10)}
 
 	if _, err := r.recordFailure(context.Background(), pcr, terminal(ReasonSigningFailed, errors.New("boom"))); !errors.Is(err, writeErr) {
 		t.Fatalf("err = %v, want the status-write error returned for requeue", err)

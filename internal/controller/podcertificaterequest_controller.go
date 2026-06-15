@@ -71,7 +71,6 @@ func terminal(reason Reason, err error) error {
 // PodCertificateRequestReconciler reconciles a PodCertificateRequest object
 type PodCertificateRequestReconciler struct {
 	client.Client
-	Log           logr.Logger
 	Scheme        *runtime.Scheme
 	Signer        *signer.Signer
 	ClusterFqdn   string
@@ -123,11 +122,9 @@ func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) err
 		WithEventFilter(predicate.Funcs{
 			// Allow create events
 			CreateFunc: func(e event.CreateEvent) bool {
-
-				isPcrImmutable := api.IsPodCertificateRequestImmutable(e.Object.(*capiv1beta1.PodCertificateRequest))
-
-				// V(1) - Debug level (basic debugging)
-				r.Log.Info("Check if PodCertificateRequest is immutable", "immutable", isPcrImmutable, "event", "create", "request-name", e.Object.(*capiv1beta1.PodCertificateRequest).Name)
+				pcr := e.Object.(*capiv1beta1.PodCertificateRequest)
+				isPcrImmutable := api.IsPodCertificateRequestImmutable(pcr)
+				logf.Log.Info("Check if PodCertificateRequest is immutable", "immutable", isPcrImmutable, "event", "create", "request-name", pcr.Name)
 				return !isPcrImmutable // True for processing request ; False for skipping request
 			},
 		}).
@@ -143,23 +140,23 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	r.Log = logf.Log.WithValues("name", req.Name, "namespace", req.Namespace, "podName", pcr.Spec.PodName, "podNamespace", pcr.Namespace)
-	ctx = logr.NewContext(ctx, r.Log)
+	log := logf.Log.WithValues("name", req.Name, "namespace", req.Namespace, "podName", pcr.Spec.PodName, "podNamespace", pcr.Namespace)
+	ctx = logr.NewContext(ctx, log)
 
 	if !pcr.DeletionTimestamp.IsZero() {
-		r.Log.Info("PodCertificateRequest has been deleted.")
+		log.Info("PodCertificateRequest has been deleted.")
 		return ctrl.Result{}, nil
 	}
 	if !r.Signer.IsSignerNameMatching(pcr.Spec.SignerName) {
-		r.Log.Info("PodCertificateRequest signer name does not match controller signer name", "signerName", pcr.Spec.SignerName, "controllerSignerName", r.Signer.GetSignerName())
+		log.Info("PodCertificateRequest signer name does not match controller signer name", "signerName", pcr.Spec.SignerName, "controllerSignerName", r.Signer.GetSignerName())
 		return ctrl.Result{}, nil
 	}
 	if api.IsPodCertificateRequestImmutable(&pcr) {
-		r.Log.Info("PodCertificateRequest is immutable")
+		log.Info("PodCertificateRequest is immutable")
 		return ctrl.Result{}, nil
 	}
 
-	r.Log.Info("Lookup pod associated with PodCertificateRequest")
+	log.Info("Lookup pod associated with PodCertificateRequest")
 	cert, err := r.process(ctx, &pcr)
 	if err != nil {
 		return r.recordFailure(ctx, &pcr, err)
@@ -168,12 +165,12 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, nil // pod is being deleted -> nothing to do
 	}
 
-	r.Log.Info("Successfully signed the certificate")
+	log.Info("Successfully signed the certificate")
 	if err := r.recordIssued(ctx, &pcr, cert); err != nil {
-		r.Log.Error(err, "failed to record issued certificate; requeueing")
+		log.Error(err, "failed to record issued certificate; requeueing")
 		return ctrl.Result{}, err
 	}
-	r.Log.Info("Successfully issued certificate")
+	log.Info("Successfully issued certificate")
 	return ctrl.Result{}, nil
 }
 
@@ -191,7 +188,7 @@ func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capi
 		return nil, err // transient
 	}
 	if !crPod.DeletionTimestamp.IsZero() {
-		r.Log.Info("Pod has been deleted.")
+		logf.FromContext(ctx).Info("Pod has been deleted.")
 		return nil, nil
 	}
 
@@ -230,13 +227,13 @@ func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capi
 func (r *PodCertificateRequestReconciler) recordFailure(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, err error) (ctrl.Result, error) {
 	var te *TerminalError
 	if !errors.As(err, &te) {
-		r.Log.Error(err, "transient error; requeueing")
+		logf.FromContext(ctx).Error(err, "transient error; requeueing")
 		return ctrl.Result{}, err
 	}
 
-	r.Log.Error(te.Err, "terminal failure", "reason", te.Reason)
+	logf.FromContext(ctx).Error(te.Err, "terminal failure", "reason", te.Reason)
 	if werr := r.applyOutcome(ctx, pcr, te.Reason); werr != nil {
-		r.Log.Error(werr, "failed to record terminal outcome; requeueing", "reason", te.Reason)
+		logf.FromContext(ctx).Error(werr, "failed to record terminal outcome; requeueing", "reason", te.Reason)
 		return ctrl.Result{}, werr
 	}
 	return ctrl.Result{}, nil
@@ -252,7 +249,7 @@ func (r *PodCertificateRequestReconciler) setCertificateOnPodCertificateRequest(
 	// TODO: For validation of config!
 	beginRefreshAt := podCertificate.NotAfter().Add(-podCertificate.Config().RefreshBefore)
 
-	r.Log.V(1).Info("Setting the certificate in the PodCertificateRequest",
+	logf.Log.V(1).Info("Setting the certificate in the PodCertificateRequest",
 		"podName", pcr.Spec.PodName,
 		"commonName", podCertificate.Config().CommonName,
 		"dnsNames", podCertificate.Config().DNSNames,

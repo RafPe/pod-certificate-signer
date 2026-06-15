@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-logr/logr"
 	capiv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -91,7 +90,7 @@ func TestApplyOutcome(t *testing.T) {
 				WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
 				Build()
 			rec := events.NewFakeRecorder(10)
-			r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: rec}
+			r := &PodCertificateRequestReconciler{Client: cl, EventRecorder: rec}
 
 			if err := r.applyOutcome(context.Background(), pcr, tc.reason); err != nil {
 				t.Fatalf("applyOutcome: %v", err)
