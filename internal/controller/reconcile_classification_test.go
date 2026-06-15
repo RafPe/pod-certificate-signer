@@ -10,7 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -90,7 +90,7 @@ func TestRecordFailureTerminalWritesCondition(t *testing.T) {
 		WithObjects(pcr).
 		WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
 		Build()
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: record.NewFakeRecorder(10)}
+	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
 
 	res, err := r.recordFailure(context.Background(), pcr, terminal(ReasonSigningFailed, errors.New("x")))
 	if err != nil {
@@ -116,7 +116,7 @@ func TestRecordFailureTransientRequeues(t *testing.T) {
 		WithObjects(pcr).
 		WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
 		Build()
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: record.NewFakeRecorder(10)}
+	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
 
 	sentinel := errors.New("apiserver blip")
 	if _, err := r.recordFailure(context.Background(), pcr, sentinel); !errors.Is(err, sentinel) {
@@ -147,7 +147,7 @@ func TestRecordFailureWriteErrorRequeues(t *testing.T) {
 			},
 		}).
 		Build()
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: record.NewFakeRecorder(10)}
+	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
 
 	if _, err := r.recordFailure(context.Background(), pcr, terminal(ReasonSigningFailed, errors.New("boom"))); !errors.Is(err, writeErr) {
 		t.Fatalf("err = %v, want the status-write error returned for requeue", err)

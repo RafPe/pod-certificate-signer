@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"crypto"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"time"
@@ -38,7 +40,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -74,7 +76,7 @@ type PodCertificateRequestReconciler struct {
 	Scheme        *runtime.Scheme
 	Signer        *signer.Signer
 	ClusterFqdn   string
-	EventRecorder record.EventRecorder
+	EventRecorder events.EventRecorder
 }
 
 // Outcome is the terminal/issued state recorded on a PodCertificateRequest for a
@@ -195,7 +197,13 @@ func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capi
 		return nil, nil
 	}
 
-	publicKey, publicKeyAlgorithm, err := r.Signer.ParsePkixPublicKey(pcr.Spec.PKIXPublicKey)
+	var publicKey crypto.PublicKey
+	var publicKeyAlgorithm x509.PublicKeyAlgorithm
+	if len(pcr.Spec.StubPKCS10Request) > 0 {
+		publicKey, publicKeyAlgorithm, err = r.Signer.ParseCSRPublicKey(pcr.Spec.StubPKCS10Request)
+	} else {
+		publicKey, publicKeyAlgorithm, err = r.Signer.ParsePkixPublicKey(pcr.Spec.PKIXPublicKey) // nolint
+	}
 	if err != nil {
 		return nil, terminal(ReasonUnsupportedKeyType, err)
 	}
@@ -274,7 +282,7 @@ func (r *PodCertificateRequestReconciler) applyOutcome(ctx context.Context, pcr 
 	}
 
 	r.setPodCertificateRequestStatusCondition(pcr, o.ConditionType, string(reason), o.Message)
-	r.EventRecorder.Event(pcr, o.eventType(), string(reason), o.Message)
+	r.EventRecorder.Eventf(pcr, nil, o.eventType(), string(reason), "SignPodCertificateRequest", o.Message)
 
 	return r.Status().Update(ctx, pcr)
 }

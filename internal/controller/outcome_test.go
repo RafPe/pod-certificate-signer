@@ -10,7 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -90,7 +90,7 @@ func TestApplyOutcome(t *testing.T) {
 				WithObjects(pcr).
 				WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
 				Build()
-			rec := record.NewFakeRecorder(10)
+			rec := events.NewFakeRecorder(10)
 			r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: rec}
 
 			if err := r.applyOutcome(context.Background(), pcr, tc.reason); err != nil {
