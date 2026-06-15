@@ -17,9 +17,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
-func testPCR(name string) *capiv1beta1.PodCertificateRequest {
+func testPCR() *capiv1beta1.PodCertificateRequest {
 	return &capiv1beta1.PodCertificateRequest{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns"},
 		Spec:       capiv1beta1.PodCertificateRequestSpec{PodName: "mypod"},
 	}
 }
@@ -29,7 +29,7 @@ func TestProcessPodNotFoundIsTerminal(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard()}
 
-	cert, err := r.process(context.Background(), testPCR("pcr"))
+	cert, err := r.process(context.Background(), testPCR())
 	if cert != nil {
 		t.Fatalf("cert = %v, want nil", cert)
 	}
@@ -51,7 +51,7 @@ func TestProcessPodGetErrorIsTransient(t *testing.T) {
 		Build()
 	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard()}
 
-	cert, err := r.process(context.Background(), testPCR("pcr"))
+	cert, err := r.process(context.Background(), testPCR())
 	if cert != nil {
 		t.Fatalf("cert = %v, want nil", cert)
 	}
@@ -76,7 +76,7 @@ func TestProcessPodBeingDeletedSkips(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(pod).Build()
 	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard()}
 
-	cert, err := r.process(context.Background(), testPCR("pcr"))
+	cert, err := r.process(context.Background(), testPCR())
 	if cert != nil || err != nil {
 		t.Fatalf("got (%v, %v), want (nil, nil)", cert, err)
 	}
@@ -84,7 +84,7 @@ func TestProcessPodBeingDeletedSkips(t *testing.T) {
 
 // recordFailure: a terminal error writes a condition and does not requeue.
 func TestRecordFailureTerminalWritesCondition(t *testing.T) {
-	pcr := testPCR("pcr")
+	pcr := testPCR()
 	cl := fake.NewClientBuilder().
 		WithScheme(newTestScheme(t)).
 		WithObjects(pcr).
@@ -110,7 +110,7 @@ func TestRecordFailureTerminalWritesCondition(t *testing.T) {
 
 // recordFailure: a transient error is returned (requeue) and writes no condition.
 func TestRecordFailureTransientRequeues(t *testing.T) {
-	pcr := testPCR("pcr")
+	pcr := testPCR()
 	cl := fake.NewClientBuilder().
 		WithScheme(newTestScheme(t)).
 		WithObjects(pcr).
@@ -135,7 +135,7 @@ func TestRecordFailureTransientRequeues(t *testing.T) {
 // write itself errors, that write error is returned so the reconcile requeues
 // (the Failed condition is never silently lost).
 func TestRecordFailureWriteErrorRequeues(t *testing.T) {
-	pcr := testPCR("pcr")
+	pcr := testPCR()
 	writeErr := errors.New("status write failed")
 	cl := fake.NewClientBuilder().
 		WithScheme(newTestScheme(t)).

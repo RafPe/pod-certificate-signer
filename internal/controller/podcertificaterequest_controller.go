@@ -120,7 +120,7 @@ var outcomes = map[Reason]Outcome{
 
 func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		WithOptions(controller.Options{MaxConcurrentReconciles: 2}). //TODO Create a configurable setup for this
+		WithOptions(controller.Options{MaxConcurrentReconciles: 2}). // TODO Create a configurable setup for this
 		For(&capiv1beta1.PodCertificateRequest{}).
 		WithEventFilter(predicate.Funcs{
 			// Allow create events
@@ -140,7 +140,7 @@ func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) err
 // move the current state of the cluster closer to the desired state.
 func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var pcr capiv1beta1.PodCertificateRequest
-	if err := r.Client.Get(ctx, req.NamespacedName, &pcr); err != nil {
+	if err := r.Get(ctx, req.NamespacedName, &pcr); err != nil {
 		// Gone -> drop; any real error -> requeue.
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -251,7 +251,7 @@ func (r *PodCertificateRequestReconciler) recordIssued(ctx context.Context, pcr 
 
 func (r *PodCertificateRequestReconciler) setCertificateOnPodCertificateRequest(pcr *capiv1beta1.PodCertificateRequest, podCertificate *podcertificate.PodCertificate) {
 
-	//TODO: For validation of config!
+	// TODO: For validation of config!
 	beginRefreshAt := podCertificate.NotAfter().Add(-podCertificate.Config().RefreshBefore)
 
 	r.Log.V(1).Info("Setting the certificate in the PodCertificateRequest",
