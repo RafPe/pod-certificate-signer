@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	pcsmetrics "github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
 	capiv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -119,6 +121,9 @@ func TestApplyOutcome(t *testing.T) {
 				}
 			default:
 				t.Error("no event recorded")
+			}
+			if got := testutil.ToFloat64(pcsmetrics.OutcomesTotal.WithLabelValues(string(tc.reason))); got < 1 {
+				t.Errorf("OutcomesTotal[%s] = %v, want >= 1", tc.reason, got)
 			}
 		})
 	}

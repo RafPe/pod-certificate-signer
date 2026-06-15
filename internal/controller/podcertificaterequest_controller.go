@@ -29,6 +29,7 @@ import (
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/api"
 	podcertificate "github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
+	pcsmetrics "github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
 
 	capiv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -267,6 +268,8 @@ func (r *PodCertificateRequestReconciler) applyOutcome(ctx context.Context, pcr 
 	if !ok {
 		return fmt.Errorf("no outcome registered for reason %q", reason)
 	}
+
+	pcsmetrics.OutcomesTotal.WithLabelValues(string(reason)).Inc()
 
 	if o.ConditionType != capiv1beta1.PodCertificateRequestConditionTypeIssued {
 		r.clearPodCertificateRequestStatusFields(pcr)
