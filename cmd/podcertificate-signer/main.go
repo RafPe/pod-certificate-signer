@@ -49,6 +49,7 @@ import (
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/controller"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
+	pcsmetrics "github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -193,6 +194,38 @@ func main() {
 	}
 	if err := mgr.Add(manager.RunnableFunc(caTrustBundleUpdater)); err != nil {
 		setupLog.Error(err, "unable to add ClusterTrustBundle updater runnable")
+		os.Exit(1)
+	}
+
+	// caExpiryMonitor periodically updates the CA-expiry gauge and warns when
+	// the active CA is close to expiring.
+	caExpiryMonitor := func(ctx context.Context) error {
+		const (
+			interval         = time.Hour
+			warningThreshold = 7 * 24 * time.Hour
+		)
+		logger := log.FromContext(ctx).WithName("ca-expiry-monitor")
+		check := func() {
+			remaining := time.Until(pcrSigner.CANotAfter())
+			pcsmetrics.CAExpirySeconds.Set(remaining.Seconds())
+			if remaining < warningThreshold {
+				logger.Info("CA certificate is approaching expiry", "expiresIn", remaining.String())
+			}
+		}
+		check() // emit immediately on startup
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-ticker.C:
+				check()
+			}
+		}
+	}
+	if err := mgr.Add(manager.RunnableFunc(caExpiryMonitor)); err != nil {
+		setupLog.Error(err, "unable to add CA expiry monitor runnable")
 		os.Exit(1)
 	}
 

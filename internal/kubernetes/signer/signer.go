@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,6 +40,11 @@ func New(signerName string, ca *authority.CertificateAuthority) (*Signer, error)
 	}
 
 	return ret, nil
+}
+
+// CANotAfter returns the expiry time of the active signing CA certificate.
+func (s *Signer) CANotAfter() time.Time {
+	return s.certificateAuthority.NotAfter()
 }
 
 // Our main signing method. At this stage the configuration should have already been verified before ending up here.

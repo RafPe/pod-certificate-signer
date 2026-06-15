@@ -246,6 +246,13 @@ func (ca *CertificateAuthority) certificateToPEM() []byte {
 	})
 }
 
+// NotAfter returns the expiry time of the active CA certificate.
+func (ca *CertificateAuthority) NotAfter() time.Time {
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
+	return ca.certificate.NotAfter
+}
+
 // CertificateToPEM returns the CA certificate in PEM format.
 func (ca *CertificateAuthority) CertificateToPEM() []byte {
 	ca.mu.Lock()
