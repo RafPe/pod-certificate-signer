@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 
 	capiv1alpha1 "k8s.io/api/certificates/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -135,10 +137,10 @@ func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) err
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-
 	var pcr capiv1alpha1.PodCertificateRequest
-	if err := r.Client.Get(ctx, req.NamespacedName, &pcr); client.IgnoreNotFound(err) != nil {
-		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
+	if err := r.Client.Get(ctx, req.NamespacedName, &pcr); err != nil {
+		// Gone -> drop; any real error -> requeue.
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	r.Log = logf.Log.WithValues("name", req.Name, "namespace", req.Namespace, "podName", pcr.Spec.PodName, "podNamespace", pcr.Namespace)
@@ -148,81 +150,94 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		r.Log.Info("PodCertificateRequest has been deleted.")
 		return ctrl.Result{}, nil
 	}
-
 	if !r.Signer.IsSignerNameMatching(pcr.Spec.SignerName) {
 		r.Log.Info("PodCertificateRequest signer name does not match controller signer name", "signerName", pcr.Spec.SignerName, "controllerSignerName", r.Signer.GetSignerName())
 		return ctrl.Result{}, nil
 	}
-
 	if api.IsPodCertificateRequestImmutable(&pcr) {
 		r.Log.Info("PodCertificateRequest is immutable")
 		return ctrl.Result{}, nil
 	}
 
 	r.Log.Info("Lookup pod associated with PodCertificateRequest")
-	crPod, err := api.GetPod(ctx, r.Client, pcr.Spec.PodName, pcr.Namespace)
+	cert, err := r.process(ctx, &pcr)
 	if err != nil {
-		r.Log.Error(err, "Failed to retrieve pod associated with PodCertificateRequest")
-		r.applyOutcome(ctx, &pcr, ReasonAssociatedPodNotFound)
-
-		return ctrl.Result{}, nil
+		return r.recordFailure(ctx, &pcr, err)
+	}
+	if cert == nil {
+		return ctrl.Result{}, nil // pod is being deleted -> nothing to do
 	}
 
+	r.Log.Info("Successfully signed the certificate")
+	if err := r.recordIssued(ctx, &pcr, cert); err != nil {
+		r.Log.Error(err, "failed to record issued certificate; requeueing")
+		return ctrl.Result{}, err
+	}
+	r.Log.Info("Successfully issued certificate")
+	return ctrl.Result{}, nil
+}
+
+// process runs the signing pipeline for a PodCertificateRequest. It returns:
+//   - (cert, nil)  on success
+//   - (nil, nil)   when there is nothing to do (the associated pod is being deleted)
+//   - (nil, *TerminalError) for permanent failures (recorded on the PCR, no retry)
+//   - (nil, err)   for transient failures (requeued with backoff)
+func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capiv1alpha1.PodCertificateRequest) (*podcertificate.PodCertificate, error) {
+	crPod, err := api.GetPod(ctx, r.Client, pcr.Spec.PodName, pcr.Namespace)
+	switch {
+	case apierrors.IsNotFound(err):
+		return nil, terminal(ReasonAssociatedPodNotFound, err)
+	case err != nil:
+		return nil, err // transient
+	}
 	if !crPod.DeletionTimestamp.IsZero() {
 		r.Log.Info("Pod has been deleted.")
-		return ctrl.Result{}, nil
+		return nil, nil
 	}
 
 	publicKey, publicKeyAlgorithm, err := r.Signer.ParsePkixPublicKey(pcr.Spec.PKIXPublicKey)
 	if err != nil {
-		r.Log.Error(err, "Public key is not supported/invalid")
-		r.applyOutcome(ctx, &pcr, ReasonUnsupportedKeyType)
-		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
+		return nil, terminal(ReasonUnsupportedKeyType, err)
 	}
 
-	pcConfig, err := podcertificate.NewPodCertificateConfig(
-		crPod,
-		r.Signer.GetSignerName(),
-		publicKey,
-		publicKeyAlgorithm)
+	pcConfig, err := podcertificate.NewPodCertificateConfig(crPod, r.Signer.GetSignerName(), publicKey, publicKeyAlgorithm)
 	if err != nil {
-		r.Log.Error(err, "Failed to create PodCertificateConfig")
-		r.applyOutcome(ctx, &pcr, ReasonCertificateConfigurationInvalid)
-		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
+		return nil, terminal(ReasonCertificateConfigurationInvalid, err)
 	}
 	pcConfig.LogConfiguration(ctx)
 
 	if err := r.Signer.ValidatePodCertificateConfig(pcConfig); err != nil {
-		r.Log.Error(err, "Failed to validate the PodCertificateConfig")
-		r.applyOutcome(ctx, &pcr, ReasonCertificateConfigurationInvalid)
-		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
+		return nil, terminal(ReasonCertificateConfigurationInvalid, err)
 	}
 
-	podCertificate, err := r.Signer.SignPodCertificate(pcConfig)
+	cert, err := r.Signer.SignPodCertificate(pcConfig)
 	if err != nil {
-		r.Log.Error(err, "Failed to sign the certificate")
-		r.applyOutcome(ctx, &pcr, ReasonSigningFailed)
-
-		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
+		return nil, terminal(ReasonSigningFailed, err)
 	}
-	r.Log.Info("Successfully signed the certificate")
-
-	if err := r.issueCertificate(ctx, &pcr, podCertificate); err != nil {
-		r.Log.Error(err, "failed to update the PodCertificateRequest status")
-		r.applyOutcome(ctx, &pcr, ReasonCertificateConfigurationInvalid)
-
-		return ctrl.Result{}, nil // DON'T REQUEUE - Terminal failure (log but don't retry)
-	}
-
-	r.Log.Info("Successfully issued certificate")
-	return ctrl.Result{}, nil // DON'T REQUEUE - Terminal success
-
+	return cert, nil
 }
 
-func (r *PodCertificateRequestReconciler) issueCertificate(ctx context.Context, pcr *capiv1alpha1.PodCertificateRequest, podCertificate *podcertificate.PodCertificate) error {
+// recordFailure routes a process() error: terminal errors are recorded on the
+// PCR and stop the reconcile; transient errors are returned so controller-runtime
+// requeues with backoff. If recording a terminal outcome fails, that write error
+// is returned so the reconcile requeues (the Failed condition is never silently lost).
+func (r *PodCertificateRequestReconciler) recordFailure(ctx context.Context, pcr *capiv1alpha1.PodCertificateRequest, err error) (ctrl.Result, error) {
+	var te *TerminalError
+	if !errors.As(err, &te) {
+		r.Log.Error(err, "transient error; requeueing")
+		return ctrl.Result{}, err
+	}
 
-	r.setCertificateOnPodCertificateRequest(pcr, podCertificate)
+	r.Log.Error(te.Err, "terminal failure", "reason", te.Reason)
+	if werr := r.applyOutcome(ctx, pcr, te.Reason); werr != nil {
+		r.Log.Error(werr, "failed to record terminal outcome; requeueing", "reason", te.Reason)
+		return ctrl.Result{}, werr
+	}
+	return ctrl.Result{}, nil
+}
 
+func (r *PodCertificateRequestReconciler) recordIssued(ctx context.Context, pcr *capiv1alpha1.PodCertificateRequest, cert *podcertificate.PodCertificate) error {
+	r.setCertificateOnPodCertificateRequest(pcr, cert)
 	return r.applyOutcome(ctx, pcr, ReasonCertificateIssued)
 }
 
