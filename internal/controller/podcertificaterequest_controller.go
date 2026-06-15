@@ -206,7 +206,7 @@ func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capi
 		return nil, terminal(ReasonUnsupportedKeyType, err)
 	}
 
-	pcConfig, err := podcertificate.NewPodCertificateConfig(crPod, r.Signer.GetSignerName(), publicKey, publicKeyAlgorithm)
+	pcConfig, err := podcertificate.NewPodCertificateConfig(ctx, crPod, r.Signer.GetSignerName(), r.ClusterFqdn, publicKey, publicKeyAlgorithm)
 	if err != nil {
 		return nil, terminal(ReasonCertificateConfigurationInvalid, err)
 	}

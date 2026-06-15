@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto"
 	"crypto/x509"
-	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -100,22 +99,24 @@ func (pc *PodCertificate) CertificateToPEM() []byte {
 	return pc.certificate
 }
 
+func annotationKey(signerName, suffix string) string {
+	return signerName + "-" + suffix
+}
+
 // -- Config
 
-func NewPodCertificateConfig(pod *corev1.Pod, signerName string, publicKey crypto.PublicKey, publicKeyAlgorithm x509.PublicKeyAlgorithm) (*PodCertificateConfig, error) {
-
+func NewPodCertificateConfig(ctx context.Context, pod *corev1.Pod, signerName, clusterFqdn string, publicKey crypto.PublicKey, publicKeyAlgorithm x509.PublicKeyAlgorithm) (*PodCertificateConfig, error) {
 	config := &PodCertificateConfig{
 		CommonName:         getConfigFromAnnotationsCN(pod, signerName),
-		DNSNames:           getConfigFromAnnotationsSAN(pod, signerName),
-		URIs:               getConfigFromAnnotationsURIs(pod, signerName),
-		Duration:           getConfigFromAnnotationsDuration(pod, signerName),
-		RefreshBefore:      getConfigFromAnnotationsRefreshBefore(pod, signerName),
+		DNSNames:           getConfigFromAnnotationsSAN(pod, signerName, clusterFqdn),
+		URIs:               getConfigFromAnnotationsURIs(ctx, pod, signerName),
+		Duration:           getConfigFromAnnotationsDuration(ctx, pod, signerName),
+		RefreshBefore:      getConfigFromAnnotationsRefreshBefore(ctx, pod, signerName),
 		KeyUsage:           x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:        []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		PublicKey:          publicKey,
 		PublicKeyAlgorithm: publicKeyAlgorithm,
 	}
-
 	return config, nil
 }
 
@@ -132,62 +133,64 @@ func (pcc *PodCertificateConfig) LogConfiguration(ctx context.Context) {
 
 // getConfigFromAnnotationsCN extracts common name from pod annotations or uses default
 func getConfigFromAnnotationsCN(pod *corev1.Pod, signerName string) string {
-	if cn, exists := api.GetPodAnnotation(pod, fmt.Sprintf("%s-%s", signerName, PodCertificateConfigAnnotationSuffixCN)); exists {
+	if cn, exists := api.GetPodAnnotation(pod, annotationKey(signerName, PodCertificateConfigAnnotationSuffixCN)); exists {
 		return cn
 	}
-	return pod.Name // Default
+	return pod.Name
 }
 
 // getConfigFromAnnotationsSAN extracts DNS names from pod annotations or uses default
-func getConfigFromAnnotationsSAN(pod *corev1.Pod, signerName string) []string {
-	if san, exists := api.GetPodAnnotation(pod, fmt.Sprintf("%s-%s", signerName, PodCertificateConfigAnnotationSuffixSAN)); exists {
+func getConfigFromAnnotationsSAN(pod *corev1.Pod, signerName, clusterFqdn string) []string {
+	if san, exists := api.GetPodAnnotation(pod, annotationKey(signerName, PodCertificateConfigAnnotationSuffixSAN)); exists {
 		return strings.Split(san, ",")
 	}
-
-	// Default DNS names
 	return []string{
-		pod.Name + "." + pod.Namespace + ".pod.cluster.local",
-		pod.Name + "." + pod.Namespace + ".svc.cluster.local",
+		pod.Name + "." + pod.Namespace + ".pod." + clusterFqdn,
+		pod.Name + "." + pod.Namespace + ".svc." + clusterFqdn,
 	}
 }
 
-func getConfigFromAnnotationsURIs(pod *corev1.Pod, signerName string) []*url.URL {
-	if uris, exists := api.GetPodAnnotation(pod, fmt.Sprintf("%s-%s", signerName, PodCertificateConfigAnnotationSuffixURIs)); exists {
+func getConfigFromAnnotationsURIs(ctx context.Context, pod *corev1.Pod, signerName string) []*url.URL {
+	if uris, exists := api.GetPodAnnotation(pod, annotationKey(signerName, PodCertificateConfigAnnotationSuffixURIs)); exists {
 		uriStrings := strings.Split(uris, ",")
-		uris := make([]*url.URL, 0, len(uriStrings))
+		parsed := make([]*url.URL, 0, len(uriStrings))
 		for _, uriStr := range uriStrings {
-			if uri, err := url.Parse(strings.TrimSpace(uriStr)); err == nil {
-				uris = append(uris, uri)
+			uri, err := url.Parse(strings.TrimSpace(uriStr))
+			if err != nil {
+				log.FromContext(ctx).Info("ignoring invalid URI annotation value", "value", uriStr, "error", err.Error())
+				continue
 			}
+			parsed = append(parsed, uri)
 		}
-		return uris
+		return parsed
 	}
-
-	// Default URIs - empty for now
 	return []*url.URL{}
 }
 
 // getConfigFromAnnotationsDuration extracts duration from pod annotations or uses default
-func getConfigFromAnnotationsDuration(pod *corev1.Pod, signerName string) time.Duration {
-	if durationStr, exists := api.GetPodAnnotation(pod, fmt.Sprintf("%s-%s", signerName, PodCertificateConfigAnnotationSuffixDuration)); exists {
+func getConfigFromAnnotationsDuration(ctx context.Context, pod *corev1.Pod, signerName string) time.Duration {
+	const def = 24 * time.Hour
+	if durationStr, exists := api.GetPodAnnotation(pod, annotationKey(signerName, PodCertificateConfigAnnotationSuffixDuration)); exists {
 		if duration, err := time.ParseDuration(durationStr); err == nil {
 			return duration
+		} else {
+			log.FromContext(ctx).Info("ignoring invalid duration annotation; using default", "value", durationStr, "default", def.String(), "error", err.Error())
 		}
 	}
-	return 24 * time.Hour // Default
+	return def
 }
 
 // getConfigFromAnnotationsRefreshBefore extracts refresh before from pod annotations or uses default
-func getConfigFromAnnotationsRefreshBefore(pod *corev1.Pod, signerName string) time.Duration {
-	if refreshStr, exists := api.GetPodAnnotation(pod, fmt.Sprintf("%s-%s", signerName, PodCertificateConfigAnnotationSuffixRefreshBefore)); exists {
+func getConfigFromAnnotationsRefreshBefore(ctx context.Context, pod *corev1.Pod, signerName string) time.Duration {
+	const def = 15 * time.Minute
+	if refreshStr, exists := api.GetPodAnnotation(pod, annotationKey(signerName, PodCertificateConfigAnnotationSuffixRefreshBefore)); exists {
 		if refresh, err := time.ParseDuration(refreshStr); err == nil {
 			return refresh
+		} else {
+			log.FromContext(ctx).Info("ignoring invalid refresh annotation; using default", "value", refreshStr, "default", def.String(), "error", err.Error())
 		}
 	}
-	// TODO: Default value here
-	// As a ref certificate minimum duration is 1 hour - so we can safely say 15 min - the field is only a hint so
-	// this is not 100% deterministic value for the kube-api.
-	return 15 * time.Minute // Default
+	return def
 }
 
 // TODO: Implement these :)
