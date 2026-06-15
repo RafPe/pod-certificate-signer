@@ -164,8 +164,15 @@ func main() {
 
 		// Start the CA watcher and listen for any CA reload events
 		go func() {
-			if err := ca.Watch(ctx, events); err != nil {
-				logger.Error(err, "failed to start ca-watcher")
+			for {
+				if err := ca.Watch(ctx, events); err != nil {
+					logger.Error(err, "ca-watcher stopped with error; restarting after backoff")
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(5 * time.Second):
+				}
 			}
 		}()
 
