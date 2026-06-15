@@ -17,5 +17,15 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install the latest version of kind
+        run: |
+          KIND_BIN="${RUNNER_TEMP}/kind"
+          curl -Lo "${KIND_BIN}" https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+          chmod +x "${KIND_BIN}"
+          sudo mv "${KIND_BIN}" /usr/local/bin/kind
+
+      - name: Verify kind installation
+        run: kind version
+
       - name: Running Test e2e
         run: make test-e2e

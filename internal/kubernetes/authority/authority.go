@@ -198,7 +198,7 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 
 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 	if err != nil {
-		return nil, fmt.Errorf("unable to generate a serial number for %s: %v", pcConfig.CommonName, err)
+		return nil, fmt.Errorf("unable to generate a serial number for %s: %w", pcConfig.CommonName, err)
 	}
 
 	template := &x509.Certificate{
