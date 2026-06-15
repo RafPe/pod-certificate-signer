@@ -46,6 +46,25 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
+// Reason identifies a terminal/issued outcome recorded on a PodCertificateRequest.
+type Reason string
+
+// TerminalError marks a failure that can never succeed on retry. The reconciler
+// records the carried Reason on the PodCertificateRequest and stops. Any error
+// that is NOT a *TerminalError is treated as transient and returned to
+// controller-runtime so it requeues with backoff.
+type TerminalError struct {
+	Reason Reason
+	Err    error
+}
+
+func (e *TerminalError) Error() string { return e.Err.Error() }
+func (e *TerminalError) Unwrap() error { return e.Err }
+
+func terminal(reason Reason, err error) error {
+	return &TerminalError{Reason: reason, Err: err}
+}
+
 // PodCertificateRequestReconciler reconciles a PodCertificateRequest object
 type PodCertificateRequestReconciler struct {
 	client.Client
