@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -141,6 +142,20 @@ func (pc *PodCertificate) ExpiresIn() time.Duration {
 	return time.Until(pc.notAfter)
 }
 
+// Options configure how the certificate configuration is built from a
+// PodCertificateRequest.
+type Options struct {
+	// ClusterFQDN is used in the default DNS names. Empty means
+	// [DefaultClusterFQDN].
+	ClusterFQDN string
+	// EnableInterpolation allows ${...} placeholders in the cn, san and
+	// uris configuration values, resolved from the apiserver-verified
+	// fields of the PodCertificateRequest (see [interpolationVars]).
+	// When disabled, values containing ${ are rejected rather than
+	// issued verbatim.
+	EnableInterpolation bool
+}
+
 // NewPodCertificateConfig builds the certificate configuration for the given
 // PodCertificateRequest and its associated pod.
 //
@@ -155,11 +170,12 @@ func (pc *PodCertificate) ExpiresIn() time.Duration {
 func NewPodCertificateConfig(
 	pcr *capiv1beta1.PodCertificateRequest,
 	pod *corev1.Pod,
-	clusterFQDN string,
+	opts Options,
 	publicKey crypto.PublicKey,
 	publicKeyAlgorithm x509.PublicKeyAlgorithm,
 ) (*PodCertificateConfig, error) {
 	signerName := pcr.Spec.SignerName
+	clusterFQDN := opts.ClusterFQDN
 	if clusterFQDN == "" {
 		clusterFQDN = DefaultClusterFQDN
 	}
@@ -176,6 +192,17 @@ func NewPodCertificateConfig(
 			return value, true
 		}
 		return api.GetPodAnnotation(pod, key)
+	}
+
+	// expand resolves ${...} placeholders in a configuration value from the
+	// apiserver-verified fields of the request.
+	vars := interpolationVars(pcr, clusterFQDN)
+	expand := func(suffix, value string) (string, error) {
+		expanded, err := interpolate(value, vars, opts.EnableInterpolation)
+		if err != nil {
+			return "", fmt.Errorf("annotation %q: %w", annotationKey(signerName, suffix), err)
+		}
+		return expanded, nil
 	}
 
 	// The pod author bounds the certificate lifetime via the projected
@@ -207,10 +234,18 @@ func NewPodCertificateConfig(
 	}
 
 	if cn, ok := lookup(AnnotationSuffixCN); ok {
+		cn, err := expand(AnnotationSuffixCN, cn)
+		if err != nil {
+			return nil, err
+		}
 		config.CommonName = cn
 	}
 
 	if san, ok := lookup(AnnotationSuffixSAN); ok {
+		san, err := expand(AnnotationSuffixSAN, san)
+		if err != nil {
+			return nil, err
+		}
 		names := splitAndTrim(san)
 		if len(names) == 0 {
 			return nil, fmt.Errorf("annotation %q contains no DNS names", annotationKey(signerName, AnnotationSuffixSAN))
@@ -219,6 +254,10 @@ func NewPodCertificateConfig(
 	}
 
 	if uris, ok := lookup(AnnotationSuffixURIs); ok {
+		uris, err := expand(AnnotationSuffixURIs, uris)
+		if err != nil {
+			return nil, err
+		}
 		parsed, err := parseURIs(uris)
 		if err != nil {
 			return nil, fmt.Errorf("annotation %q: %w", annotationKey(signerName, AnnotationSuffixURIs), err)
@@ -253,6 +292,10 @@ func (pcc *PodCertificateConfig) Validate() error {
 	if pcc.CommonName == "" {
 		return errors.New("common name is required")
 	}
+	// RFC 5280 ub-common-name; easily exceeded by interpolated pod names.
+	if len(pcc.CommonName) > 64 {
+		return fmt.Errorf("common name %q exceeds the 64 character limit", pcc.CommonName)
+	}
 	if pcc.Duration < MinDuration {
 		return fmt.Errorf("duration (%s) must be at least %s", pcc.Duration, MinDuration)
 	}
@@ -285,6 +328,59 @@ func (pcc *PodCertificateConfig) LogConfiguration(ctx context.Context) {
 // e.g. coolcert.example.com/mysigner-cn.
 func annotationKey(signerName, suffix string) string {
 	return signerName + "-" + suffix
+}
+
+// interpolationPattern matches a ${...} placeholder.
+var interpolationPattern = regexp.MustCompile(`\$\{([^}]*)\}`)
+
+// interpolationVars returns the placeholder variables available to ${...}
+// interpolation. All values come from fields of the PodCertificateRequest
+// spec that kubelet populates and the kube-apiserver verifies (or from the
+// controller's own configuration), never from user-controlled input - so a
+// requester can only interpolate its own verified identity.
+func interpolationVars(pcr *capiv1beta1.PodCertificateRequest, clusterFQDN string) map[string]string {
+	return map[string]string{
+		"pod.name":               pcr.Spec.PodName,
+		"pod.namespace":          pcr.Namespace,
+		"pod.uid":                string(pcr.Spec.PodUID),
+		"pod.serviceAccountName": pcr.Spec.ServiceAccountName,
+		"node.name":              string(pcr.Spec.NodeName),
+		"cluster.fqdn":           clusterFQDN,
+	}
+}
+
+// interpolate expands ${var} placeholders in value using vars. When the
+// feature is disabled, any value containing a placeholder is rejected: the
+// alternative - issuing a certificate with a literal "${pod.name}" subject -
+// would silently hide the misconfiguration.
+func interpolate(value string, vars map[string]string, enabled bool) (string, error) {
+	if !strings.Contains(value, "${") {
+		return value, nil
+	}
+	if !enabled {
+		return "", errors.New("value uses ${...} interpolation, which is disabled on this signer (start the controller with --enable-annotation-interpolation)")
+	}
+
+	var unknown []string
+	result := interpolationPattern.ReplaceAllStringFunc(value, func(match string) string {
+		name := strings.TrimSpace(match[2 : len(match)-1])
+		if replacement, ok := vars[name]; ok {
+			return replacement
+		}
+		unknown = append(unknown, name)
+		return match
+	})
+	if len(unknown) > 0 {
+		return "", fmt.Errorf("unknown interpolation variable(s) %q", unknown)
+	}
+	// Anything left over is an unterminated placeholder such as "${pod.name":
+	// none of the variable values can contain "${" (they are Kubernetes
+	// object names and UIDs).
+	if strings.Contains(result, "${") {
+		return "", fmt.Errorf("unterminated ${...} placeholder in %q", value)
+	}
+
+	return result, nil
 }
 
 // checkUnrecognizedUserAnnotations rejects unverifiedUserAnnotations keys the

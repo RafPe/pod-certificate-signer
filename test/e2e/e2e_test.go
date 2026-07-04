@@ -21,6 +21,7 @@ package e2e
 
 import (
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"os"
@@ -57,6 +58,11 @@ const trustBundleName = "example.org:signer:bundle"
 // (see examples/ca_tls_secret.yaml)
 const caSecretName = "podcertificate-signer-ca"
 
+// workloadPodName / workloadNamespace identify the example workload pod
+// (examples/workload-pod.yaml) used by the certificate issuance spec
+const workloadPodName = "pcs-example-workload"
+const workloadNamespace = "default"
+
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
 
@@ -78,9 +84,11 @@ var _ = Describe("Manager", Ordered, func() {
 		By("deploying the controller-manager via Helm")
 		// A single replica keeps the pod-targeted assertions (logs, pod
 		// phase) deterministic; the chart default is 2 for leader election.
+		// Annotation interpolation is enabled so the issuance spec can
+		// exercise ${...} placeholders.
 		cmd = exec.Command("make", "helm-install",
 			fmt.Sprintf("IMAGE=%s", projectImage),
-			"HELM_EXTRA_ARGS=--set replicaCount=1")
+			"HELM_EXTRA_ARGS=--set replicaCount=1 --set signer.enable_annotation_interpolation=true")
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 	})
@@ -266,6 +274,45 @@ var _ = Describe("Manager", Ordered, func() {
 		// ))
 	})
 
+	Context("Certificate issuance", func() {
+		It("should issue a certificate with interpolated pod identity", func() {
+			By("creating a workload pod requesting an interpolated certificate")
+			applyWorkloadPod()
+			DeferCleanup(func() {
+				cmd := exec.Command("kubectl", "delete", "pod", workloadPodName,
+					"-n", workloadNamespace, "--ignore-not-found=true", "--wait=false")
+				_, _ = utils.Run(cmd)
+			})
+
+			By("waiting for the PodCertificateRequest to be issued")
+			var chain []*x509.Certificate
+			Eventually(func(g Gomega) {
+				chain = getIssuedCertificateChain(g, workloadPodName, workloadNamespace)
+				g.Expect(chain).NotTo(BeEmpty())
+			}, 3*time.Minute).Should(Succeed())
+
+			By("verifying the leaf certificate carries the interpolated values")
+			leaf := chain[0]
+			wantCN := fmt.Sprintf("%s.%s.svc.cluster.local", workloadPodName, workloadNamespace)
+			Expect(leaf.Subject.CommonName).To(Equal(wantCN),
+				"common name must be interpolated from the pod identity")
+			Expect(leaf.DNSNames).To(ConsistOf(
+				fmt.Sprintf("%s.%s.svc", workloadPodName, workloadNamespace),
+				fmt.Sprintf("default.%s.svc", workloadNamespace), // ${pod.serviceAccountName} = default
+			), "SANs must be interpolated from the pod identity")
+
+			By("waiting for the pod to run with the projected certificate")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "pod", workloadPodName,
+					"-n", workloadNamespace, "-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("Running"),
+					"pod must start once kubelet mounts the issued credential bundle")
+			}, 3*time.Minute).Should(Succeed())
+		})
+	})
+
 	Context("ClusterTrustBundle", func() {
 		AfterAll(func() {
 			By("removing the ClusterTrustBundle created by the controller")
@@ -333,6 +380,71 @@ func getMetricsOutput() string {
 	Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
 	Expect(metricsOutput).To(ContainSubstring("< HTTP/1.1 200 OK"))
 	return metricsOutput
+}
+
+// applyWorkloadPod creates the example workload pod, whose podCertificate
+// projected volume requests a certificate customized via ${...}
+// interpolation (see examples/workload-pod.yaml).
+func applyWorkloadPod() {
+	cmd := exec.Command("kubectl", "apply", "-f", "examples/workload-pod.yaml")
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to create the workload pod")
+}
+
+// getIssuedCertificateChain finds the PodCertificateRequest belonging to the
+// given pod and, once it carries an Issued condition, parses its certificate
+// chain.
+func getIssuedCertificateChain(g Gomega, podName, namespace string) []*x509.Certificate {
+	cmd := exec.Command("kubectl", "get", "podcertificaterequests",
+		"-n", namespace, "-o", "json")
+	output, err := utils.Run(cmd)
+	g.Expect(err).NotTo(HaveOccurred(), "Failed to list PodCertificateRequests")
+
+	var list struct {
+		Items []struct {
+			Spec struct {
+				PodName string `json:"podName"`
+			} `json:"spec"`
+			Status struct {
+				CertificateChain string `json:"certificateChain"`
+				Conditions       []struct {
+					Type    string `json:"type"`
+					Reason  string `json:"reason"`
+					Message string `json:"message"`
+				} `json:"conditions"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	g.Expect(json.Unmarshal([]byte(output), &list)).To(Succeed())
+
+	for _, item := range list.Items {
+		if item.Spec.PodName != podName {
+			continue
+		}
+		for _, cond := range item.Status.Conditions {
+			g.Expect(cond.Type).To(Equal("Issued"),
+				"request must not be %s: %s: %s", cond.Type, cond.Reason, cond.Message)
+		}
+		if item.Status.CertificateChain == "" {
+			continue
+		}
+
+		var certs []*x509.Certificate
+		data := []byte(item.Status.CertificateChain)
+		for {
+			var block *pem.Block
+			block, data = pem.Decode(data)
+			if block == nil {
+				break
+			}
+			cert, err := x509.ParseCertificate(block.Bytes)
+			g.Expect(err).NotTo(HaveOccurred(), "chain entry must be a valid certificate")
+			certs = append(certs, cert)
+		}
+		return certs
+	}
+
+	return nil
 }
 
 // getTrustBundleCertificates reads the ClusterTrustBundle of the signer and

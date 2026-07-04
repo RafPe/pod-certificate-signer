@@ -93,6 +93,9 @@ type PodCertificateRequestReconciler struct {
 	Signer        *signer.Signer
 	ClusterFqdn   string
 	EventRecorder events.EventRecorder
+	// EnableAnnotationInterpolation allows ${...} placeholders in the
+	// certificate configuration annotations (feature flag, off by default).
+	EnableAnnotationInterpolation bool
 }
 
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests,verbs=get;list;watch
@@ -201,7 +204,11 @@ func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capi
 		return nil, denied(ReasonUnsupportedKeyType, err)
 	}
 
-	pcConfig, err := podcertificate.NewPodCertificateConfig(pcr, crPod, r.ClusterFqdn, publicKey, publicKeyAlgorithm)
+	configOpts := podcertificate.Options{
+		ClusterFQDN:         r.ClusterFqdn,
+		EnableInterpolation: r.EnableAnnotationInterpolation,
+	}
+	pcConfig, err := podcertificate.NewPodCertificateConfig(pcr, crPod, configOpts, publicKey, publicKeyAlgorithm)
 	if err != nil {
 		return nil, denied(ReasonInvalidUserAnnotations, err)
 	}

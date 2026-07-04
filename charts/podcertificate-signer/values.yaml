@@ -36,6 +36,11 @@ signer:
   # Max number of previous CA certificates to keep during a CA cert reload
   max_previous_ca_certs: 2
 
+  # Feature flag: allow ${...} placeholders (e.g. ${pod.name},
+  # ${pod.serviceAccountName}) in certificate configuration annotations,
+  # resolved from the verified fields of the PodCertificateRequest.
+  enable_annotation_interpolation: false
+
 # Controller manager settings
 manager:
   # Max concurrent reconciles

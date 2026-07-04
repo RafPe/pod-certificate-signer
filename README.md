@@ -14,6 +14,7 @@
     - [3. 🧑‍💻 Deploying from a local checkout](#3--deploying-from-a-local-checkout)
   - [📝 Usage](#-usage)
     - [🏷️ Configuration via `unverifiedUserAnnotations`](#️-configuration-via-unverifieduserannotations)
+    - [🧩 Interpolating pod identity into certificate values](#-interpolating-pod-identity-into-certificate-values)
     - [🏷️ Configuration via Pod Annotations (deprecated)](#️-configuration-via-pod-annotations-deprecated)
       - [🔗 Example configuration](#-example-configuration)
     - [Requesting PodCertificates for your workload](#requesting-podcertificates-for-your-workload)
@@ -163,7 +164,7 @@ For development, `make helm-deploy` builds the image, loads it into a local Kind
 ## 📝 Usage
 
 ### 🏷️ Configuration via `unverifiedUserAnnotations`
-In order to not use controller defaults for certificates being generated - the cluster operator is able to customize them via the `unverifiedUserAnnotations` field of the `podCertificate` projected volume source. This is the standard Kubernetes mechanism for passing additional context to a signer, and the kube-apiserver copies these keys verbatim onto the resulting `PodCertificateRequest`.
+In order to not use controller defaults for certificates being generated - the cluster operator is able to customize them via the `userAnnotations` field of the `podCertificate` projected volume source. This is the standard Kubernetes mechanism for passing additional context to a signer: kubelet copies these keys verbatim into the `spec.unverifiedUserAnnotations` field of the resulting `PodCertificateRequest`, which is what the signer reads.
 
 The scheme for configuration keys is `signer-domain/name-<configuration-item>: <value>` — the same keys as in the table below:
 
@@ -178,7 +179,7 @@ The scheme for configuration keys is `signer-domain/name-<configuration-item>: <
               signerName: coolcert.example.com/foo
               keyType: ED25519
               credentialBundlePath: credentialbundle.pem
-              unverifiedUserAnnotations:
+              userAnnotations:
                 coolcert.example.com/foo-cn: "some-epic-name.com"
                 coolcert.example.com/foo-duration: "2h"
 
@@ -187,6 +188,37 @@ The scheme for configuration keys is `signer-domain/name-<configuration-item>: <
 
 > [!NOTE]
 > Keys the signer does not recognize, as well as malformed values (e.g. an invalid duration), result in the request being **Denied** with reason `InvalidUnverifiedUserAnnotations`, as recommended by the Kubernetes API contract for signers.
+
+### 🧩 Interpolating pod identity into certificate values
+
+> [!IMPORTANT]
+> This is a feature flag, **disabled by default**. Enable it by starting the controller with `--enable-annotation-interpolation` (Helm: `signer.enable_annotation_interpolation: true`). While disabled, configuration values containing `${...}` are denied rather than issued verbatim.
+
+Values authored on a pod template are identical for every replica - so a static `cn` can never contain the pod's own name. With interpolation enabled, the `cn`, `san` and `uris` values may contain `${...}` placeholders which the signer resolves per request:
+
+```yaml
+          - podCertificate:
+              # ...
+              userAnnotations:
+                coolcert.example.com/foo-cn: "${pod.name}.${pod.namespace}.svc.${cluster.fqdn}"
+                coolcert.example.com/foo-san: "${pod.name}.${pod.namespace}.svc,${pod.serviceAccountName}.${pod.namespace}"
+                coolcert.example.com/foo-uris: "spiffe://${cluster.fqdn}/ns/${pod.namespace}/sa/${pod.serviceAccountName}"
+```
+
+A complete runnable example - including the ClusterTrustBundle mount - is available in [examples/workload-pod.yaml](./examples/workload-pod.yaml) (it is also exercised by the e2e suite).
+
+Available variables - all resolved from fields of the `PodCertificateRequest` that kubelet populates and the kube-apiserver verifies (never from user-controlled input), so a workload can only interpolate its own verified identity:
+
+| Variable                    | Value                                        |
+| --------------------------- | -------------------------------------------- |
+| `${pod.name}`               | Name of the pod the certificate is issued to |
+| `${pod.namespace}`          | Namespace of the pod                         |
+| `${pod.uid}`                | UID of the pod                               |
+| `${pod.serviceAccountName}` | Service account the pod runs as              |
+| `${node.name}`              | Node the pod is scheduled on                 |
+| `${cluster.fqdn}`           | Cluster FQDN from the `-cluster-fqdn` flag   |
+
+Unknown variables and unterminated placeholders deny the request with reason `InvalidUnverifiedUserAnnotations`. Values are validated after expansion, including the 64 character common name limit from RFC 5280.
 
 ### 🏷️ Configuration via Pod Annotations (deprecated)
 
@@ -260,7 +292,7 @@ The snippet below shows the crucial part of the configuration required - includi
 With this in place the container sees two files: `/var/run/x509-cert/credentialbundle.pem` (private key + issued certificate chain, kept fresh by kubelet) and `/var/run/x509-cert/ca.crt` (the signer's CA bundle, including previous CAs during rotation - use it to verify peer certificates for mTLS).
 
 #### 🔗 Example workload manifest
-The below provided deployment manifest is using GowebHTTPs server I wrote in Go in order to explore use of certificates in container environment. The certificate is customized via `unverifiedUserAnnotations` on the projected volume, and the signer's ClusterTrustBundle is mounted alongside it.
+The below provided deployment manifest is using GowebHTTPs server I wrote in Go in order to explore use of certificates in container environment. The certificate is customized via `userAnnotations` on the projected volume, and the signer's ClusterTrustBundle is mounted alongside it.
 
 
 ```yaml
@@ -338,7 +370,7 @@ spec:
               keyType: RSA4096
               signerName: coolcert.example.com/foo
               credentialBundlePath: credentialbundle.pem
-              unverifiedUserAnnotations:
+              userAnnotations:
                 coolcert.example.com/foo-cn: "some-epic-name.com"
                 coolcert.example.com/foo-san: "example.com,www.example.com,anotherexample.com.cy"
                 coolcert.example.com/foo-duration: "1h"
@@ -390,6 +422,8 @@ Controller is customizable and supports the following arguments along with their
     	CA private key file.
   -cluster-fqdn string
     	The FQDN of the cluster (default "cluster.local")
+  -enable-annotation-interpolation
+    	Allow ${...} placeholders (e.g. ${pod.name}, ${pod.serviceAccountName}) in certificate configuration annotations, resolved from the verified fields of the PodCertificateRequest.
   -health-probe-bind-address string
     	The address the probe endpoint binds to. (default ":8081")
   -kubeconfig string

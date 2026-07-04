@@ -72,7 +72,7 @@ func main() {
 	var leaderElectionID, leaderElectionNamespace string
 	var healthProbeBindAddress, metricsBindAddress string
 	var maxConcurrentReconciles, maxPreviousCACerts int
-	var enableLeaderElection bool
+	var enableLeaderElection, enableAnnotationInterpolation bool
 	var reconcileTimeout time.Duration
 
 	flag.StringVar(&signerName, "signer-name", "example.org/signer", "Only sign CSR with this .spec.signerName.")
@@ -90,6 +90,9 @@ func main() {
 	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 5, "maximum number of concurrent reconciles which can be run.")
 	flag.IntVar(&maxPreviousCACerts, "max-previous-ca-certs", 2, "maximum number of previous CA certificates to keep during CA rotation.")
 	flag.DurationVar(&reconcileTimeout, "reconcile-timeout", 5*time.Minute, "maximum duration of a reconcile before it times out.")
+	flag.BoolVar(&enableAnnotationInterpolation, "enable-annotation-interpolation", false,
+		"Allow ${...} placeholders (e.g. ${pod.name}, ${pod.serviceAccountName}) in certificate configuration annotations, "+
+			"resolved from the verified fields of the PodCertificateRequest.")
 
 	opts := zap.Options{
 		Development:     true,
@@ -207,12 +210,13 @@ func main() {
 	}
 
 	if err := (&controller.PodCertificateRequestReconciler{
-		Client:        mgr.GetClient(),
-		Log:           ctrl.Log.WithName(DefaultControllerName),
-		Scheme:        mgr.GetScheme(),
-		Signer:        pcrSigner,
-		ClusterFqdn:   clusterFqdn,
-		EventRecorder: mgr.GetEventRecorder(DefaultControllerName),
+		Client:                        mgr.GetClient(),
+		Log:                           ctrl.Log.WithName(DefaultControllerName),
+		Scheme:                        mgr.GetScheme(),
+		Signer:                        pcrSigner,
+		ClusterFqdn:                   clusterFqdn,
+		EventRecorder:                 mgr.GetEventRecorder(DefaultControllerName),
+		EnableAnnotationInterpolation: enableAnnotationInterpolation,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PodCertificateSignerReconciler")
 		os.Exit(1)
