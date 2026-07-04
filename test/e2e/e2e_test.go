@@ -20,7 +20,9 @@ limitations under the License.
 package e2e
 
 import (
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"os/exec"
@@ -30,6 +32,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
 	"github.com/rafpe/kubernetes-podcertificate-signer/test/utils"
 )
 
@@ -44,6 +47,16 @@ const metricsServiceName = "pcs-controller-manager-metrics-service"
 
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "pcs-metrics-binding"
+
+// signerName the controller is deployed with (see config/manager/manager.yaml)
+const signerName = "example.org/signer"
+
+// trustBundleName is the ClusterTrustBundle the controller maintains for the signer
+const trustBundleName = "example.org:signer:bundle"
+
+// caSecretName is the kubernetes.io/tls secret mounted into the controller as its CA
+// (see config/e2e/ca_tls_secret.yaml)
+const caSecretName = "podcertificate-signer-ca"
 
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
@@ -266,6 +279,64 @@ var _ = Describe("Manager", Ordered, func() {
 		//    strings.ToLower(<Kind>),
 		// ))
 	})
+
+	Context("ClusterTrustBundle", func() {
+		AfterAll(func() {
+			By("removing the ClusterTrustBundle created by the controller")
+			cmd := exec.Command("kubectl", "delete", "clustertrustbundle", trustBundleName, "--ignore-not-found=true")
+			_, _ = utils.Run(cmd)
+		})
+
+		It("should publish the ClusterTrustBundle for the signer", func() {
+			By("waiting for the controller to create the ClusterTrustBundle")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "clustertrustbundle", trustBundleName,
+					"-o", "jsonpath={.spec.signerName}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "ClusterTrustBundle should exist")
+				g.Expect(output).To(Equal(signerName), "ClusterTrustBundle signerName mismatch")
+			}).Should(Succeed())
+
+			By("verifying the trust bundle contains valid CA certificates")
+			var certs []*x509.Certificate
+			Eventually(func(g Gomega) {
+				certs = getTrustBundleCertificates(g)
+				g.Expect(certs).NotTo(BeEmpty(), "trust bundle must contain at least one certificate")
+			}).Should(Succeed())
+			for _, cert := range certs {
+				Expect(cert.IsCA).To(BeTrue(), "every trust bundle entry must be a CA certificate")
+				Expect(time.Now().Before(cert.NotAfter)).To(BeTrue(), "trust bundle CA must not be expired")
+			}
+		})
+
+		It("should retain the previous CA in the trust bundle after CA rotation", func() {
+			By("capturing the currently published CA")
+			var previousCA *x509.Certificate
+			Eventually(func(g Gomega) {
+				certs := getTrustBundleCertificates(g)
+				g.Expect(certs).NotTo(BeEmpty())
+				previousCA = certs[0]
+			}).Should(Succeed())
+
+			By("generating a new CA and updating the CA secret")
+			rotatedCA, err := testutil.NewCA("rotated-ca.example.org", 24*time.Hour)
+			Expect(err).NotTo(HaveOccurred(), "Failed to generate the rotated CA")
+			updateCASecret(rotatedCA)
+
+			// Kubelet propagates secret updates to the mounted volume on its
+			// sync period (~1 minute), after which the controller reloads the
+			// CA and updates the ClusterTrustBundle.
+			By("waiting for the trust bundle to publish the new CA and retain the previous one")
+			Eventually(func(g Gomega) {
+				certs := getTrustBundleCertificates(g)
+				g.Expect(certs).NotTo(BeEmpty())
+				g.Expect(certs[0].Equal(rotatedCA.Cert)).To(BeTrue(),
+					"the first trust bundle entry must be the rotated CA")
+				g.Expect(containsCertificate(certs, previousCA)).To(BeTrue(),
+					"the previous CA must be retained in the trust bundle")
+			}, 5*time.Minute).Should(Succeed())
+		})
+	})
 })
 
 // serviceAccountToken returns a token for the specified service account in the given namespace.
@@ -325,4 +396,65 @@ type tokenRequest struct {
 	Status struct {
 		Token string `json:"token"`
 	} `json:"status"`
+}
+
+// getTrustBundleCertificates reads the ClusterTrustBundle of the signer and
+// parses all certificates from its trust bundle PEM.
+func getTrustBundleCertificates(g Gomega) []*x509.Certificate {
+	cmd := exec.Command("kubectl", "get", "clustertrustbundle", trustBundleName,
+		"-o", "jsonpath={.spec.trustBundle}")
+	output, err := utils.Run(cmd)
+	g.Expect(err).NotTo(HaveOccurred(), "Failed to read the ClusterTrustBundle")
+
+	var certs []*x509.Certificate
+	data := []byte(output)
+	for {
+		var block *pem.Block
+		block, data = pem.Decode(data)
+		if block == nil {
+			break
+		}
+		g.Expect(block.Type).To(Equal("CERTIFICATE"), "trust bundle must contain only CERTIFICATE blocks")
+		cert, err := x509.ParseCertificate(block.Bytes)
+		g.Expect(err).NotTo(HaveOccurred(), "trust bundle entry must be a valid certificate")
+		certs = append(certs, cert)
+	}
+	return certs
+}
+
+// containsCertificate reports whether certs contains the given certificate.
+func containsCertificate(certs []*x509.Certificate, want *x509.Certificate) bool {
+	for _, cert := range certs {
+		if cert.Equal(want) {
+			return true
+		}
+	}
+	return false
+}
+
+// updateCASecret replaces the controller CA secret with the given key pair.
+// Kubelet propagates the change to the mounted volume, which the controller
+// picks up via its file watcher.
+func updateCASecret(kp *testutil.KeyPair) {
+	dir, err := os.MkdirTemp("", "pcs-e2e-ca")
+	Expect(err).NotTo(HaveOccurred(), "Failed to create temp dir for the rotated CA")
+	DeferCleanup(func() { _ = os.RemoveAll(dir) })
+
+	certPath, keyPath, err := kp.WriteFiles(dir)
+	Expect(err).NotTo(HaveOccurred(), "Failed to write the rotated CA files")
+
+	cmd := exec.Command("kubectl", "create", "secret", "tls", caSecretName,
+		"-n", namespace,
+		"--cert", certPath,
+		"--key", keyPath,
+		"--dry-run=client", "-o", "yaml")
+	secretYAML, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to render the rotated CA secret")
+
+	secretFile := filepath.Join(dir, "ca-secret.yaml")
+	Expect(os.WriteFile(secretFile, []byte(secretYAML), os.FileMode(0o600))).To(Succeed())
+
+	cmd = exec.Command("kubectl", "apply", "-f", secretFile)
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to apply the rotated CA secret")
 }

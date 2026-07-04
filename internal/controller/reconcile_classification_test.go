@@ -92,7 +92,7 @@ func TestRecordFailureTerminalWritesCondition(t *testing.T) {
 		Build()
 	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
 
-	res, err := r.recordFailure(context.Background(), pcr, terminal(ReasonSigningFailed, errors.New("x")))
+	res, err := r.recordFailure(context.Background(), pcr, failed(ReasonSigningFailed, errors.New("x")))
 	if err != nil {
 		t.Fatalf("recordFailure returned err = %v, want nil", err)
 	}
@@ -149,7 +149,7 @@ func TestRecordFailureWriteErrorRequeues(t *testing.T) {
 		Build()
 	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
 
-	if _, err := r.recordFailure(context.Background(), pcr, terminal(ReasonSigningFailed, errors.New("boom"))); !errors.Is(err, writeErr) {
+	if _, err := r.recordFailure(context.Background(), pcr, failed(ReasonSigningFailed, errors.New("boom"))); !errors.Is(err, writeErr) {
 		t.Fatalf("err = %v, want the status-write error returned for requeue", err)
 	}
 }

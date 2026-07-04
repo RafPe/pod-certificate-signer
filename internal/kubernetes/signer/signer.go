@@ -13,10 +13,12 @@ import (
 	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	authority "github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
-	podcertificate "github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
 )
 
+// Signer signs pod certificate requests for a single signer name using a
+// [authority.CertificateAuthority].
 type Signer struct {
 	certificateAuthority *authority.CertificateAuthority
 	signerName           string
@@ -41,40 +43,25 @@ func New(signerName string, ca *authority.CertificateAuthority) (*Signer, error)
 	return ret, nil
 }
 
-// Our main signing method. At this stage the configuration should have already been verified before ending up here.
+// SignPodCertificate signs a certificate for the given configuration. The
+// configuration should have already been validated before ending up here.
 func (s *Signer) SignPodCertificate(pcrConfig *podcertificate.PodCertificateConfig) (*podcertificate.PodCertificate, error) {
-	pCertificate, err := s.certificateAuthority.Sign(pcrConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	return pCertificate, nil
+	return s.certificateAuthority.Sign(pcrConfig)
 }
 
-// Helper check to see if our signer matches the one for the request received.
+// IsSignerNameMatching reports whether the given signer name matches the one
+// this [Signer] is responsible for.
 func (s *Signer) IsSignerNameMatching(signerName string) bool {
 	return s.signerName == signerName
 }
 
-func (s *Signer) GetSignerName() string {
+// Name returns the signer name.
+func (s *Signer) Name() string {
 	return s.signerName
 }
 
-func (s *Signer) ValidatePodCertificateConfig(config *podcertificate.PodCertificateConfig) error {
-
-	// TODO: Validations should come here - like duration , before refresh etc
-	if config.CommonName == "" {
-		return fmt.Errorf("common name is required")
-	}
-
-	if config.Duration <= 0 {
-		return fmt.Errorf("duration must be positive")
-	}
-
-	return nil
-}
-
-func (s *Signer) ParsePkixPublicKey(pkixPublicKey []byte) (crypto.PublicKey, x509.PublicKeyAlgorithm, error) {
+// ParsePKIXPublicKey parses a DER-encoded PKIX public key and classifies it.
+func ParsePKIXPublicKey(pkixPublicKey []byte) (crypto.PublicKey, x509.PublicKeyAlgorithm, error) {
 	publicKey, err := x509.ParsePKIXPublicKey(pkixPublicKey)
 	if err != nil {
 		return nil, 0, fmt.Errorf("unable to parse public key: %w", err)
@@ -83,10 +70,12 @@ func (s *Signer) ParsePkixPublicKey(pkixPublicKey []byte) (crypto.PublicKey, x50
 	return classifyPublicKey(publicKey)
 }
 
-func (s *Signer) ParseCSRPublicKey(csrDER []byte) (crypto.PublicKey, x509.PublicKeyAlgorithm, error) {
+// ParseCSRPublicKey extracts and classifies the public key of a DER-encoded
+// PKCS#10 certificate request.
+func ParseCSRPublicKey(csrDER []byte) (crypto.PublicKey, x509.PublicKeyAlgorithm, error) {
 	csr, err := x509.ParseCertificateRequest(csrDER)
 	if err != nil {
-		return nil, 0, fmt.Errorf("unable to parse PKCS#10 CSR: %v", err)
+		return nil, 0, fmt.Errorf("unable to parse PKCS#10 CSR: %w", err)
 	}
 
 	return classifyPublicKey(csr.PublicKey)
@@ -105,24 +94,25 @@ func classifyPublicKey(publicKey crypto.PublicKey) (crypto.PublicKey, x509.Publi
 	}
 }
 
+// ClusterTrustBundleName returns the name of the ClusterTrustBundle resource
+// for the given signer name, following the <domain>:<signerName>:<arbitrary-name>
+// convention.
+//
+// https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#cluster-trust-bundles
+func ClusterTrustBundleName(signerName string) string {
+	return strings.ReplaceAll(signerName, "/", ":") + ":bundle"
+}
+
 // ClusterTrustBundle returns a [certificatesv1beta1.ClusterTrustBundle] derived
 // from the [Signer] and the [authority.CertificateAuthority] used by it for
 // signing certificates.
 func (s *Signer) ClusterTrustBundle() *certificatesv1beta1.ClusterTrustBundle {
-	// Name of the resource should follow the
-	// <domain>:<signerName>:<arbitrary-name> convention.
-	//
-	// https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#cluster-trust-bundles
-	normalizedName := strings.ReplaceAll(s.signerName, "/", ":")
-	bundleName := fmt.Sprintf("%s:bundle", normalizedName)
-
-	data := s.certificateAuthority.CertificateToPEM()
 	bundle := &certificatesv1beta1.ClusterTrustBundle{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: bundleName,
+			Name: ClusterTrustBundleName(s.signerName),
 		},
 		Spec: certificatesv1beta1.ClusterTrustBundleSpec{
-			TrustBundle: string(data),
+			TrustBundle: string(s.certificateAuthority.TrustBundlePEM()),
 			SignerName:  s.signerName,
 		},
 	}

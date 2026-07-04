@@ -42,7 +42,9 @@ rules:
   resources:
   - podcertificaterequests/status
   verbs:
+  - get
   - patch
+  - update
 - apiGroups:
   - certificates.k8s.io
   resources:
@@ -50,15 +52,3 @@ rules:
   verbs:
   - attest
   - sign
-- apiGroups:
-  - coordination.k8s.io
-  resources:
-  - leases
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch

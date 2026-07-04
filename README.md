@@ -17,7 +17,8 @@
     - [2. ⚙️ Create ServiceAccount and RBAC](#2-️-create-serviceaccount-and-rbac)
     - [3. 🚀 PodCertificateSigner Deployment](#3--podcertificatesigner-deployment)
   - [📝 Usage](#-usage)
-    - [🏷️ Configuration via Pod Annotations](#️-configuration-via-pod-annotations)
+    - [🏷️ Configuration via `unverifiedUserAnnotations`](#️-configuration-via-unverifieduserannotations)
+    - [🏷️ Configuration via Pod Annotations (deprecated)](#️-configuration-via-pod-annotations-deprecated)
       - [🔗 Example configuration](#-example-configuration)
     - [Requesting PodCertificates for your workload](#requesting-podcertificates-for-your-workload)
       - [🔗 Example workload manifest](#-example-workload-manifest)
@@ -347,10 +348,38 @@ spec:
 
 ## 📝 Usage
 
-### 🏷️ Configuration via Pod Annotations
-In order to not use controller defaults for certificates being generated - the cluster operator is able to set customize that via [`annotations`](https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/).
+### 🏷️ Configuration via `unverifiedUserAnnotations`
+In order to not use controller defaults for certificates being generated - the cluster operator is able to customize them via the `unverifiedUserAnnotations` field of the `podCertificate` projected volume source. This is the standard Kubernetes mechanism for passing additional context to a signer, and the kube-apiserver copies these keys verbatim onto the resulting `PodCertificateRequest`.
 
-The scheme for configuration is `signer-domain/name-<configuration-item>: <value>`
+The scheme for configuration keys is `signer-domain/name-<configuration-item>: <value>` — the same keys as in the table below:
+
+```yaml
+  # ..... content not relevant for the example
+
+      volumes:
+      - name: x509-cert
+        projected:
+          sources:
+          - podCertificate:
+              signerName: coolcert.example.com/foo
+              keyType: ED25519
+              credentialBundlePath: credentialbundle.pem
+              unverifiedUserAnnotations:
+                coolcert.example.com/foo-cn: "some-epic-name.com"
+                coolcert.example.com/foo-duration: "2h"
+
+  # ..... rest of the manifest
+```
+
+> [!NOTE]
+> Keys the signer does not recognize, as well as malformed values (e.g. an invalid duration), result in the request being **Denied** with reason `InvalidUnverifiedUserAnnotations`, as recommended by the Kubernetes API contract for signers.
+
+### 🏷️ Configuration via Pod Annotations (deprecated)
+
+> [!WARNING]
+> Configuration via pod annotations is deprecated and will be removed in a future release - use `unverifiedUserAnnotations` instead. When both are set, `unverifiedUserAnnotations` take precedence.
+
+Certificate configuration can also be provided via pod [`annotations`](https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/).
 
 Below is the table with the annotations and example values:
 
@@ -360,7 +389,7 @@ Below is the table with the annotations and example values:
 | `{signer-name}-san`      | No       | `{pod-name}.{namespace}.pod.cluster.local,{pod-name}.{namespace}.svc.cluster.local` | `mysigner.example.com/foobar-san: my-pod.default.pod.cluster.local,my-pod.default.svc.cluster.local` |
 | `{signer-name}-uris`     | No       | `(empty)`                                                                           | `mysigner.example.com/foobar-uris: spiffe://cluster.local/ns/default/sa/my-service`                  |
 | `{signer-name}-duration` | No       | `24h`                                                                               | `mysigner.example.com/foobar-duration: 12h`                                                          |
-| `{signer-name}-refresh`  | No       | `1h`                                                                                | `mysigner.example.com/foobar-refresh: 30m`                                                           |
+| `{signer-name}-refresh`  | No       | `15m`                                                                               | `mysigner.example.com/foobar-refresh: 30m`                                                           |
 
 
 To customize certificates issued by PodCertificateSigner you can add one of the following annotations to your pod. This operation can be automated and delegated to your pipeline(s) or you can leverage native Kubernetes enhancment i.e `MutatingAdmissionPolicy`
@@ -521,6 +550,11 @@ PodCertificateSigner performs the following `default` validations:
 1. **CA files provided**: Verifies the CA provided/mounted files exists and can be loaded
 2. **CA valid**: Ensures that the CA used to signing of certificates is a valid CA and not expired
 3. **PodCertificateRequest configuration**: Validates the configuration provided via annotation against Kubernetes constraints
+
+The certificate configuration is validated against the constraints kube-apiserver enforces on the `PodCertificateRequest` status, so misconfigurations are denied immediately instead of failing on the API server:
+
+- The certificate duration must be at least `1h` (kube-apiserver minimum) and must not exceed the request's `spec.maxExpirationSeconds` (set by the pod author on the projected volume, defaulted to `24h` by kube-apiserver). The default duration is automatically clamped to `maxExpirationSeconds`.
+- The refresh hint must lie within the window kube-apiserver accepts for `beginRefreshAt`: `refresh` must be at least `10m` and at most the certificate duration minus `10m`.
 
 ## ⌘ Controller commandline options
 Controller is customizable and supports the following arguments along with their default values
