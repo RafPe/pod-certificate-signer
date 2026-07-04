@@ -25,7 +25,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o ma
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
 FROM gcr.io/distroless/static:nonroot
-LABEL org.opencontainers.image.source https://github.com/rafpe/kubernetes-podcertificate-signer
+LABEL org.opencontainers.image.source=https://github.com/rafpe/pod-certificate-signer
 WORKDIR /
 COPY --from=builder /workspace/manager .
 USER 65532:65532
