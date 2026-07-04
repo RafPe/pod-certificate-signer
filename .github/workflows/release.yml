@@ -16,13 +16,30 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+    outputs:
+      tag_name: ${{ steps.drafter.outputs.tag_name }}
     steps:
       # A merge labeled release/skip only updates the running release draft.
       # Any other release/* label publishes the release, which creates the
-      # v* tag and thereby triggers the image build workflow.
+      # v* tag.
       - name: Draft or publish the release
+        id: drafter
         uses: release-drafter/release-drafter@v7
         with:
           publish: ${{ !contains(github.event.pull_request.labels.*.name, 'release/skip') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The tag above is created with the workflow GITHUB_TOKEN, which never
+  # triggers other workflows - so the artifacts workflow is invoked directly
+  # instead of relying on its tag push trigger.
+  publish-artifacts:
+    name: Publish release artifacts
+    needs: release
+    if: github.event.pull_request.merged == true && !contains(github.event.pull_request.labels.*.name, 'release/skip')
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/release-image.yml
+    with:
+      tag: ${{ needs.release.outputs.tag_name }}
