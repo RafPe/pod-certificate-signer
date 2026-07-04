@@ -28,6 +28,7 @@
     - [Common Issues](#common-issues)
     - [📊 Logs](#-logs)
   - [🛡️ Security Considerations](#️-security-considerations)
+  - [📦 Release process](#-release-process)
   - [🤝 Contributing](#-contributing)
     - [Unofficial roadmap/work in progress](#unofficial-roadmapwork-in-progress)
 # pod-certificate-signer (PCS): Custom signer for x509 pod certificates
@@ -627,6 +628,31 @@ kubectl logs -n system deployment/pcs-controller
 - Bonus: Use MutatingAdmissionPolicies to implement secure usage of the annotation
 
 🔐 Remember: No security mechanism is effective without strong authentication and authorization. In Kubernetes, security begins with controlling who can access what — user identities , RBAC policies and MutatingAdmissionPolicies/ValidatingAdmissionPolicy to form the foundation of your cluster's defense.
+
+## 📦 Release process
+
+Releases are fully label-driven. Every PR targeting `main` must carry exactly one of the following labels (enforced by a required PR check):
+
+| Label           | Effect on merge                                                        |
+| --------------- | ---------------------------------------------------------------------- |
+| `release/major` | Publishes a release with a **major** version bump (breaking changes)   |
+| `release/minor` | Publishes a release with a **minor** version bump (features)           |
+| `release/patch` | Publishes a release with a **patch** version bump (fixes)              |
+| `release/skip`  | No release; the change is collected into the next release draft        |
+
+Publishing the release creates the `v*` tag, which triggers the image workflow: a multi-arch (`linux/amd64`, `linux/arm64`) image is built and pushed to `ghcr.io/rafpe/pod-certificate-signer` tagged `vX.Y.Z`, `vX.Y`, `vX` and `latest`.
+
+One-time repository setup:
+
+```sh
+gh label create release/major --color B60205 --description "Breaking change: next release bumps the major version"
+gh label create release/minor --color 0E8A16 --description "Feature: next release bumps the minor version"
+gh label create release/patch --color 1D76DB --description "Fix: next release bumps the patch version"
+gh label create release/skip  --color C5DEF5 --description "No release: collect into the next release draft"
+
+# Seed the version baseline (the first automated release bumps from here)
+git tag v0.1.0 && git push origin v0.1.0
+```
 
 ## 🤝 Contributing
 
