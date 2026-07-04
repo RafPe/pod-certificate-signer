@@ -30,11 +30,15 @@ rules:
   - get
   - list
   - watch
+# The controller updates the status subresource when issuing certificates
+# or recording terminal failures.
 - apiGroups:
   - certificates.k8s.io
   resources:
   - podcertificaterequests/status
   verbs:
+  - get
+  - update
   - patch
 - apiGroups:
   - certificates.k8s.io

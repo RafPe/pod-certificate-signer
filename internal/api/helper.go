@@ -11,30 +11,21 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// IsPodCertificateRequestImmutable reports whether the request already carries
+// a terminal condition (Issued, Denied or Failed) and can no longer be updated.
 func IsPodCertificateRequestImmutable(pcr *capiv1beta1.PodCertificateRequest) bool {
 	return GetPodCertificateRequestConditionType(&pcr.Status) != ""
 }
 
+// IsPodCertificateStatusIssued reports whether the request has been issued.
 func IsPodCertificateStatusIssued(pcr *capiv1beta1.PodCertificateRequest) bool {
 	return GetPodCertificateRequestConditionType(&pcr.Status) == capiv1beta1.PodCertificateRequestConditionTypeIssued
 }
 
+// GetPodCertificateRequestConditionType returns the terminal condition type
+// (Issued, Denied or Failed) recorded on the request status, or an empty
+// string when the request has not reached a terminal state yet.
 func GetPodCertificateRequestConditionType(status *capiv1beta1.PodCertificateRequestStatus) string {
-	// Fail safe if the object would be set to nil
-	if status.Conditions == nil {
-		return ""
-	}
-
-	// // Well-known condition types for PodCertificateRequests
-	// const (
-	// 	// Denied indicates the request was denied by the signer.
-	// 	PodCertificateRequestConditionTypeDenied string = "Denied"
-	// 	// Failed indicates the signer failed to issue the certificate.
-	// 	PodCertificateRequestConditionTypeFailed string = "Failed"
-	// 	// Issued indicates the certificate has been issued.
-	// 	PodCertificateRequestConditionTypeIssued string = "Issued"
-	// )
-
 	for _, c := range status.Conditions {
 		if c.Type == capiv1beta1.PodCertificateRequestConditionTypeIssued {
 			return capiv1beta1.PodCertificateRequestConditionTypeIssued
@@ -50,6 +41,8 @@ func GetPodCertificateRequestConditionType(status *capiv1beta1.PodCertificateReq
 	return ""
 }
 
+// GetPodAnnotation returns the value of the given pod annotation. It reports
+// false when the pod is nil, or the annotation is absent or empty.
 func GetPodAnnotation(pod *corev1.Pod, annotationKey string) (string, bool) {
 	if pod == nil || pod.Annotations == nil {
 		return "", false
@@ -63,8 +56,8 @@ func GetPodAnnotation(pod *corev1.Pod, annotationKey string) (string, bool) {
 	return value, true
 }
 
+// GetPod fetches the pod with the given name and namespace.
 func GetPod(ctx context.Context, c client.Client, podName, podNamespace string) (*corev1.Pod, error) {
-
 	var pod corev1.Pod
 	podKey := types.NamespacedName{
 		Name:      podName,

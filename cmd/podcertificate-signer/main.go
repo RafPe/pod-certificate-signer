@@ -23,7 +23,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -32,6 +31,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -72,7 +72,7 @@ func main() {
 	var leaderElectionID, leaderElectionNamespace string
 	var healthProbeBindAddress, metricsBindAddress string
 	var maxConcurrentReconciles, maxPreviousCACerts int
-	var enableLeaderElection bool
+	var enableLeaderElection, enableAnnotationInterpolation bool
 	var reconcileTimeout time.Duration
 
 	flag.StringVar(&signerName, "signer-name", "example.org/signer", "Only sign CSR with this .spec.signerName.")
@@ -90,6 +90,9 @@ func main() {
 	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 5, "maximum number of concurrent reconciles which can be run.")
 	flag.IntVar(&maxPreviousCACerts, "max-previous-ca-certs", 2, "maximum number of previous CA certificates to keep during CA rotation.")
 	flag.DurationVar(&reconcileTimeout, "reconcile-timeout", 5*time.Minute, "maximum duration of a reconcile before it times out.")
+	flag.BoolVar(&enableAnnotationInterpolation, "enable-annotation-interpolation", false,
+		"Allow ${...} placeholders (e.g. ${pod.name}, ${pod.serviceAccountName}) in certificate configuration annotations, "+
+			"resolved from the verified fields of the PodCertificateRequest.")
 
 	opts := zap.Options{
 		Development:     true,
@@ -161,11 +164,12 @@ func main() {
 		logger.Info("starting ClusterTrustBundle updater")
 		events := make(chan struct{}, 2)
 
-		// Start the CA watcher and listen for any CA reload events
+		// Start the CA watcher and listen for any CA reload events. A failed
+		// watcher is fatal: without it CA rotations would silently never be
+		// propagated to the ClusterTrustBundle.
+		watchErr := make(chan error, 1)
 		go func() {
-			if err := ca.Watch(ctx, events); err != nil {
-				logger.Error(err, "failed to start ca-watcher")
-			}
+			watchErr <- ca.Watch(ctx, events)
 		}()
 
 		// We want the trust bundle updated on startup, so emit an event
@@ -175,11 +179,20 @@ func main() {
 			select {
 			case <-ctx.Done():
 				return nil
+			case err := <-watchErr:
+				if err != nil {
+					return fmt.Errorf("ca-watcher failed: %w", err)
+				}
+				return nil
 			case <-events:
 				err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 					logger.Info("updating ClusterTrustBundle with new CA certificate")
 					bundle := pcrSigner.ClusterTrustBundle()
-					_, err := controllerutil.CreateOrPatch(ctx, mgr.GetClient(), bundle, func() error {
+					// Use the direct API client: reading through the
+					// manager's cache-backed client would start an informer
+					// for ClusterTrustBundles, which requires list/watch
+					// RBAC permissions this controller does not need.
+					_, err := controllerutil.CreateOrPatch(ctx, c, bundle, func() error {
 						bundle.Spec.TrustBundle = string(ca.TrustBundlePEM())
 						return nil
 					})
@@ -197,12 +210,13 @@ func main() {
 	}
 
 	if err := (&controller.PodCertificateRequestReconciler{
-		Client:        mgr.GetClient(),
-		Log:           ctrl.Log.WithName(DefaultControllerName),
-		Scheme:        mgr.GetScheme(),
-		Signer:        pcrSigner,
-		ClusterFqdn:   clusterFqdn,
-		EventRecorder: mgr.GetEventRecorder(DefaultControllerName),
+		Client:                        mgr.GetClient(),
+		Log:                           ctrl.Log.WithName(DefaultControllerName),
+		Scheme:                        mgr.GetScheme(),
+		Signer:                        pcrSigner,
+		ClusterFqdn:                   clusterFqdn,
+		EventRecorder:                 mgr.GetEventRecorder(DefaultControllerName),
+		EnableAnnotationInterpolation: enableAnnotationInterpolation,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PodCertificateSignerReconciler")
 		os.Exit(1)
@@ -226,7 +240,7 @@ func main() {
 	}
 }
 
-// displayCommandLineFlags visits all CLI flags and prints them.
+// displayCommandlineFlags visits all CLI flags and prints them.
 func displayCommandlineFlags() {
 	flag.CommandLine.VisitAll(func(f *flag.Flag) {
 		setupLog.Info("Flag",
@@ -240,17 +254,15 @@ func displayCommandlineFlags() {
 // given signer and parse its PEM certificates. Returns nil if the bundle does
 // not exist or cannot be read.
 func fetchPreviousCAs(ctx context.Context, c client.Client, signerName string) []*x509.Certificate {
-	// Name of the resource should follow the
-	// <domain>:<signerName>:<arbitrary-name> convention.
-	//
-	// https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#cluster-trust-bundles
-	normalizedName := strings.ReplaceAll(signerName, "/", ":")
-	bundleName := fmt.Sprintf("%s:bundle", normalizedName)
+	bundleName := signer.ClusterTrustBundleName(signerName)
 
 	bundle := &certificatesv1beta1.ClusterTrustBundle{}
-	err := c.Get(ctx, client.ObjectKey{Name: bundleName}, bundle)
-	if err != nil {
-		setupLog.Info("no existing ClusterTrustBundle found, starting with empty CA history", "name", bundleName)
+	if err := c.Get(ctx, client.ObjectKey{Name: bundleName}, bundle); err != nil {
+		if apierrors.IsNotFound(err) {
+			setupLog.Info("no existing ClusterTrustBundle found, starting with empty CA history", "name", bundleName)
+		} else {
+			setupLog.Error(err, "unable to read existing ClusterTrustBundle, starting with empty CA history", "name", bundleName)
+		}
 		return nil
 	}
 

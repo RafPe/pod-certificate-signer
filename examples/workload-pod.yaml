@@ -1,0 +1,53 @@
+# Example workload requesting a certificate from PodCertificateSigner.
+#
+# The certificate is customized via userAnnotations on the podCertificate
+# projected volume source (kubelet copies these verbatim into the
+# spec.unverifiedUserAnnotations of the PodCertificateRequest). The ${...}
+# placeholders require the controller to run with
+# --enable-annotation-interpolation.
+#
+# The signer's ClusterTrustBundle is mounted alongside the credential bundle,
+# so the pod ends up with:
+#   /var/run/x509/credentialbundle.pem - private key + issued certificate chain
+#   /var/run/x509/ca.crt               - CA bundle to verify peer certificates
+#
+# This manifest is also applied by the e2e suite (test/e2e), which asserts on
+# the pod name, namespace and annotation values below - keep them in sync.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pcs-example-workload
+  namespace: default
+spec:
+  restartPolicy: Never
+  containers:
+  - name: sleeper
+    image: busybox:1.37
+    command: ["sleep", "600"]
+    securityContext:
+      allowPrivilegeEscalation: false
+      runAsNonRoot: true
+      runAsUser: 65532
+      capabilities:
+        drop: ["ALL"]
+      seccompProfile:
+        type: RuntimeDefault
+    volumeMounts:
+    - name: x509
+      mountPath: /var/run/x509
+      readOnly: true
+  volumes:
+  - name: x509
+    projected:
+      sources:
+      - podCertificate:
+          keyType: ED25519
+          signerName: example.org/signer
+          credentialBundlePath: credentialbundle.pem
+          userAnnotations:
+            example.org/signer-cn: "${pod.name}.${pod.namespace}.svc.cluster.local"
+            example.org/signer-san: "${pod.name}.${pod.namespace}.svc,${pod.serviceAccountName}.${pod.namespace}.svc"
+      - clusterTrustBundle:
+          signerName: example.org/signer
+          labelSelector: {}
+          path: ca.crt

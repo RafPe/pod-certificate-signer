@@ -68,10 +68,6 @@ all: build
 $(LOCALBIN):
 	mkdir -p $(LOCALBIN)
 
-.PHONY: manifests
-manifests:  ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(GO_TOOL) controller-gen rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
-
 .PHONY: generate
 generate:  ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	$(GO_TOOL) controller-gen object:headerFile="$(HACK_DIR)/boilerplate.go.txt" paths="./..."
@@ -85,7 +81,7 @@ vet: ## Run go vet against code.
 	$(GOCMD) vet ./...
 
 .PHONY: test
-test: manifests generate fmt vet  ## Run tests.
+test: generate fmt vet  ## Run tests.
 	@KUBEBUILDER_ASSETS="$$( $(GO_TOOL) setup-envtest use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path )" \
 		$(GOCMD) test \
 			-v \
@@ -95,7 +91,7 @@ test: manifests generate fmt vet  ## Run tests.
 			$(shell $(GOCMD) list ./...  | grep -v /e2e)
 
 .PHONY: test-e2e
-test-e2e: manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
+test-e2e: generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
 	@if ! $(GO_TOOL) kind get clusters | grep $(KIND_CLUSTER_E2E); then \
 		echo "Creating e2e Kind cluster '$(KIND_CLUSTER_E2E)' ..."; \
 		$(GO_TOOL) kind create cluster --name $(KIND_CLUSTER_E2E) --config $(SRC_ROOT)/kind/kind-config.yaml; \
@@ -176,44 +172,6 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	- $(CONTAINER_TOOL) buildx rm pcs-builder
 	rm Dockerfile.cross
 
-.PHONY: build-installer
-build-installer: manifests generate  ## Generate a consolidated YAML with CRDs and deployment.
-	mkdir -p dist
-	cd config/manager && $(GO_TOOL) kustomize edit set image controller=${IMAGE}
-	$(GO_TOOL) kustomize build config/default > dist/install.yaml
-
-##@ Deployment
-
-ifndef ignore-not-found
-  ignore-not-found = false
-endif
-
-.PHONY: install
-install: manifests ## Install CRDs into the K8s cluster specified in ~/.kube/config.
-	$(GO_TOOL) kustomize build config/crd | $(KUBECTL) apply -f -
-
-.PHONY: uninstall
-uninstall: manifests ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	$(GO_TOOL) kustomize build config/crd | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
-
-.PHONY: deploy
-deploy: manifests ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	cd config/manager && $(GO_TOOL) kustomize edit set image controller=${IMAGE}
-	$(GO_TOOL) kustomize build config/default | $(KUBECTL) apply -f -
-
-.PHONY: deploy-e2e
-deploy-e2e: manifests ## Deploy controller to the e2e test K8s cluster.
-	cd config/manager && $(GO_TOOL) kustomize edit set image controller=${IMAGE}
-	$(GO_TOOL) kustomize build config/e2e | $(KUBECTL) apply -f -
-
-.PHONY: undeploy
-undeploy:  ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	$(GO_TOOL) kustomize build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
-
-.PHONY: undeploy-e2e
-undeploy-e2e:  ## Undeploy controller from the e2e test K8s cluster.
-	$(GO_TOOL) kustomize build config/e2e | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
-
 ##@ Helm Deployment
 
 ## Namespace to deploy the Helm release
@@ -223,8 +181,8 @@ HELM_RELEASE ?= podcertificate-signer
 ## Additional arguments to pass to helm commands
 HELM_EXTRA_ARGS ?=
 
-.PHONY: helm-deploy
-helm-deploy: kind-load-image  ## Deploy manager to the dev K8s cluster via Helm. Specify an image with IMAGE env var.
+.PHONY: helm-install
+helm-install:  ## Install the chart with the example CA secret and values. Assumes the image is loadable by the cluster.
 	$(KUBECTL) get ns $(HELM_NAMESPACE) || $(KUBECTL) create ns $(HELM_NAMESPACE)
 	$(KUBECTL) --namespace $(HELM_NAMESPACE) apply -f examples/ca_tls_secret.yaml
 	$(GO_TOOL) helm upgrade --install $(HELM_RELEASE) $(SRC_ROOT)/charts/podcertificate-signer \
@@ -236,9 +194,12 @@ helm-deploy: kind-load-image  ## Deploy manager to the dev K8s cluster via Helm.
 		--values examples/helm-values.yaml \
 		$(HELM_EXTRA_ARGS)
 
+.PHONY: helm-deploy
+helm-deploy: kind-load-image helm-install  ## Deploy manager to the dev Kind cluster via Helm. Specify an image with IMAGE env var.
+
 .PHONY: helm-uninstall
 helm-uninstall: ## Uninstall the Helm release from the K8s cluster.
-	$(GO_TOOL) helm uninstall $(HELM_RELEASE) --namespace $(HELM_NAMESPACE)
+	$(GO_TOOL) helm uninstall $(HELM_RELEASE) --namespace $(HELM_NAMESPACE) --ignore-not-found
 
 .PHONY: helm-status
 helm-status: ## Show Helm release status.

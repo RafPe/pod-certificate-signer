@@ -36,6 +36,11 @@ signer:
   # Max number of previous CA certificates to keep during a CA cert reload
   max_previous_ca_certs: 2
 
+  # Feature flag: allow ${...} placeholders (e.g. ${pod.name},
+  # ${pod.serviceAccountName}) in certificate configuration annotations,
+  # resolved from the verified fields of the PodCertificateRequest.
+  enable_annotation_interpolation: false
+
 # Controller manager settings
 manager:
   # Max concurrent reconciles
@@ -48,8 +53,9 @@ image:
   repository: ghcr.io/rafpe/pod-certificate-signer
   # This sets the pull policy for images.
   pullPolicy: IfNotPresent
-  # Overrides the image tag whose default is the chart appVersion.
-  tag: "latest"
+  # Overrides the image tag whose default is the chart appVersion (set to the
+  # release tag when the chart is published). Also accepts a sha256:... digest.
+  tag: ""
 
 # This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
 imagePullSecrets: []
@@ -77,16 +83,21 @@ podAnnotations: {}
 # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
 podLabels: {}
 
-podSecurityContext: {}
+# The defaults comply with the "restricted" Pod Security Standard, so the
+# controller can be deployed into namespaces enforcing it. The image runs as
+# a non-root user (distroless nonroot).
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
   # fsGroup: 2000
 
-securityContext: {}
-  # capabilities:
-  #   drop:
-  #   - ALL
-  # readOnlyRootFilesystem: true
-  # runAsNonRoot: true
-  # runAsUser: 1000
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
 
 # This is for setting up a service more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/
 service:

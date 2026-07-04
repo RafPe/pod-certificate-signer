@@ -1,0 +1,28 @@
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+permissions: {}
+
+jobs:
+  release:
+    name: Tag and release
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      # A merge labeled release/skip only updates the running release draft.
+      # Any other release/* label publishes the release, which creates the
+      # v* tag and thereby triggers the image build workflow.
+      - name: Draft or publish the release
+        uses: release-drafter/release-drafter@v7
+        with:
+          publish: ${{ !contains(github.event.pull_request.labels.*.name, 'release/skip') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

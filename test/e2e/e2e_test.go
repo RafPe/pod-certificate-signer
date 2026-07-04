@@ -20,7 +20,9 @@ limitations under the License.
 package e2e
 
 import (
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"os/exec"
@@ -30,20 +32,36 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
 	"github.com/rafpe/kubernetes-podcertificate-signer/test/utils"
 )
 
 // namespace where the project is deployed in
 const namespace = "pcs-system"
 
-// serviceAccountName created for the project
-const serviceAccountName = "pcs-controller-manager"
+// releaseName is the Helm release (and thereby resource fullname) of the deployment
+const releaseName = "podcertificate-signer"
 
-// metricsServiceName is the name of the metrics service of the project
-const metricsServiceName = "pcs-controller-manager-metrics-service"
+// serviceAccountName created by the Helm chart
+const serviceAccountName = releaseName
 
-// metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
-const metricsRoleBindingName = "pcs-metrics-binding"
+// metricsServiceName is the name of the service exposing the metrics port
+const metricsServiceName = releaseName
+
+// signerName the controller is deployed with (see the chart values signer.name)
+const signerName = "example.org/signer"
+
+// trustBundleName is the ClusterTrustBundle the controller maintains for the signer
+const trustBundleName = "example.org:signer:bundle"
+
+// caSecretName is the kubernetes.io/tls secret mounted into the controller as its CA
+// (see examples/ca_tls_secret.yaml)
+const caSecretName = "podcertificate-signer-ca"
+
+// workloadPodName / workloadNamespace identify the example workload pod
+// (examples/workload-pod.yaml) used by the certificate issuance spec
+const workloadPodName = "pcs-example-workload"
+const workloadNamespace = "default"
 
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
@@ -63,8 +81,14 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
-		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy-e2e", fmt.Sprintf("IMAGE=%s", projectImage))
+		By("deploying the controller-manager via Helm")
+		// A single replica keeps the pod-targeted assertions (logs, pod
+		// phase) deterministic; the chart default is 2 for leader election.
+		// Annotation interpolation is enabled so the issuance spec can
+		// exercise ${...} placeholders.
+		cmd = exec.Command("make", "helm-install",
+			fmt.Sprintf("IMAGE=%s", projectImage),
+			"HELM_EXTRA_ARGS=--set replicaCount=1 --set signer.enable_annotation_interpolation=true")
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 	})
@@ -76,12 +100,8 @@ var _ = Describe("Manager", Ordered, func() {
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
 		_, _ = utils.Run(cmd)
 
-		By("undeploying the controller-manager")
-		cmd = exec.Command("make", "undeploy-e2e")
-		_, _ = utils.Run(cmd)
-
-		By("uninstalling CRDs")
-		cmd = exec.Command("make", "uninstall")
+		By("uninstalling the Helm release")
+		cmd = exec.Command("make", "helm-uninstall")
 		_, _ = utils.Run(cmd)
 
 		By("removing manager namespace")
@@ -141,7 +161,7 @@ var _ = Describe("Manager", Ordered, func() {
 			verifyControllerUp := func(g Gomega) {
 				// Get the name of the controller-manager pod
 				cmd := exec.Command("kubectl", "get",
-					"pods", "-l", "control-plane=controller-manager",
+					"pods", "-l", fmt.Sprintf("app.kubernetes.io/instance=%s", releaseName),
 					"-o", "go-template={{ range .items }}"+
 						"{{ if not .metadata.deletionTimestamp }}"+
 						"{{ .metadata.name }}"+
@@ -154,7 +174,7 @@ var _ = Describe("Manager", Ordered, func() {
 				podNames := utils.GetNonEmptyLines(podOutput)
 				g.Expect(podNames).To(HaveLen(1), "expected 1 controller pod running")
 				controllerPodName = podNames[0]
-				g.Expect(controllerPodName).To(ContainSubstring("controller-manager"))
+				g.Expect(controllerPodName).To(ContainSubstring(releaseName))
 
 				// Validate the pod's status
 				cmd = exec.Command("kubectl", "get",
@@ -169,23 +189,10 @@ var _ = Describe("Manager", Ordered, func() {
 		})
 
 		It("should ensure the metrics endpoint is serving metrics", func() {
-			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
-			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
-				"--clusterrole=pcs-metrics-reader",
-				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
-			)
-			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create ClusterRoleBinding")
-
 			By("validating that the metrics service is available")
-			cmd = exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace)
-			_, err = utils.Run(cmd)
+			cmd := exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace)
+			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Metrics service should exist")
-
-			By("getting the service account token")
-			token, err := serviceAccountToken()
-			Expect(err).NotTo(HaveOccurred())
-			Expect(token).NotTo(BeEmpty())
 
 			By("waiting for the metrics endpoint to be ready")
 			verifyMetricsEndpointReady := func(g Gomega) {
@@ -217,7 +224,7 @@ var _ = Describe("Manager", Ordered, func() {
 							"name": "curl",
 							"image": "curlimages/curl:latest",
 							"command": ["/bin/sh", "-c"],
-							"args": ["curl -v -k -H 'Authorization: Bearer %s' http://%s.%s.svc.cluster.local:9090/metrics"],
+							"args": ["curl -v http://%s.%s.svc.cluster.local:9090/metrics"],
 							"securityContext": {
 								"readOnlyRootFilesystem": true,
 								"allowPrivilegeEscalation": false,
@@ -233,7 +240,7 @@ var _ = Describe("Manager", Ordered, func() {
 						}],
 						"serviceAccountName": "%s"
 					}
-				}`, token, metricsServiceName, namespace, serviceAccountName))
+				}`, metricsServiceName, namespace, serviceAccountName))
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
 
@@ -266,48 +273,104 @@ var _ = Describe("Manager", Ordered, func() {
 		//    strings.ToLower(<Kind>),
 		// ))
 	})
+
+	Context("Certificate issuance", func() {
+		It("should issue a certificate with interpolated pod identity", func() {
+			By("creating a workload pod requesting an interpolated certificate")
+			applyWorkloadPod()
+			DeferCleanup(func() {
+				cmd := exec.Command("kubectl", "delete", "pod", workloadPodName,
+					"-n", workloadNamespace, "--ignore-not-found=true", "--wait=false")
+				_, _ = utils.Run(cmd)
+			})
+
+			By("waiting for the PodCertificateRequest to be issued")
+			var chain []*x509.Certificate
+			Eventually(func(g Gomega) {
+				chain = getIssuedCertificateChain(g, workloadPodName, workloadNamespace)
+				g.Expect(chain).NotTo(BeEmpty())
+			}, 3*time.Minute).Should(Succeed())
+
+			By("verifying the leaf certificate carries the interpolated values")
+			leaf := chain[0]
+			wantCN := fmt.Sprintf("%s.%s.svc.cluster.local", workloadPodName, workloadNamespace)
+			Expect(leaf.Subject.CommonName).To(Equal(wantCN),
+				"common name must be interpolated from the pod identity")
+			Expect(leaf.DNSNames).To(ConsistOf(
+				fmt.Sprintf("%s.%s.svc", workloadPodName, workloadNamespace),
+				fmt.Sprintf("default.%s.svc", workloadNamespace), // ${pod.serviceAccountName} = default
+			), "SANs must be interpolated from the pod identity")
+
+			By("waiting for the pod to run with the projected certificate")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "pod", workloadPodName,
+					"-n", workloadNamespace, "-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("Running"),
+					"pod must start once kubelet mounts the issued credential bundle")
+			}, 3*time.Minute).Should(Succeed())
+		})
+	})
+
+	Context("ClusterTrustBundle", func() {
+		AfterAll(func() {
+			By("removing the ClusterTrustBundle created by the controller")
+			cmd := exec.Command("kubectl", "delete", "clustertrustbundle", trustBundleName, "--ignore-not-found=true")
+			_, _ = utils.Run(cmd)
+		})
+
+		It("should publish the ClusterTrustBundle for the signer", func() {
+			By("waiting for the controller to create the ClusterTrustBundle")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "clustertrustbundle", trustBundleName,
+					"-o", "jsonpath={.spec.signerName}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "ClusterTrustBundle should exist")
+				g.Expect(output).To(Equal(signerName), "ClusterTrustBundle signerName mismatch")
+			}).Should(Succeed())
+
+			By("verifying the trust bundle contains valid CA certificates")
+			var certs []*x509.Certificate
+			Eventually(func(g Gomega) {
+				certs = getTrustBundleCertificates(g)
+				g.Expect(certs).NotTo(BeEmpty(), "trust bundle must contain at least one certificate")
+			}).Should(Succeed())
+			for _, cert := range certs {
+				Expect(cert.IsCA).To(BeTrue(), "every trust bundle entry must be a CA certificate")
+				Expect(time.Now().Before(cert.NotAfter)).To(BeTrue(), "trust bundle CA must not be expired")
+			}
+		})
+
+		It("should retain the previous CA in the trust bundle after CA rotation", func() {
+			By("capturing the currently published CA")
+			var previousCA *x509.Certificate
+			Eventually(func(g Gomega) {
+				certs := getTrustBundleCertificates(g)
+				g.Expect(certs).NotTo(BeEmpty())
+				previousCA = certs[0]
+			}).Should(Succeed())
+
+			By("generating a new CA and updating the CA secret")
+			rotatedCA, err := testutil.NewCA("rotated-ca.example.org", 24*time.Hour)
+			Expect(err).NotTo(HaveOccurred(), "Failed to generate the rotated CA")
+			updateCASecret(rotatedCA)
+
+			// Kubelet propagates secret updates to the mounted volume on its
+			// sync period (~1 minute), after which the controller reloads the
+			// CA and updates the ClusterTrustBundle.
+			By("waiting for the trust bundle to publish the new CA and retain the previous one")
+			Eventually(func(g Gomega) {
+				certs := getTrustBundleCertificates(g)
+				g.Expect(certs).NotTo(BeEmpty())
+				g.Expect(certs[0].Equal(rotatedCA.Cert)).To(BeTrue(),
+					"the first trust bundle entry must be the rotated CA")
+				g.Expect(containsCertificate(certs, previousCA)).To(BeTrue(),
+					"the previous CA must be retained in the trust bundle")
+			}, 5*time.Minute).Should(Succeed())
+		})
+	})
 })
-
-// serviceAccountToken returns a token for the specified service account in the given namespace.
-// It uses the Kubernetes TokenRequest API to generate a token by directly sending a request
-// and parsing the resulting token from the API response.
-func serviceAccountToken() (string, error) {
-	const tokenRequestRawString = `{
-		"apiVersion": "authentication.k8s.io/v1",
-		"kind": "TokenRequest"
-	}`
-
-	// Temporary file to store the token request
-	secretName := fmt.Sprintf("%s-token-request", serviceAccountName)
-	tokenRequestFile := filepath.Join("/tmp", secretName)
-	err := os.WriteFile(tokenRequestFile, []byte(tokenRequestRawString), os.FileMode(0o644))
-	if err != nil {
-		return "", err
-	}
-
-	var out string
-	verifyTokenCreation := func(g Gomega) {
-		// Execute kubectl command to create the token
-		cmd := exec.Command("kubectl", "create", "--raw", fmt.Sprintf(
-			"/api/v1/namespaces/%s/serviceaccounts/%s/token",
-			namespace,
-			serviceAccountName,
-		), "-f", tokenRequestFile)
-
-		output, err := cmd.CombinedOutput()
-		g.Expect(err).NotTo(HaveOccurred())
-
-		// Parse the JSON output to extract the token
-		var token tokenRequest
-		err = json.Unmarshal(output, &token)
-		g.Expect(err).NotTo(HaveOccurred())
-
-		out = token.Status.Token
-	}
-	Eventually(verifyTokenCreation).Should(Succeed())
-
-	return out, err
-}
 
 // getMetricsOutput retrieves and returns the logs from the curl pod used to access the metrics endpoint.
 func getMetricsOutput() string {
@@ -319,10 +382,128 @@ func getMetricsOutput() string {
 	return metricsOutput
 }
 
-// tokenRequest is a simplified representation of the Kubernetes TokenRequest API response,
-// containing only the token field that we need to extract.
-type tokenRequest struct {
-	Status struct {
-		Token string `json:"token"`
-	} `json:"status"`
+// applyWorkloadPod creates the example workload pod, whose podCertificate
+// projected volume requests a certificate customized via ${...}
+// interpolation (see examples/workload-pod.yaml).
+func applyWorkloadPod() {
+	cmd := exec.Command("kubectl", "apply", "-f", "examples/workload-pod.yaml")
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to create the workload pod")
+}
+
+// getIssuedCertificateChain finds the PodCertificateRequest belonging to the
+// given pod and, once it carries an Issued condition, parses its certificate
+// chain.
+func getIssuedCertificateChain(g Gomega, podName, namespace string) []*x509.Certificate {
+	cmd := exec.Command("kubectl", "get", "podcertificaterequests",
+		"-n", namespace, "-o", "json")
+	output, err := utils.Run(cmd)
+	g.Expect(err).NotTo(HaveOccurred(), "Failed to list PodCertificateRequests")
+
+	var list struct {
+		Items []struct {
+			Spec struct {
+				PodName string `json:"podName"`
+			} `json:"spec"`
+			Status struct {
+				CertificateChain string `json:"certificateChain"`
+				Conditions       []struct {
+					Type    string `json:"type"`
+					Reason  string `json:"reason"`
+					Message string `json:"message"`
+				} `json:"conditions"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	g.Expect(json.Unmarshal([]byte(output), &list)).To(Succeed())
+
+	for _, item := range list.Items {
+		if item.Spec.PodName != podName {
+			continue
+		}
+		for _, cond := range item.Status.Conditions {
+			g.Expect(cond.Type).To(Equal("Issued"),
+				"request must not be %s: %s: %s", cond.Type, cond.Reason, cond.Message)
+		}
+		if item.Status.CertificateChain == "" {
+			continue
+		}
+
+		var certs []*x509.Certificate
+		data := []byte(item.Status.CertificateChain)
+		for {
+			var block *pem.Block
+			block, data = pem.Decode(data)
+			if block == nil {
+				break
+			}
+			cert, err := x509.ParseCertificate(block.Bytes)
+			g.Expect(err).NotTo(HaveOccurred(), "chain entry must be a valid certificate")
+			certs = append(certs, cert)
+		}
+		return certs
+	}
+
+	return nil
+}
+
+// getTrustBundleCertificates reads the ClusterTrustBundle of the signer and
+// parses all certificates from its trust bundle PEM.
+func getTrustBundleCertificates(g Gomega) []*x509.Certificate {
+	cmd := exec.Command("kubectl", "get", "clustertrustbundle", trustBundleName,
+		"-o", "jsonpath={.spec.trustBundle}")
+	output, err := utils.Run(cmd)
+	g.Expect(err).NotTo(HaveOccurred(), "Failed to read the ClusterTrustBundle")
+
+	var certs []*x509.Certificate
+	data := []byte(output)
+	for {
+		var block *pem.Block
+		block, data = pem.Decode(data)
+		if block == nil {
+			break
+		}
+		g.Expect(block.Type).To(Equal("CERTIFICATE"), "trust bundle must contain only CERTIFICATE blocks")
+		cert, err := x509.ParseCertificate(block.Bytes)
+		g.Expect(err).NotTo(HaveOccurred(), "trust bundle entry must be a valid certificate")
+		certs = append(certs, cert)
+	}
+	return certs
+}
+
+// containsCertificate reports whether certs contains the given certificate.
+func containsCertificate(certs []*x509.Certificate, want *x509.Certificate) bool {
+	for _, cert := range certs {
+		if cert.Equal(want) {
+			return true
+		}
+	}
+	return false
+}
+
+// updateCASecret replaces the controller CA secret with the given key pair.
+// Kubelet propagates the change to the mounted volume, which the controller
+// picks up via its file watcher.
+func updateCASecret(kp *testutil.KeyPair) {
+	dir, err := os.MkdirTemp("", "pcs-e2e-ca")
+	Expect(err).NotTo(HaveOccurred(), "Failed to create temp dir for the rotated CA")
+	DeferCleanup(func() { _ = os.RemoveAll(dir) })
+
+	certPath, keyPath, err := kp.WriteFiles(dir)
+	Expect(err).NotTo(HaveOccurred(), "Failed to write the rotated CA files")
+
+	cmd := exec.Command("kubectl", "create", "secret", "tls", caSecretName,
+		"-n", namespace,
+		"--cert", certPath,
+		"--key", keyPath,
+		"--dry-run=client", "-o", "yaml")
+	secretYAML, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to render the rotated CA secret")
+
+	secretFile := filepath.Join(dir, "ca-secret.yaml")
+	Expect(os.WriteFile(secretFile, []byte(secretYAML), os.FileMode(0o600))).To(Succeed())
+
+	cmd = exec.Command("kubectl", "apply", "-f", secretFile)
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to apply the rotated CA secret")
 }
