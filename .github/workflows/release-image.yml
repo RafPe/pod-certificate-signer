@@ -1,4 +1,4 @@
-name: Release Image
+name: Release Artifacts
 
 on:
   push:
@@ -11,6 +11,9 @@ env:
   # Keep in sync with the IMAGE default in the Makefile and the Helm chart
   # image.repository value.
   IMAGE_REPO: ghcr.io/rafpe/pod-certificate-signer
+  # OCI registry namespace the Helm chart is pushed to; the chart lands at
+  # ghcr.io/rafpe/charts/podcertificate-signer.
+  CHART_REPO: ghcr.io/rafpe/charts
 
 jobs:
   build-and-push:
@@ -57,3 +60,33 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  push-chart:
+    name: Package and push Helm chart
+    runs-on: ubuntu-latest
+    # Publish the chart only once its default image tag (the appVersion)
+    # actually exists in the registry.
+    needs: build-and-push
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v6
+
+      - name: Log in to GitHub Container Registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+
+      - name: Package the chart
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          helm package charts/podcertificate-signer \
+            --version "${VERSION}" \
+            --app-version "${GITHUB_REF_NAME}"
+
+      - name: Push the chart
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          helm push "podcertificate-signer-${VERSION}.tgz" "oci://${CHART_REPO}"

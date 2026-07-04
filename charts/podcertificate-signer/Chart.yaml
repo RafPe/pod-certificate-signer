@@ -17,11 +17,12 @@ type: application
 # Versions are expected to follow Semantic Versioning (https://semver.org/)
 version: 0.1.0
 
-# This is the version number of the application being deployed. This version number should be
-# incremented each time you make changes to the application. Versions are not expected to
-# follow Semantic Versioning. They should reflect the version the application is using.
-# It is recommended to use it with quotes.
-appVersion: "0.1.0"
+# This is the version number of the application being deployed. It is the
+# default image tag when image.tag is not set. Both the chart version and
+# appVersion are overridden by the release workflow when the chart is packaged
+# and pushed to GHCR ("X.Y.Z" / "vX.Y.Z"); "latest" here keeps installs from a
+# source checkout working without extra flags.
+appVersion: "latest"
 
 # Kubernetes version constraint
 kubeVersion: ">= 1.35.0"

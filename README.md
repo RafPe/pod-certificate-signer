@@ -10,12 +10,10 @@
   - [Features](#features)
   - [🔄 How It Works](#-how-it-works)
   - [📋 Prerequisites](#-prerequisites)
-  - [🚀 Kubernetes Deployment](#-kubernetes-deployment)
-  - [📦 Helm Deployment](#-helm-deployment)
-  - [🛠️ Manual Deployment](#️-manual-deployment)
-    - [1. 🔐 Create CA and Secret](#1--create-ca-and-secret)
-    - [2. ⚙️ Create ServiceAccount and RBAC](#2-️-create-serviceaccount-and-rbac)
-    - [3. 🚀 PodCertificateSigner Deployment](#3--podcertificatesigner-deployment)
+  - [📦 Deployment](#-deployment)
+    - [1. 🔐 Create the CA secret](#1--create-the-ca-secret)
+    - [2. 🚀 Install the chart](#2--install-the-chart)
+    - [3. 🧑‍💻 Deploying from a local checkout](#3--deploying-from-a-local-checkout)
   - [📝 Usage](#-usage)
     - [🏷️ Configuration via `unverifiedUserAnnotations`](#️-configuration-via-unverifieduserannotations)
     - [🏷️ Configuration via Pod Annotations (deprecated)](#️-configuration-via-pod-annotations-deprecated)
@@ -108,244 +106,56 @@ sequenceDiagram
 
 
 
-## 🚀 Kubernetes Deployment
-A ready to use manifest file is available under `manifests` folder where you can deploy the [latest](./manifests/pcs-controller-latest.yaml) version
+## 📦 Deployment
 
-## 📦 Helm Deployment
+PodCertificateSigner is deployed via its Helm chart. On every release the chart is published to GHCR as an OCI artifact, alongside the controller image.
 
-Check the Helm charts in [charts](./charts) directory.
+### 1. 🔐 Create the CA secret
 
-## 🛠️ Manual Deployment
+You will need a valid CA which will be used by the controller to sign the pod certificate requests. There are many ways of approaching this - either via a tool like [cfssl](https://github.com/cloudflare/cfssl), leveraging [`cert-manager`](https://cert-manager.io/), or if you live in terminal you can use the `openssl` cli. If you have an existing CA you would like to use, simply skip the creation and use that as the source for the secret.
 
-Manual deployment is also an option too, please ensure you follow the manifest guide below to correctly configure the controller.
+Create a `kubernetes.io/tls` secret from the CA in the namespace you will deploy into:
 
-### 1. 🔐 Create CA and Secret
-
-You will need to create a valid CA which will be used by the controller to sign the pod certificate requests. There are many ways of approaching this either via tool like the [cfssl](https://github.com/cloudflare/cfssl) or leverage [`cert-manager`](https://cert-manager.io/) or if you live in terminal you can use `openssl` cli.
-
-Of course if you have an existing CA you would like to use simply skip the creation and use that as the source for secret
-
->Adapt the resulting name and namespace as needed
-After you generated the certificate create a secret out it of type `TLS`
 ```sh
-kubectl create secret tls ca-secret \
+kubectl create namespace pcs-system
+kubectl create secret tls podcertificate-signer-ca \
+  --namespace pcs-system \
   --cert=ca.pem \
   --key=ca-key.pem
 ```
 
+### 2. 🚀 Install the chart
 
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: pcs-ca
-  namespace: system
-type: kubernetes.io/tls
-data:
-  tls.crt: <base64-encoded-certificate>
-  tls.key: <base64-encoded-private-key>
+Install directly from GHCR (replace the version with the [latest release](https://github.com/rafpe/pod-certificate-signer/releases)):
+
+```sh
+helm install podcertificate-signer oci://ghcr.io/rafpe/charts/podcertificate-signer \
+  --version <X.Y.Z> \
+  --namespace pcs-system \
+  --set signer.name=coolcert.example.com/foo \
+  --values my-values.yaml
 ```
 
-### 2. ⚙️ Create ServiceAccount and RBAC
-
-Next we will create a dedicated ServiceAccount and associated RBAC permissions for our controller.
-
+Mount the CA secret into the controller via your values file (see [examples/helm-values.yaml](./examples/helm-values.yaml)):
 
 ```yaml
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: pcs
-  namespace: system
+volumes:
+  - name: podcertificate-signer-ca
+    secret:
+      secretName: podcertificate-signer-ca
+      optional: false
+
+volumeMounts:
+  - name: podcertificate-signer-ca
+    mountPath: /app/signer/ca
+    readOnly: true
 ```
 
-```yaml
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: pcs-controller-role
-rules:
-- apiGroups:
-  - ""
-  resources:
-  - pods
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  - events.k8s.io
-  resources:
-  - events
-  verbs:
-  - create
-  - patch
-- apiGroups:
-  - certificates.k8s.io
-  resources:
-  - podcertificaterequests
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - certificates.k8s.io
-  resources:
-  - podcertificaterequests/status
-  verbs:
-  - patch
-- apiGroups:
-  - certificates.k8s.io
-  resources:
-  - signers
-  resourceNames:
-  - "coolcert.example.com/foo"
-  verbs:
-  - sign
+All configuration options are documented in the chart [values.yaml](./charts/podcertificate-signer/values.yaml).
 
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: pcs-controller-rolebinding
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: pcs-controller-role
-subjects:
-- kind: ServiceAccount
-  namespace: system
-  name: pcs
-```
+### 3. 🧑‍💻 Deploying from a local checkout
 
-The controller also requires a namespace-scoped Role for leader election:
-
-```yaml
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: pcs-leader-election-role
-  namespace: system
-rules:
-- apiGroups:
-  - coordination.k8s.io
-  resources:
-  - leases
-  verbs:
-  - create
-- apiGroups:
-  - coordination.k8s.io
-  resources:
-  - leases
-  resourceNames:
-  - "pcs-leader-election"
-  verbs:
-  - get
-  - update
-
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: pcs-leader-election-rolebinding
-  namespace: system
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: pcs-leader-election-role
-subjects:
-- kind: ServiceAccount
-  namespace: system
-  name: pcs
-```
-
-### 3. 🚀 PodCertificateSigner Deployment
-
-Deployment manifest is on purpose kept simple - you are free to expand it as needed.
-
-> Change the image for the controller
-
-> Change the signer name
-
-```yaml
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: pcs-controller
-  namespace: system
-  labels:
-    app: pcs-controller
-spec:
-  replicas: 1 # we need leader election to properly work with multiple replicas
-  selector:
-    matchLabels:
-      app: pcs-controller
-  template:
-    metadata:
-      labels:
-        app: pcs-controller
-    spec:
-      securityContext:
-        # Projects are configured by default to adhere to the "restricted" Pod Security Standards.
-        # This ensures that deployments meet the highest security requirements for Kubernetes.
-        # For more details, see: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
-        runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
-      containers:
-      - command:
-        - /manager
-        args:
-          - --signer-name=coolcert.example.com/foo 👈 update signer name here!
-          - --ca-cert-path=/etc/ssl/ca/ca.pem
-          - --ca-key-path=/etc/ssl/ca/ca-key.pem
-          - --leader-elect
-          - --leader-election-id=pcs-leader-election
-        image: ghcr.io/rafpe/kubernetes-podcertificate-signer/controller:latest 👈 update image here!
-        imagePullPolicy: Always
-        name: manager
-        ports: []
-        resources:
-          limits:
-            cpu: 125m
-            memory: 256Mi
-          requests:
-            cpu: 10m
-            memory: 32Mi
-        securityContext:
-          readOnlyRootFilesystem: true
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-            - "ALL"
-        volumeMounts:
-        - name: ca-secret
-          mountPath: /etc/ssl/ca
-          readOnly: true
-      volumes:
-      - name: ca-secret
-        secret:
-            secretName: ca-secret
-            items:
-            - key: tls.crt
-              path: ca.pem
-            - key: tls.key
-              path: ca-key.pem
-      dnsPolicy: Default
-      nodeSelector:
-        kubernetes.io/os: linux
-      priorityClassName: system-cluster-critical
-      restartPolicy: Always
-      schedulerName: default-scheduler
-      serviceAccountName: pcs
-      terminationGracePeriodSeconds: 10
-```
-
+For development, `make helm-deploy` builds the image, loads it into a local Kind cluster and installs the chart with the example values. `make helm-uninstall`, `make helm-status` and `make helm-rollback` manage the release.
 
 ## 📝 Usage
 
@@ -640,7 +450,10 @@ Releases are fully label-driven. Every PR targeting `main` must carry exactly on
 | `release/patch` | Publishes a release with a **patch** version bump (fixes)              |
 | `release/skip`  | No release; the change is collected into the next release draft        |
 
-Publishing the release creates the `v*` tag, which triggers the image workflow: a multi-arch (`linux/amd64`, `linux/arm64`) image is built and pushed to `ghcr.io/rafpe/pod-certificate-signer` tagged `vX.Y.Z`, `vX.Y`, `vX` and `latest`.
+Publishing the release creates the `v*` tag, which triggers the release artifacts workflow:
+
+- a multi-arch (`linux/amd64`, `linux/arm64`) image is built and pushed to `ghcr.io/rafpe/pod-certificate-signer` tagged `vX.Y.Z`, `vX.Y`, `vX` and `latest`
+- the Helm chart is packaged with `version: X.Y.Z` / `appVersion: vX.Y.Z` and pushed to `oci://ghcr.io/rafpe/charts/podcertificate-signer`
 
 One-time repository setup:
 
