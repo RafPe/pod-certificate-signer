@@ -1,9 +1,27 @@
 name: Release Artifacts
 
+# Tags and releases published by the release workflow are created with the
+# workflow GITHUB_TOKEN, and GitHub never triggers workflows from events
+# created by that token. The release workflow therefore invokes this one
+# directly via workflow_call. The tag push trigger covers manually pushed
+# tags, and workflow_dispatch allows backfilling artifacts for an existing
+# release.
 on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_call:
+    inputs:
+      tag:
+        description: The release tag (vX.Y.Z) to build and publish artifacts for.
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release tag (vX.Y.Z) to build and publish artifacts for.
+        required: true
+        type: string
 
 permissions: {}
 
@@ -22,9 +40,13 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - name: Clone the code
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -45,10 +67,9 @@ jobs:
         with:
           images: ${{ env.IMAGE_REPO }}
           tags: |
-            type=semver,pattern=v{{version}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=semver,pattern=v{{major}}
-            type=sha
+            type=semver,pattern=v{{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern=v{{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern=v{{major}},value=${{ env.RELEASE_TAG }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -70,9 +91,13 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - name: Clone the code
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Log in to GitHub Container Registry
         run: |
@@ -81,12 +106,12 @@ jobs:
 
       - name: Package the chart
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           helm package charts/podcertificate-signer \
             --version "${VERSION}" \
-            --app-version "${GITHUB_REF_NAME}"
+            --app-version "${RELEASE_TAG}"
 
       - name: Push the chart
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           helm push "podcertificate-signer-${VERSION}.tgz" "oci://${CHART_REPO}"

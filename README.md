@@ -503,7 +503,7 @@ Releases are fully label-driven. Every PR targeting `main` must carry exactly on
 | `release/patch` | Publishes a release with a **patch** version bump (fixes)              |
 | `release/skip`  | No release; the change is collected into the next release draft        |
 
-Publishing the release creates the `v*` tag, which triggers the release artifacts workflow:
+Publishing the release creates the `v*` tag and chains directly into the release artifacts workflow (tags created by the workflow token never trigger workflows on their own; manually pushed `v*` tags and `workflow_dispatch` also work):
 
 - a multi-arch (`linux/amd64`, `linux/arm64`) image is built and pushed to `ghcr.io/rafpe/pod-certificate-signer` tagged `vX.Y.Z`, `vX.Y`, `vX` and `latest`
 - the Helm chart is packaged with `version: X.Y.Z` / `appVersion: vX.Y.Z` and pushed to `oci://ghcr.io/rafpe/charts/podcertificate-signer`
