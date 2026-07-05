@@ -47,6 +47,7 @@ spec:
           userAnnotations:
             example.org/signer-cn: "${pod.name}.${pod.namespace}.svc.cluster.local"
             example.org/signer-san: "${pod.name}.${pod.namespace}.svc,${pod.serviceAccountName}.${pod.namespace}.svc"
+            example.org/signer-ip-san: "10.96.0.99"
       - clusterTrustBundle:
           signerName: example.org/signer
           labelSelector: {}

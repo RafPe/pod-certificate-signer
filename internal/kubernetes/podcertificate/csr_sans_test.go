@@ -63,6 +63,41 @@ func TestCSRSANsIgnoredWhenDisabled(t *testing.T) {
 	}
 }
 
+// The ip-san annotation sets IP SANs and takes precedence over CSR IPs.
+func TestIPSANAnnotation(t *testing.T) {
+	pcr := testPCR(map[string]string{testSignerName + "-ip-san": "10.0.0.1, 2001:db8::1"})
+	opts := Options{
+		HonorCSRSANs:   true,
+		CSRIPAddresses: []net.IP{net.ParseIP("192.168.0.1")},
+	}
+
+	config, err := NewPodCertificateConfig(pcr, testPod(nil), opts, nil, 0)
+	if err != nil {
+		t.Fatalf("NewPodCertificateConfig: %v", err)
+	}
+	if len(config.IPAddresses) != 2 ||
+		!config.IPAddresses[0].Equal(net.ParseIP("10.0.0.1")) ||
+		!config.IPAddresses[1].Equal(net.ParseIP("2001:db8::1")) {
+		t.Errorf("IPAddresses = %v, want the annotated IPs to win over CSR IPs", config.IPAddresses)
+	}
+}
+
+// Malformed ip-san values must deny the request.
+func TestIPSANAnnotationInvalid(t *testing.T) {
+	cases := map[string]string{
+		"not an IP":  "not-an-ip",
+		"empty list": " , ",
+	}
+	for name, value := range cases {
+		t.Run(name, func(t *testing.T) {
+			pcr := testPCR(map[string]string{testSignerName + "-ip-san": value})
+			if _, err := NewPodCertificateConfig(pcr, testPod(nil), Options{}, nil, 0); err == nil {
+				t.Fatalf("want error for ip-san %q, got nil", value)
+			}
+		})
+	}
+}
+
 // Enabled but with an empty CSR (kubelet today): defaults still apply.
 func TestCSRSANsEmptyCSRKeepsDefaults(t *testing.T) {
 	config, err := NewPodCertificateConfig(testPCR(nil), testPod(nil), Options{HonorCSRSANs: true}, nil, 0)

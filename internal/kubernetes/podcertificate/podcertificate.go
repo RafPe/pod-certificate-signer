@@ -60,6 +60,8 @@ const (
 	AnnotationSuffixCN = "cn"
 	// AnnotationSuffixSAN configures the certificate DNS names (comma-separated).
 	AnnotationSuffixSAN = "san"
+	// AnnotationSuffixIPSAN configures the certificate IP SANs (comma-separated).
+	AnnotationSuffixIPSAN = "ip-san"
 	// AnnotationSuffixDuration configures the certificate duration.
 	AnnotationSuffixDuration = "duration"
 	// AnnotationSuffixRefreshBefore configures how long before expiry the
@@ -158,7 +160,7 @@ type Options struct {
 	EnableInterpolation bool
 	// HonorCSRSANs uses the DNS and IP SANs embedded in the
 	// kubelet-generated PKCS#10 CSR (CSRDNSNames/CSRIPAddresses) when no
-	// SAN annotation overrides them. Kubelet generates empty CSRs today,
+	// san/ip-san annotation overrides them. Kubelet generates empty CSRs today,
 	// so this is inert until Kubernetes starts embedding requested SANs;
 	// when disabled, CSR SANs are ignored, which the API contract
 	// explicitly allows for signers.
@@ -270,9 +272,19 @@ func NewPodCertificateConfig(
 		config.DNSNames = opts.CSRDNSNames
 	}
 
-	// IP SANs can only be requested via the CSR; there is no annotation
-	// and no default for them.
-	if opts.HonorCSRSANs && len(opts.CSRIPAddresses) > 0 {
+	// IP SAN precedence: ip-san annotation > CSR-requested SANs > none.
+	switch ipSAN, ok := lookup(AnnotationSuffixIPSAN); {
+	case ok:
+		ipSAN, err := expand(AnnotationSuffixIPSAN, ipSAN)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := parseIPs(ipSAN)
+		if err != nil {
+			return nil, fmt.Errorf("annotation %q: %w", annotationKey(signerName, AnnotationSuffixIPSAN), err)
+		}
+		config.IPAddresses = ips
+	case opts.HonorCSRSANs && len(opts.CSRIPAddresses) > 0:
 		config.IPAddresses = opts.CSRIPAddresses
 	}
 
@@ -413,6 +425,7 @@ func checkUnrecognizedUserAnnotations(annotations map[string]string, signerName 
 	known := map[string]struct{}{
 		annotationKey(signerName, AnnotationSuffixCN):            {},
 		annotationKey(signerName, AnnotationSuffixSAN):           {},
+		annotationKey(signerName, AnnotationSuffixIPSAN):         {},
 		annotationKey(signerName, AnnotationSuffixDuration):      {},
 		annotationKey(signerName, AnnotationSuffixRefreshBefore): {},
 		annotationKey(signerName, AnnotationSuffixURIs):          {},
@@ -439,6 +452,25 @@ func splitAndTrim(value string) []string {
 	}
 
 	return result
+}
+
+// parseIPs parses a comma-separated list of IP addresses.
+func parseIPs(value string) ([]net.IP, error) {
+	ipStrings := splitAndTrim(value)
+	if len(ipStrings) == 0 {
+		return nil, errors.New("contains no IP addresses")
+	}
+
+	ips := make([]net.IP, 0, len(ipStrings))
+	for _, ipStr := range ipStrings {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid IP address %q", ipStr)
+		}
+		ips = append(ips, ip)
+	}
+
+	return ips, nil
 }
 
 // parseURIs parses a comma-separated list of absolute URIs.

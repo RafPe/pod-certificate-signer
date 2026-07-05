@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -300,6 +301,9 @@ var _ = Describe("Manager", Ordered, func() {
 				fmt.Sprintf("%s.%s.svc", workloadPodName, workloadNamespace),
 				fmt.Sprintf("default.%s.svc", workloadNamespace), // ${pod.serviceAccountName} = default
 			), "SANs must be interpolated from the pod identity")
+			Expect(leaf.IPAddresses).To(HaveLen(1), "the ip-san annotation must yield one IP SAN")
+			Expect(leaf.IPAddresses[0].Equal(net.ParseIP("10.96.0.99"))).To(BeTrue(),
+				"IP SAN must match the ip-san annotation in examples/workload-pod.yaml")
 
 			By("waiting for the pod to run with the projected certificate")
 			Eventually(func(g Gomega) {
