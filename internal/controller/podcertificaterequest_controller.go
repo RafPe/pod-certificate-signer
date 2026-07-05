@@ -96,6 +96,9 @@ type PodCertificateRequestReconciler struct {
 	// EnableAnnotationInterpolation allows ${...} placeholders in the
 	// certificate configuration annotations (feature flag, off by default).
 	EnableAnnotationInterpolation bool
+	// HonorCSRSANs uses DNS/IP SANs embedded in the kubelet-generated CSR
+	// (feature flag, off by default; kubelet generates empty CSRs today).
+	HonorCSRSANs bool
 }
 
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests,verbs=get;list;watch
@@ -191,22 +194,28 @@ func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capi
 		return nil, nil
 	}
 
+	configOpts := podcertificate.Options{
+		ClusterFQDN:         r.ClusterFqdn,
+		EnableInterpolation: r.EnableAnnotationInterpolation,
+		HonorCSRSANs:        r.HonorCSRSANs,
+	}
 	var publicKey crypto.PublicKey
 	var publicKeyAlgorithm x509.PublicKeyAlgorithm
 	if len(pcr.Spec.StubPKCS10Request) > 0 {
-		publicKey, publicKeyAlgorithm, err = signer.ParseCSRPublicKey(pcr.Spec.StubPKCS10Request)
+		csrInfo, cerr := signer.ParseCSR(pcr.Spec.StubPKCS10Request)
+		if cerr != nil {
+			return nil, denied(ReasonUnsupportedKeyType, cerr)
+		}
+		publicKey, publicKeyAlgorithm = csrInfo.PublicKey, csrInfo.PublicKeyAlgorithm
+		configOpts.CSRDNSNames = csrInfo.DNSNames
+		configOpts.CSRIPAddresses = csrInfo.IPAddresses
 	} else {
 		// PKIXPublicKey is deprecated in favour of StubPKCS10Request, but is
 		// still sent by kubelets which pre-date the CSR stub.
 		publicKey, publicKeyAlgorithm, err = signer.ParsePKIXPublicKey(pcr.Spec.PKIXPublicKey) //nolint:staticcheck
-	}
-	if err != nil {
-		return nil, denied(ReasonUnsupportedKeyType, err)
-	}
-
-	configOpts := podcertificate.Options{
-		ClusterFQDN:         r.ClusterFqdn,
-		EnableInterpolation: r.EnableAnnotationInterpolation,
+		if err != nil {
+			return nil, denied(ReasonUnsupportedKeyType, err)
+		}
 	}
 	pcConfig, err := podcertificate.NewPodCertificateConfig(pcr, crPod, configOpts, publicKey, publicKeyAlgorithm)
 	if err != nil {

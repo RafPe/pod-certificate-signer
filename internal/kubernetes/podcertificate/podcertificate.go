@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -32,6 +33,7 @@ type PodCertificate struct {
 type PodCertificateConfig struct {
 	CommonName    string
 	DNSNames      []string
+	IPAddresses   []net.IP
 	URIs          []*url.URL
 	Duration      time.Duration
 	RefreshBefore time.Duration
@@ -154,6 +156,17 @@ type Options struct {
 	// When disabled, values containing ${ are rejected rather than
 	// issued verbatim.
 	EnableInterpolation bool
+	// HonorCSRSANs uses the DNS and IP SANs embedded in the
+	// kubelet-generated PKCS#10 CSR (CSRDNSNames/CSRIPAddresses) when no
+	// SAN annotation overrides them. Kubelet generates empty CSRs today,
+	// so this is inert until Kubernetes starts embedding requested SANs;
+	// when disabled, CSR SANs are ignored, which the API contract
+	// explicitly allows for signers.
+	HonorCSRSANs bool
+	// CSRDNSNames are the DNS SANs requested via the PKCS#10 CSR.
+	CSRDNSNames []string
+	// CSRIPAddresses are the IP SANs requested via the PKCS#10 CSR.
+	CSRIPAddresses []net.IP
 }
 
 // NewPodCertificateConfig builds the certificate configuration for the given
@@ -241,7 +254,9 @@ func NewPodCertificateConfig(
 		config.CommonName = cn
 	}
 
-	if san, ok := lookup(AnnotationSuffixSAN); ok {
+	// DNS SAN precedence: san annotation > CSR-requested SANs > defaults.
+	switch san, ok := lookup(AnnotationSuffixSAN); {
+	case ok:
 		san, err := expand(AnnotationSuffixSAN, san)
 		if err != nil {
 			return nil, err
@@ -251,6 +266,14 @@ func NewPodCertificateConfig(
 			return nil, fmt.Errorf("annotation %q contains no DNS names", annotationKey(signerName, AnnotationSuffixSAN))
 		}
 		config.DNSNames = names
+	case opts.HonorCSRSANs && len(opts.CSRDNSNames) > 0:
+		config.DNSNames = opts.CSRDNSNames
+	}
+
+	// IP SANs can only be requested via the CSR; there is no annotation
+	// and no default for them.
+	if opts.HonorCSRSANs && len(opts.CSRIPAddresses) > 0 {
+		config.IPAddresses = opts.CSRIPAddresses
 	}
 
 	if uris, ok := lookup(AnnotationSuffixURIs); ok {

@@ -15,6 +15,7 @@
   - [📝 Usage](#-usage)
     - [🏷️ Configuration via `unverifiedUserAnnotations`](#️-configuration-via-unverifieduserannotations)
     - [🧩 Interpolating pod identity into certificate values](#-interpolating-pod-identity-into-certificate-values)
+    - [🔮 CSR-requested SANs (forward compatibility)](#-csr-requested-sans-forward-compatibility)
     - [🏷️ Configuration via Pod Annotations (deprecated)](#️-configuration-via-pod-annotations-deprecated)
       - [🔗 Example configuration](#-example-configuration)
     - [Requesting PodCertificates for your workload](#requesting-podcertificates-for-your-workload)
@@ -219,6 +220,10 @@ Available variables - all resolved from fields of the `PodCertificateRequest` th
 | `${cluster.fqdn}`           | Cluster FQDN from the `-cluster-fqdn` flag   |
 
 Unknown variables and unterminated placeholders deny the request with reason `InvalidUnverifiedUserAnnotations`. Values are validated after expansion, including the 64 character common name limit from RFC 5280.
+
+### 🔮 CSR-requested SANs (forward compatibility)
+
+Upstream Kubernetes plans to let pod authors request DNS and IP SANs which kubelet embeds in the PKCS#10 CSR of the `PodCertificateRequest` (today kubelet generates completely empty CSRs). The controller is ready for this behind the `--honor-csr-sans` feature flag (Helm: `signer.honor_csr_sans`, disabled by default): when enabled, CSR-requested DNS and IP SANs are used unless a `san` annotation overrides them. While disabled, CSR SANs are ignored, which the Kubernetes API contract explicitly allows for signers.
 
 ### 🏷️ Configuration via Pod Annotations (deprecated)
 
@@ -426,6 +431,8 @@ Controller is customizable and supports the following arguments along with their
     	Allow ${...} placeholders (e.g. ${pod.name}, ${pod.serviceAccountName}) in certificate configuration annotations, resolved from the verified fields of the PodCertificateRequest.
   -health-probe-bind-address string
     	The address the probe endpoint binds to. (default ":8081")
+  -honor-csr-sans
+    	Honor DNS and IP SANs embedded in the kubelet-generated PKCS#10 CSR when no SAN annotation overrides them. Kubelet generates empty CSRs today; this prepares for upcoming Kubernetes support for requesting SANs.
   -kubeconfig string
     	Paths to a kubeconfig. Only required if out-of-cluster.
   -leader-elect

@@ -207,6 +207,7 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 			CommonName: pcConfig.CommonName,
 		},
 		DNSNames:           pcConfig.DNSNames,
+		IPAddresses:        pcConfig.IPAddresses,
 		URIs:               pcConfig.URIs,
 		PublicKeyAlgorithm: pcConfig.PublicKeyAlgorithm,
 		PublicKey:          pcConfig.PublicKey,
