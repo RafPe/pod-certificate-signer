@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 
 	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
@@ -70,15 +71,41 @@ func ParsePKIXPublicKey(pkixPublicKey []byte) (crypto.PublicKey, x509.PublicKeyA
 	return classifyPublicKey(publicKey)
 }
 
-// ParseCSRPublicKey extracts and classifies the public key of a DER-encoded
-// PKCS#10 certificate request.
-func ParseCSRPublicKey(csrDER []byte) (crypto.PublicKey, x509.PublicKeyAlgorithm, error) {
+// CSRInfo holds the values extracted from a kubelet-generated PKCS#10
+// certificate request: the subject public key, and any requested subject
+// alternative names.
+//
+// Today kubelet generates completely empty CSRs, so the SAN slices are
+// always empty - the KEP plans for pod authors to request DNS and IP SANs
+// which kubelet will embed in the CSR, and extracting them now keeps the
+// signer ready for that.
+type CSRInfo struct {
+	PublicKey          crypto.PublicKey
+	PublicKeyAlgorithm x509.PublicKeyAlgorithm
+	DNSNames           []string
+	IPAddresses        []net.IP
+}
+
+// ParseCSR extracts and classifies the public key of a DER-encoded PKCS#10
+// certificate request, along with any SANs requested in it. The CSR signature
+// is already verified by the kube-apiserver during admission.
+func ParseCSR(csrDER []byte) (*CSRInfo, error) {
 	csr, err := x509.ParseCertificateRequest(csrDER)
 	if err != nil {
-		return nil, 0, fmt.Errorf("unable to parse PKCS#10 CSR: %w", err)
+		return nil, fmt.Errorf("unable to parse PKCS#10 CSR: %w", err)
 	}
 
-	return classifyPublicKey(csr.PublicKey)
+	publicKey, publicKeyAlgorithm, err := classifyPublicKey(csr.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CSRInfo{
+		PublicKey:          publicKey,
+		PublicKeyAlgorithm: publicKeyAlgorithm,
+		DNSNames:           csr.DNSNames,
+		IPAddresses:        csr.IPAddresses,
+	}, nil
 }
 
 func classifyPublicKey(publicKey crypto.PublicKey) (crypto.PublicKey, x509.PublicKeyAlgorithm, error) {

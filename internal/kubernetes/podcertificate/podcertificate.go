@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -32,6 +33,7 @@ type PodCertificate struct {
 type PodCertificateConfig struct {
 	CommonName    string
 	DNSNames      []string
+	IPAddresses   []net.IP
 	URIs          []*url.URL
 	Duration      time.Duration
 	RefreshBefore time.Duration
@@ -58,6 +60,8 @@ const (
 	AnnotationSuffixCN = "cn"
 	// AnnotationSuffixSAN configures the certificate DNS names (comma-separated).
 	AnnotationSuffixSAN = "san"
+	// AnnotationSuffixIPSAN configures the certificate IP SANs (comma-separated).
+	AnnotationSuffixIPSAN = "ip-san"
 	// AnnotationSuffixDuration configures the certificate duration.
 	AnnotationSuffixDuration = "duration"
 	// AnnotationSuffixRefreshBefore configures how long before expiry the
@@ -154,6 +158,17 @@ type Options struct {
 	// When disabled, values containing ${ are rejected rather than
 	// issued verbatim.
 	EnableInterpolation bool
+	// HonorCSRSANs uses the DNS and IP SANs embedded in the
+	// kubelet-generated PKCS#10 CSR (CSRDNSNames/CSRIPAddresses) when no
+	// san/ip-san annotation overrides them. Kubelet generates empty CSRs today,
+	// so this is inert until Kubernetes starts embedding requested SANs;
+	// when disabled, CSR SANs are ignored, which the API contract
+	// explicitly allows for signers.
+	HonorCSRSANs bool
+	// CSRDNSNames are the DNS SANs requested via the PKCS#10 CSR.
+	CSRDNSNames []string
+	// CSRIPAddresses are the IP SANs requested via the PKCS#10 CSR.
+	CSRIPAddresses []net.IP
 }
 
 // NewPodCertificateConfig builds the certificate configuration for the given
@@ -241,7 +256,9 @@ func NewPodCertificateConfig(
 		config.CommonName = cn
 	}
 
-	if san, ok := lookup(AnnotationSuffixSAN); ok {
+	// DNS SAN precedence: san annotation > CSR-requested SANs > defaults.
+	switch san, ok := lookup(AnnotationSuffixSAN); {
+	case ok:
 		san, err := expand(AnnotationSuffixSAN, san)
 		if err != nil {
 			return nil, err
@@ -251,6 +268,24 @@ func NewPodCertificateConfig(
 			return nil, fmt.Errorf("annotation %q contains no DNS names", annotationKey(signerName, AnnotationSuffixSAN))
 		}
 		config.DNSNames = names
+	case opts.HonorCSRSANs && len(opts.CSRDNSNames) > 0:
+		config.DNSNames = opts.CSRDNSNames
+	}
+
+	// IP SAN precedence: ip-san annotation > CSR-requested SANs > none.
+	switch ipSAN, ok := lookup(AnnotationSuffixIPSAN); {
+	case ok:
+		ipSAN, err := expand(AnnotationSuffixIPSAN, ipSAN)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := parseIPs(ipSAN)
+		if err != nil {
+			return nil, fmt.Errorf("annotation %q: %w", annotationKey(signerName, AnnotationSuffixIPSAN), err)
+		}
+		config.IPAddresses = ips
+	case opts.HonorCSRSANs && len(opts.CSRIPAddresses) > 0:
+		config.IPAddresses = opts.CSRIPAddresses
 	}
 
 	if uris, ok := lookup(AnnotationSuffixURIs); ok {
@@ -390,6 +425,7 @@ func checkUnrecognizedUserAnnotations(annotations map[string]string, signerName 
 	known := map[string]struct{}{
 		annotationKey(signerName, AnnotationSuffixCN):            {},
 		annotationKey(signerName, AnnotationSuffixSAN):           {},
+		annotationKey(signerName, AnnotationSuffixIPSAN):         {},
 		annotationKey(signerName, AnnotationSuffixDuration):      {},
 		annotationKey(signerName, AnnotationSuffixRefreshBefore): {},
 		annotationKey(signerName, AnnotationSuffixURIs):          {},
@@ -416,6 +452,25 @@ func splitAndTrim(value string) []string {
 	}
 
 	return result
+}
+
+// parseIPs parses a comma-separated list of IP addresses.
+func parseIPs(value string) ([]net.IP, error) {
+	ipStrings := splitAndTrim(value)
+	if len(ipStrings) == 0 {
+		return nil, errors.New("contains no IP addresses")
+	}
+
+	ips := make([]net.IP, 0, len(ipStrings))
+	for _, ipStr := range ipStrings {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid IP address %q", ipStr)
+		}
+		ips = append(ips, ip)
+	}
+
+	return ips, nil
 }
 
 // parseURIs parses a comma-separated list of absolute URIs.

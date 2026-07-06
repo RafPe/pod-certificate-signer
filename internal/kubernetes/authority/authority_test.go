@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -152,6 +153,28 @@ func TestSignIssuesCertificateChain(t *testing.T) {
 	}
 	if !pc.IsValid() {
 		t.Error("freshly issued certificate must be valid")
+	}
+}
+
+// IP SANs from the configuration must be embedded in the issued certificate.
+func TestSignIncludesIPAddresses(t *testing.T) {
+	dir := t.TempDir()
+	writeCA(t, dir, "ca.example.org", 24*time.Hour)
+	ca, err := New(dir+"/tls.crt", dir+"/tls.key")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	config := testConfig(t)
+	config.IPAddresses = []net.IP{net.ParseIP("10.9.8.7")}
+
+	pc, err := ca.Sign(config)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	leaf := parseChain(t, []byte(pc.CertificateChain()))[0]
+	if len(leaf.IPAddresses) != 1 || !leaf.IPAddresses[0].Equal(config.IPAddresses[0]) {
+		t.Errorf("leaf IPAddresses = %v, want %v", leaf.IPAddresses, config.IPAddresses)
 	}
 }
 

@@ -41,6 +41,12 @@ signer:
   # resolved from the verified fields of the PodCertificateRequest.
   enable_annotation_interpolation: false
 
+  # Feature flag: honor DNS and IP SANs embedded in the kubelet-generated
+  # PKCS#10 CSR when no SAN annotation overrides them. Kubelet generates
+  # empty CSRs today; this prepares for upcoming Kubernetes support for
+  # requesting SANs on the projected volume.
+  honor_csr_sans: false
+
 # Controller manager settings
 manager:
   # Max concurrent reconciles

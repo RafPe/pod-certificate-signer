@@ -24,9 +24,11 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -285,11 +287,7 @@ var _ = Describe("Manager", Ordered, func() {
 			})
 
 			By("waiting for the PodCertificateRequest to be issued")
-			var chain []*x509.Certificate
-			Eventually(func(g Gomega) {
-				chain = getIssuedCertificateChain(g, workloadPodName, workloadNamespace)
-				g.Expect(chain).NotTo(BeEmpty())
-			}, 3*time.Minute).Should(Succeed())
+			chain := waitForIssuedChain(workloadPodName)
 
 			By("verifying the leaf certificate carries the interpolated values")
 			leaf := chain[0]
@@ -300,6 +298,9 @@ var _ = Describe("Manager", Ordered, func() {
 				fmt.Sprintf("%s.%s.svc", workloadPodName, workloadNamespace),
 				fmt.Sprintf("default.%s.svc", workloadNamespace), // ${pod.serviceAccountName} = default
 			), "SANs must be interpolated from the pod identity")
+			Expect(leaf.IPAddresses).To(HaveLen(1), "the ip-san annotation must yield one IP SAN")
+			Expect(leaf.IPAddresses[0].Equal(net.ParseIP("10.96.0.99"))).To(BeTrue(),
+				"IP SAN must match the ip-san annotation in examples/workload-pod.yaml")
 
 			By("waiting for the pod to run with the projected certificate")
 			Eventually(func(g Gomega) {
@@ -310,6 +311,51 @@ var _ = Describe("Manager", Ordered, func() {
 				g.Expect(output).To(Equal("Running"),
 					"pod must start once kubelet mounts the issued credential bundle")
 			}, 3*time.Minute).Should(Succeed())
+		})
+
+		It("should deliver a custom common name and DNS SANs in the issued certificate", func() {
+			const podName = "pcs-custom-san"
+			By("creating a workload pod with static cn and san annotations")
+			applyCertTestPod(podName, map[string]string{
+				signerName + "-cn":  "custom-cn.example.org",
+				signerName + "-san": "api.example.org,web.example.org",
+			})
+
+			By("waiting for the PodCertificateRequest to be issued")
+			leaf := waitForIssuedChain(podName)[0]
+
+			By("verifying the configured values are delivered in the leaf certificate")
+			Expect(leaf.Subject.CommonName).To(Equal("custom-cn.example.org"),
+				"common name must match the cn annotation")
+			Expect(leaf.DNSNames).To(ConsistOf("api.example.org", "web.example.org"),
+				"DNS SANs must match the san annotation, replacing the defaults")
+			Expect(leaf.IPAddresses).To(BeEmpty(),
+				"no IP SANs were requested")
+		})
+
+		It("should deliver the requested IP SANs in the issued certificate", func() {
+			const podName = "pcs-ip-san"
+			By("creating a workload pod with an ip-san annotation")
+			applyCertTestPod(podName, map[string]string{
+				signerName + "-cn":     "ip-demo.example.org",
+				signerName + "-ip-san": "10.96.0.42,2001:db8::42",
+			})
+
+			By("waiting for the PodCertificateRequest to be issued")
+			leaf := waitForIssuedChain(podName)[0]
+
+			By("verifying the IP SANs are delivered in the leaf certificate")
+			Expect(leaf.IPAddresses).To(HaveLen(2), "both requested IP SANs must be present")
+			Expect(leaf.IPAddresses[0].Equal(net.ParseIP("10.96.0.42"))).To(BeTrue(),
+				"first IP SAN must be the requested IPv4 address, got %v", leaf.IPAddresses[0])
+			Expect(leaf.IPAddresses[1].Equal(net.ParseIP("2001:db8::42"))).To(BeTrue(),
+				"second IP SAN must be the requested IPv6 address, got %v", leaf.IPAddresses[1])
+
+			By("verifying the DNS SANs fall back to the defaults")
+			Expect(leaf.DNSNames).To(ConsistOf(
+				fmt.Sprintf("%s.%s.pod.cluster.local", podName, workloadNamespace),
+				fmt.Sprintf("%s.%s.svc.cluster.local", podName, workloadNamespace),
+			), "DNS SANs must be the controller defaults when no san annotation is set")
 		})
 	})
 
@@ -389,6 +435,79 @@ func applyWorkloadPod() {
 	cmd := exec.Command("kubectl", "apply", "-f", "examples/workload-pod.yaml")
 	_, err := utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create the workload pod")
+}
+
+// applyCertTestPod creates a minimal workload pod whose podCertificate
+// projected volume carries the given userAnnotations, and registers its
+// cleanup.
+func applyCertTestPod(podName string, userAnnotations map[string]string) {
+	var annotations strings.Builder
+	for key, value := range userAnnotations {
+		fmt.Fprintf(&annotations, "            %s: %q\n", key, value)
+	}
+
+	manifest := fmt.Sprintf(`apiVersion: v1
+kind: Pod
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  restartPolicy: Never
+  containers:
+  - name: sleeper
+    image: busybox:1.37
+    command: ["sleep", "600"]
+    securityContext:
+      allowPrivilegeEscalation: false
+      runAsNonRoot: true
+      runAsUser: 65532
+      capabilities:
+        drop: ["ALL"]
+      seccompProfile:
+        type: RuntimeDefault
+    volumeMounts:
+    - name: x509
+      mountPath: /var/run/x509
+      readOnly: true
+  volumes:
+  - name: x509
+    projected:
+      sources:
+      - podCertificate:
+          keyType: ED25519
+          signerName: %s
+          credentialBundlePath: credentialbundle.pem
+          userAnnotations:
+%s`, podName, workloadNamespace, signerName, annotations.String())
+
+	dir, err := os.MkdirTemp("", "pcs-e2e-pod")
+	Expect(err).NotTo(HaveOccurred(), "Failed to create temp dir for the pod manifest")
+	DeferCleanup(func() { _ = os.RemoveAll(dir) })
+
+	manifestFile := filepath.Join(dir, "pod.yaml")
+	Expect(os.WriteFile(manifestFile, []byte(manifest), os.FileMode(0o600))).To(Succeed())
+
+	cmd := exec.Command("kubectl", "apply", "-f", manifestFile)
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to create pod %s", podName)
+
+	DeferCleanup(func() {
+		cmd := exec.Command("kubectl", "delete", "pod", podName,
+			"-n", workloadNamespace, "--ignore-not-found=true", "--wait=false")
+		_, _ = utils.Run(cmd)
+	})
+}
+
+// waitForIssuedChain waits until the PodCertificateRequest of the given pod
+// is issued and returns the parsed certificate chain.
+func waitForIssuedChain(podName string) []*x509.Certificate {
+	GinkgoHelper()
+	var chain []*x509.Certificate
+	Eventually(func(g Gomega) {
+		chain = getIssuedCertificateChain(g, podName, workloadNamespace)
+		g.Expect(chain).NotTo(BeEmpty())
+	}, 3*time.Minute).Should(Succeed())
+	return chain
 }
 
 // getIssuedCertificateChain finds the PodCertificateRequest belonging to the

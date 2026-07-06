@@ -16,9 +16,9 @@ func TestParsePKIXPublicKeyWraps(t *testing.T) {
 	}
 }
 
-// ParseCSRPublicKey must wrap the underlying x509 error so it can be unwrapped.
-func TestParseCSRPublicKeyWraps(t *testing.T) {
-	_, _, err := ParseCSRPublicKey([]byte("not-a-der-encoded-csr"))
+// ParseCSR must wrap the underlying x509 error so it can be unwrapped.
+func TestParseCSRWraps(t *testing.T) {
+	_, err := ParseCSR([]byte("not-a-der-encoded-csr"))
 	if err == nil {
 		t.Fatal("expected an error parsing junk input")
 	}

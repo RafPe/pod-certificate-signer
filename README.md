@@ -15,6 +15,7 @@
   - [📝 Usage](#-usage)
     - [🏷️ Configuration via `unverifiedUserAnnotations`](#️-configuration-via-unverifieduserannotations)
     - [🧩 Interpolating pod identity into certificate values](#-interpolating-pod-identity-into-certificate-values)
+    - [🔮 CSR-requested SANs (forward compatibility)](#-csr-requested-sans-forward-compatibility)
     - [🏷️ Configuration via Pod Annotations (deprecated)](#️-configuration-via-pod-annotations-deprecated)
       - [🔗 Example configuration](#-example-configuration)
     - [Requesting PodCertificates for your workload](#requesting-podcertificates-for-your-workload)
@@ -220,6 +221,12 @@ Available variables - all resolved from fields of the `PodCertificateRequest` th
 
 Unknown variables and unterminated placeholders deny the request with reason `InvalidUnverifiedUserAnnotations`. Values are validated after expansion, including the 64 character common name limit from RFC 5280.
 
+### 🔮 CSR-requested SANs (forward compatibility)
+
+Upstream Kubernetes plans to let pod authors request DNS and IP SANs which kubelet embeds in the PKCS#10 CSR of the `PodCertificateRequest` (today kubelet generates completely empty CSRs). The controller is ready for this behind the `--honor-csr-sans` feature flag (Helm: `signer.honor_csr_sans`, disabled by default): when enabled, CSR-requested DNS and IP SANs are used unless a `san`/`ip-san` annotation overrides them. While disabled, CSR SANs are ignored, which the Kubernetes API contract explicitly allows for signers.
+
+Until then, IP SANs can be requested via the `ip-san` annotation — once kubelet gains native SAN support, the same values move into the pod spec and the annotation simply becomes the override.
+
 ### 🏷️ Configuration via Pod Annotations (deprecated)
 
 > [!WARNING]
@@ -233,6 +240,7 @@ Below is the table with the annotations and example values:
 | ------------------------ | -------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `{signer-name}-cn`       | No       | `{pod-name}`                                                                        | `mysigner.example.com/foobar-cn: my-pod.default.pod.cluster.local`                                   |
 | `{signer-name}-san`      | No       | `{pod-name}.{namespace}.pod.cluster.local,{pod-name}.{namespace}.svc.cluster.local` | `mysigner.example.com/foobar-san: my-pod.default.pod.cluster.local,my-pod.default.svc.cluster.local` |
+| `{signer-name}-ip-san`   | No       | `(empty)`                                                                           | `mysigner.example.com/foobar-ip-san: 10.96.0.10,2001:db8::1`                                         |
 | `{signer-name}-uris`     | No       | `(empty)`                                                                           | `mysigner.example.com/foobar-uris: spiffe://cluster.local/ns/default/sa/my-service`                  |
 | `{signer-name}-duration` | No       | `24h`                                                                               | `mysigner.example.com/foobar-duration: 12h`                                                          |
 | `{signer-name}-refresh`  | No       | `15m`                                                                               | `mysigner.example.com/foobar-refresh: 30m`                                                           |
@@ -426,6 +434,8 @@ Controller is customizable and supports the following arguments along with their
     	Allow ${...} placeholders (e.g. ${pod.name}, ${pod.serviceAccountName}) in certificate configuration annotations, resolved from the verified fields of the PodCertificateRequest.
   -health-probe-bind-address string
     	The address the probe endpoint binds to. (default ":8081")
+  -honor-csr-sans
+    	Honor DNS and IP SANs embedded in the kubelet-generated PKCS#10 CSR when no SAN annotation overrides them. Kubelet generates empty CSRs today; this prepares for upcoming Kubernetes support for requesting SANs.
   -kubeconfig string
     	Paths to a kubeconfig. Only required if out-of-cluster.
   -leader-elect
