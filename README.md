@@ -241,6 +241,7 @@ Below is the table with the annotations and example values:
 | `{signer-name}-cn`       | No       | `{pod-name}`                                                                        | `mysigner.example.com/foobar-cn: my-pod.default.pod.cluster.local`                                   |
 | `{signer-name}-san`      | No       | `{pod-name}.{namespace}.pod.cluster.local,{pod-name}.{namespace}.svc.cluster.local` | `mysigner.example.com/foobar-san: my-pod.default.pod.cluster.local,my-pod.default.svc.cluster.local` |
 | `{signer-name}-ip-san`   | No       | `(empty)`                                                                           | `mysigner.example.com/foobar-ip-san: 10.96.0.10,2001:db8::1`                                         |
+| `{signer-name}-eku`      | No       | `server,client`                                                                     | `mysigner.example.com/foobar-eku: client`                                                            |
 | `{signer-name}-uris`     | No       | `(empty)`                                                                           | `mysigner.example.com/foobar-uris: spiffe://cluster.local/ns/default/sa/my-service`                  |
 | `{signer-name}-duration` | No       | `24h`                                                                               | `mysigner.example.com/foobar-duration: 12h`                                                          |
 | `{signer-name}-refresh`  | No       | `15m`                                                                               | `mysigner.example.com/foobar-refresh: 30m`                                                           |
@@ -420,6 +421,7 @@ The certificate configuration is validated against the constraints kube-apiserve
 
 - The certificate duration must be at least `1h` (kube-apiserver minimum) and must not exceed the request's `spec.maxExpirationSeconds` (set by the pod author on the projected volume, defaulted to `24h` by kube-apiserver). The default duration is automatically clamped to `maxExpirationSeconds`.
 - The refresh hint must lie within the window kube-apiserver accepts for `beginRefreshAt`: `refresh` must be at least `10m` and at most the certificate duration minus `10m`.
+- The `eku` annotation accepts the tokens `client` and `server` (comma-separated); unknown tokens deny the request. Certificates for non-RSA keys carry only the `digitalSignature` key usage.
 
 ## ⌘ Controller commandline options
 Controller is customizable and supports the following arguments along with their default values

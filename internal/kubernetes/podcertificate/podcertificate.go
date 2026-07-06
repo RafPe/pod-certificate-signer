@@ -62,6 +62,9 @@ const (
 	AnnotationSuffixSAN = "san"
 	// AnnotationSuffixIPSAN configures the certificate IP SANs (comma-separated).
 	AnnotationSuffixIPSAN = "ip-san"
+	// AnnotationSuffixEKU configures the certificate extended key usage
+	// (comma-separated tokens: "client", "server").
+	AnnotationSuffixEKU = "eku"
 	// AnnotationSuffixDuration configures the certificate duration.
 	AnnotationSuffixDuration = "duration"
 	// AnnotationSuffixRefreshBefore configures how long before expiry the
@@ -242,7 +245,7 @@ func NewPodCertificateConfig(
 		Duration:           duration,
 		RefreshBefore:      DefaultRefreshBefore,
 		MaxExpiration:      maxExpiration,
-		KeyUsage:           x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		KeyUsage:           keyUsageFor(publicKeyAlgorithm),
 		ExtKeyUsage:        []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		PublicKey:          publicKey,
 		PublicKeyAlgorithm: publicKeyAlgorithm,
@@ -287,6 +290,12 @@ func NewPodCertificateConfig(
 	case opts.HonorCSRSANs && len(opts.CSRIPAddresses) > 0:
 		config.IPAddresses = opts.CSRIPAddresses
 	}
+
+	extKeyUsage, err := resolveExtKeyUsage(lookup, expand, config.ExtKeyUsage, signerName)
+	if err != nil {
+		return nil, err
+	}
+	config.ExtKeyUsage = extKeyUsage
 
 	if uris, ok := lookup(AnnotationSuffixURIs); ok {
 		uris, err := expand(AnnotationSuffixURIs, uris)
@@ -355,6 +364,7 @@ func (pcc *PodCertificateConfig) LogConfiguration(ctx context.Context) {
 		"commonName", pcc.CommonName,
 		"dnsNames", pcc.DNSNames,
 		"uris", pcc.URIs,
+		"extKeyUsage", pcc.ExtKeyUsage,
 		"duration", pcc.Duration.String(),
 		"refreshBefore", pcc.RefreshBefore.String())
 }
@@ -429,6 +439,7 @@ func checkUnrecognizedUserAnnotations(annotations map[string]string, signerName 
 		annotationKey(signerName, AnnotationSuffixDuration):      {},
 		annotationKey(signerName, AnnotationSuffixRefreshBefore): {},
 		annotationKey(signerName, AnnotationSuffixURIs):          {},
+		annotationKey(signerName, AnnotationSuffixEKU):           {},
 	}
 
 	for key := range annotations {
@@ -452,6 +463,63 @@ func splitAndTrim(value string) []string {
 	}
 
 	return result
+}
+
+// keyUsageFor returns the KeyUsage bits appropriate for the subject key type.
+// keyEncipherment only has meaning for RSA key transport; for ECDSA and
+// Ed25519 keys digitalSignature is the only applicable usage.
+func keyUsageFor(alg x509.PublicKeyAlgorithm) x509.KeyUsage {
+	if alg == x509.RSA {
+		return x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment
+	}
+	return x509.KeyUsageDigitalSignature
+}
+
+// resolveExtKeyUsage resolves the eku annotation, if present, into ExtKeyUsage
+// values, falling back to current when the annotation is absent.
+func resolveExtKeyUsage(lookup func(string) (string, bool), expand func(string, string) (string, error), current []x509.ExtKeyUsage, signerName string) ([]x509.ExtKeyUsage, error) {
+	eku, ok := lookup(AnnotationSuffixEKU)
+	if !ok {
+		return current, nil
+	}
+	eku, err := expand(AnnotationSuffixEKU, eku)
+	if err != nil {
+		return nil, err
+	}
+	usages, err := parseEKU(eku)
+	if err != nil {
+		return nil, fmt.Errorf("annotation %q: %w", annotationKey(signerName, AnnotationSuffixEKU), err)
+	}
+	return usages, nil
+}
+
+// parseEKU parses a comma-separated list of extended key usage tokens.
+// Recognized tokens: "client" (TLS client auth), "server" (TLS server auth).
+// Duplicates collapse; order of first occurrence is preserved.
+func parseEKU(value string) ([]x509.ExtKeyUsage, error) {
+	tokens := splitAndTrim(value)
+	if len(tokens) == 0 {
+		return nil, errors.New("contains no extended key usage tokens")
+	}
+
+	seen := make(map[string]struct{}, len(tokens))
+	usages := make([]x509.ExtKeyUsage, 0, len(tokens))
+	for _, token := range tokens {
+		if _, dup := seen[token]; dup {
+			continue
+		}
+		seen[token] = struct{}{}
+		switch token {
+		case "client":
+			usages = append(usages, x509.ExtKeyUsageClientAuth)
+		case "server":
+			usages = append(usages, x509.ExtKeyUsageServerAuth)
+		default:
+			return nil, fmt.Errorf("unknown extended key usage %q (valid: client, server)", token)
+		}
+	}
+
+	return usages, nil
 }
 
 // parseIPs parses a comma-separated list of IP addresses.

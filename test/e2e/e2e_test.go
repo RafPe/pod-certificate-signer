@@ -357,6 +357,22 @@ var _ = Describe("Manager", Ordered, func() {
 				fmt.Sprintf("%s.%s.svc.cluster.local", podName, workloadNamespace),
 			), "DNS SANs must be the controller defaults when no san annotation is set")
 		})
+
+		It("should deliver a client-only certificate when eku restricts it", func() {
+			const podName = "pcs-eku-client"
+			By("creating a workload pod with an eku annotation")
+			applyCertTestPod(podName, map[string]string{
+				signerName + "-cn":  "eku-demo.example.org",
+				signerName + "-eku": "client",
+			})
+
+			By("waiting for the PodCertificateRequest to be issued")
+			leaf := waitForIssuedChain(podName)[0]
+
+			By("verifying the certificate is restricted to client auth")
+			Expect(leaf.ExtKeyUsage).To(ConsistOf(x509.ExtKeyUsageClientAuth),
+				"eku=client must yield a client-auth-only certificate")
+		})
 	})
 
 	Context("ClusterTrustBundle", func() {

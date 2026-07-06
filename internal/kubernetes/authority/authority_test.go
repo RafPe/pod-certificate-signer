@@ -178,6 +178,28 @@ func TestSignIncludesIPAddresses(t *testing.T) {
 	}
 }
 
+// A restricted ExtKeyUsage from the configuration must be embedded verbatim.
+func TestSignHonorsExtKeyUsage(t *testing.T) {
+	dir := t.TempDir()
+	writeCA(t, dir, "ca.example.org", 24*time.Hour)
+	ca, err := New(dir+"/tls.crt", dir+"/tls.key")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	config := testConfig(t)
+	config.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+
+	pc, err := ca.Sign(config)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	leaf := parseChain(t, []byte(pc.CertificateChain()))[0]
+	if len(leaf.ExtKeyUsage) != 1 || leaf.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
+		t.Errorf("leaf ExtKeyUsage = %v, want [ClientAuth] only", leaf.ExtKeyUsage)
+	}
+}
+
 func TestSignRejectsDurationBeyondCA(t *testing.T) {
 	dir := t.TempDir()
 	writeCA(t, dir, "short-ca.example.org", time.Hour)
