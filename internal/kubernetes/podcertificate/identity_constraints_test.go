@@ -70,6 +70,22 @@ func TestVerifiedIdentitiesAccepted(t *testing.T) {
 	}
 }
 
+// The node name belongs to the kubelet and the pod UID is an opaque token;
+// neither is an identity the workload owns, so both must be denied as a subject
+// even though they are available for interpolation.
+func TestNodeAndUIDNotClaimable(t *testing.T) {
+	pcr := verifiedPCR(map[string]string{testSignerName + "-cn": "${node.name}"})
+	pcr.Spec.NodeName = "node-1"
+	if _, err := NewPodCertificateConfig(pcr, testPod(nil), Options{EnableInterpolation: true}, nil, 0); err == nil {
+		t.Error("want denial for cn=${node.name}, got nil")
+	}
+
+	pcr = verifiedPCR(map[string]string{testSignerName + "-cn": "${pod.uid}"})
+	if _, err := NewPodCertificateConfig(pcr, testPod(nil), Options{EnableInterpolation: true}, nil, 0); err == nil {
+		t.Error("want denial for cn=${pod.uid}, got nil")
+	}
+}
+
 // (3): The default extended key usage must be ServerAuth only; ClientAuth is an
 // explicit opt-in via the eku annotation.
 func TestDefaultEKUServerAuthOnly(t *testing.T) {

@@ -30,8 +30,9 @@ func TestCSRSANsHonoredWhenEnabled(t *testing.T) {
 func TestCSRSANsAnnotationTakesPrecedence(t *testing.T) {
 	pcr := testPCR(map[string]string{testSignerName + "-san": "annotated.example.org"})
 	opts := Options{
-		HonorCSRSANs: true,
-		CSRDNSNames:  []string{"csr.example.org"},
+		HonorCSRSANs:              true,
+		CSRDNSNames:               []string{"csr.example.org"},
+		AllowUnverifiedIdentities: true, // literal annotation value
 	}
 
 	config, err := NewPodCertificateConfig(pcr, testPod(nil), opts, nil, 0)
@@ -67,8 +68,9 @@ func TestCSRSANsIgnoredWhenDisabled(t *testing.T) {
 func TestIPSANAnnotation(t *testing.T) {
 	pcr := testPCR(map[string]string{testSignerName + "-ip-san": "10.0.0.1, 2001:db8::1"})
 	opts := Options{
-		HonorCSRSANs:   true,
-		CSRIPAddresses: []net.IP{net.ParseIP("192.168.0.1")},
+		HonorCSRSANs:              true,
+		CSRIPAddresses:            []net.IP{net.ParseIP("192.168.0.1")},
+		AllowUnverifiedIdentities: true, // annotation IP SANs need the opt-in
 	}
 
 	config, err := NewPodCertificateConfig(pcr, testPod(nil), opts, nil, 0)
@@ -90,8 +92,10 @@ func TestIPSANAnnotationInvalid(t *testing.T) {
 	}
 	for name, value := range cases {
 		t.Run(name, func(t *testing.T) {
+			// Opt in to unverified identities so the parse error is exercised
+			// rather than the blanket IP-SAN denial.
 			pcr := testPCR(map[string]string{testSignerName + "-ip-san": value})
-			if _, err := NewPodCertificateConfig(pcr, testPod(nil), Options{}, nil, 0); err == nil {
+			if _, err := NewPodCertificateConfig(pcr, testPod(nil), Options{AllowUnverifiedIdentities: true}, nil, 0); err == nil {
 				t.Fatalf("want error for ip-san %q, got nil", value)
 			}
 		})
