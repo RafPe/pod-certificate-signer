@@ -101,6 +101,11 @@ var _ podSigner = (*signer.Signer)(nil)
 // PodCertificateRequestReconciler reconciles a PodCertificateRequest object
 type PodCertificateRequestReconciler struct {
 	client.Client
+	// APIReader reads directly from the API server, bypassing the manager
+	// cache. It is used to re-read the associated pod when the cached read
+	// misses or returns a stale (UID-mismatched) object, so the request is
+	// verified against live pod identity before signing.
+	APIReader     client.Reader
 	Log           logr.Logger
 	Scheme        *runtime.Scheme
 	Signer        podSigner
