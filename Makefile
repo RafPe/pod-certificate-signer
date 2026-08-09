@@ -137,11 +137,11 @@ kind-stop:  ## Tear down the local development Kind cluster.
 ##@ Build
 
 .PHONY: build
-build: manifests generate fmt vet | $(LOCALBIN)  ## Build manager binary.
+build: generate fmt vet | $(LOCALBIN)  ## Build manager binary.
 	$(GOCMD) build -o $(LOCALBIN)/manager cmd/podcertificate-signer/main.go
 
 .PHONY: run
-run: manifests generate fmt vet ## Run a controller from your host.
+run: generate fmt vet ## Run a controller from your host.
 	$(GOCMD) run ./cmd/podcertificate-signer/main.go
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
@@ -180,6 +180,9 @@ HELM_NAMESPACE ?= pcs-system
 HELM_RELEASE ?= podcertificate-signer
 ## Additional arguments to pass to helm commands
 HELM_EXTRA_ARGS ?=
+## Signer name to deploy with. The chart has no default (--signer-name is
+## required), so the example deploy must set one explicitly.
+SIGNER_NAME ?= example.org/signer
 
 ## Dev deployments target the local kind cluster explicitly, so a stray
 ## kubeconfig context can never point them at a real cluster. The cluster
@@ -218,6 +221,7 @@ helm-install: dev-ca  ## Install the chart against the dev kind cluster with an 
 		--set image.repository=$(IMAGE_REPO) \
 		--set image.tag=$(IMAGE_TAG) \
 		--set 'volumes[0].secret.secretName=$(DEV_CA_SECRET)' \
+		--set signer.name=$(SIGNER_NAME) \
 		--wait \
 		--timeout 5m \
 		--values examples/helm-values.yaml \
