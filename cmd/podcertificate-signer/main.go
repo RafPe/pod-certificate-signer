@@ -28,6 +28,7 @@ import (
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
+	"github.com/go-logr/logr"
 	"go.uber.org/zap/zapcore"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
@@ -45,7 +46,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/controller"
@@ -167,54 +167,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// caTrustBundleUpdater is a [manager.Runnable] which will update the
-	// ClusterTrustBundle of our signer whenever the CA has been reloaded.
-	caTrustBundleUpdater := func(ctx context.Context) error {
-		logger := log.FromContext(ctx).WithName("cluster-trust-bundle")
-		logger.Info("starting ClusterTrustBundle updater")
-		events := make(chan struct{}, 2)
-
-		// Start the CA watcher and listen for any CA reload events. A failed
-		// watcher is fatal: without it CA rotations would silently never be
-		// propagated to the ClusterTrustBundle.
-		watchErr := make(chan error, 1)
-		go func() {
-			watchErr <- ca.Watch(ctx, events)
-		}()
-
-		// We want the trust bundle updated on startup, so emit an event
-		// here.
-		events <- struct{}{}
-		for {
-			select {
-			case <-ctx.Done():
-				return nil
-			case err := <-watchErr:
-				if err != nil {
-					return fmt.Errorf("ca-watcher failed: %w", err)
-				}
-				return nil
-			case <-events:
-				err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-					logger.Info("updating ClusterTrustBundle with new CA certificate")
-					bundle := pcrSigner.ClusterTrustBundle()
-					// Use the direct API client: reading through the
-					// manager's cache-backed client would start an informer
-					// for ClusterTrustBundles, which requires list/watch
-					// RBAC permissions this controller does not need.
-					_, err := controllerutil.CreateOrPatch(ctx, c, bundle, func() error {
-						bundle.Spec.TrustBundle = string(ca.TrustBundlePEM())
-						return nil
-					})
-					return err
-				})
-				if err != nil {
-					logger.Error(err, "unable to update ClusterTrustBundle")
-				}
-			}
-		}
+	// Wire the CA file watcher and the ClusterTrustBundle publisher. The
+	// watcher runs on every replica so standby replicas keep their in-memory
+	// CA current; the publisher is leader-gated so only the elected leader
+	// writes the shared ClusterTrustBundle.
+	caWatcher, ctbUpdater := newCARunnables(c, pcrSigner, ca)
+	if err := mgr.Add(caWatcher); err != nil {
+		setupLog.Error(err, "unable to add CA watcher runnable")
+		os.Exit(1)
 	}
-	if err := mgr.Add(manager.RunnableFunc(caTrustBundleUpdater)); err != nil {
+	if err := mgr.Add(ctbUpdater); err != nil {
 		setupLog.Error(err, "unable to add ClusterTrustBundle updater runnable")
 		os.Exit(1)
 	}
@@ -305,6 +267,90 @@ func managerOptions(scheme *runtime.Scheme, cfg managerConfig) ctrl.Options {
 			},
 		},
 	}
+}
+
+// caWatchRunnable reloads the in-memory CA whenever the mounted certificate or
+// key files change. It runs on every replica, independent of leader election,
+// so that a standby replica keeps its CA current and never signs or publishes
+// with stale material immediately after being promoted to leader.
+type caWatchRunnable struct {
+	ca     *authority.CertificateAuthority
+	notify chan<- struct{}
+}
+
+// Start blocks watching the CA files until ctx is canceled. A failed watch is
+// fatal: without it CA rotations would silently never be observed.
+func (r *caWatchRunnable) Start(ctx context.Context) error {
+	if err := r.ca.Watch(ctx, r.notify); err != nil {
+		return fmt.Errorf("ca-watcher failed: %w", err)
+	}
+	return nil
+}
+
+// NeedLeaderElection reports false so the CA watcher runs on every replica.
+func (*caWatchRunnable) NeedLeaderElection() bool { return false }
+
+// ctbPublisher keeps the signer's ClusterTrustBundle in sync with the current
+// CA. It publishes once when it starts and again on every CA reload event. It
+// is leader-gated so only the elected leader writes the shared resource.
+type ctbPublisher struct {
+	client client.Client
+	signer *signer.Signer
+	ca     *authority.CertificateAuthority
+	events <-chan struct{}
+}
+
+// Start publishes the ClusterTrustBundle on startup, so a newly-elected leader
+// publishes from the current in-memory CA, and then again on every CA reload
+// event, until ctx is canceled.
+func (r *ctbPublisher) Start(ctx context.Context) error {
+	logger := log.FromContext(ctx).WithName("cluster-trust-bundle")
+	logger.Info("starting ClusterTrustBundle updater")
+
+	r.publish(ctx, logger)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-r.events:
+			r.publish(ctx, logger)
+		}
+	}
+}
+
+// NeedLeaderElection reports true so only the elected leader writes the
+// ClusterTrustBundle.
+func (*ctbPublisher) NeedLeaderElection() bool { return true }
+
+// publish reconciles the ClusterTrustBundle to the current CA trust bundle,
+// retrying on optimistic-concurrency conflicts.
+func (r *ctbPublisher) publish(ctx context.Context, logger logr.Logger) {
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		logger.Info("updating ClusterTrustBundle with new CA certificate")
+		bundle := r.signer.ClusterTrustBundle()
+		// Use the direct API client: reading through the manager's
+		// cache-backed client would start an informer for ClusterTrustBundles,
+		// which requires list/watch RBAC permissions this controller does not
+		// need.
+		_, err := controllerutil.CreateOrPatch(ctx, r.client, bundle, func() error {
+			bundle.Spec.TrustBundle = string(r.ca.TrustBundlePEM())
+			return nil
+		})
+		return err
+	})
+	if err != nil {
+		logger.Error(err, "unable to update ClusterTrustBundle")
+	}
+}
+
+// newCARunnables wires the CA file watcher and the ClusterTrustBundle publisher
+// so that CA reload events flow from the watcher to the publisher over a shared
+// channel. The watcher runs on every replica; the publisher is leader-gated.
+func newCARunnables(c client.Client, s *signer.Signer, ca *authority.CertificateAuthority) (*caWatchRunnable, *ctbPublisher) {
+	events := make(chan struct{}, 2)
+	watcher := &caWatchRunnable{ca: ca, notify: events}
+	publisher := &ctbPublisher{client: c, signer: s, ca: ca, events: events}
+	return watcher, publisher
 }
 
 // displayCommandlineFlags visits all CLI flags and prints them.
