@@ -184,7 +184,9 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		return r.recordFailure(ctx, &pcr, err)
 	}
 	if cert == nil {
-		return ctrl.Result{}, nil // pod is being deleted -> nothing to do
+		// Nothing to sign: the pod is being deleted, or the request is stale
+		// (pod absent or UID-mismatched on the live read). Drop without requeue.
+		return ctrl.Result{}, nil
 	}
 
 	log.Info("Successfully signed the certificate")
@@ -204,13 +206,39 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest) (*podcertificate.PodCertificate, error) {
 	log := logf.FromContext(ctx)
 
+	// Read the pod from the manager cache first. The cache can be stale in two
+	// ways that matter here: it may miss a just-created pod (racing the
+	// request), or it may still hold a previous pod that shared this name. In
+	// both cases re-read directly from the API server and gate on the pod's
+	// live UID, so a certificate is never issued against the wrong pod.
 	crPod, err := api.GetPod(ctx, r.Client, pcr.Spec.PodName, pcr.Namespace)
 	switch {
 	case apierrors.IsNotFound(err):
-		return nil, failed(ReasonAssociatedPodNotFound, err)
+		// Cache miss; fall through to the live read below.
 	case err != nil:
 		return nil, err // transient
 	}
+
+	if crPod == nil || crPod.UID != pcr.Spec.PodUID {
+		crPod, err = api.GetPod(ctx, r.APIReader, pcr.Spec.PodName, pcr.Namespace)
+		switch {
+		case apierrors.IsNotFound(err):
+			// The pod is gone on a live read too: the request is stale, not a
+			// terminal failure to sign. Drop it.
+			log.Info("associated pod not found on a live read; dropping stale request")
+			return nil, nil
+		case err != nil:
+			return nil, err // transient
+		}
+	}
+
+	// Identity gate: only sign for the exact pod the request was created for.
+	if crPod.UID != pcr.Spec.PodUID {
+		log.Info("associated pod UID does not match the request; dropping stale request",
+			"podUID", crPod.UID, "requestPodUID", pcr.Spec.PodUID)
+		return nil, nil
+	}
+
 	if !crPod.DeletionTimestamp.IsZero() {
 		log.Info("Pod has been deleted.")
 		return nil, nil

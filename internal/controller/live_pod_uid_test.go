@@ -74,6 +74,10 @@ func TestProcessCacheMissReadsLive(t *testing.T) {
 	if cert == nil {
 		t.Fatal("process() cert = nil, want the signed certificate")
 	}
+	// The config must be built from the pod found on the live read.
+	if stub.gotConfig == nil || stub.gotConfig.CommonName != "mypod" {
+		t.Fatalf("signed config = %+v, want CommonName %q from the live pod", stub.gotConfig, "mypod")
+	}
 }
 
 // When the pod that exists has a UID different from the request's PodUID, the

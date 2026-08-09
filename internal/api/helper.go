@@ -56,8 +56,10 @@ func GetPodAnnotation(pod *corev1.Pod, annotationKey string) (string, bool) {
 	return value, true
 }
 
-// GetPod fetches the pod with the given name and namespace.
-func GetPod(ctx context.Context, c client.Client, podName, podNamespace string) (*corev1.Pod, error) {
+// GetPod fetches the pod with the given name and namespace. It takes a
+// client.Reader so callers can pass either the cached manager client or the
+// cache-bypassing APIReader.
+func GetPod(ctx context.Context, c client.Reader, podName, podNamespace string) (*corev1.Pod, error) {
 	var pod corev1.Pod
 	podKey := types.NamespacedName{
 		Name:      podName,

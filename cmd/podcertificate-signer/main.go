@@ -226,6 +226,7 @@ func main() {
 
 	if err := (&controller.PodCertificateRequestReconciler{
 		Client:                        mgr.GetClient(),
+		APIReader:                     mgr.GetAPIReader(),
 		Log:                           ctrl.Log.WithName(DefaultControllerName),
 		Scheme:                        mgr.GetScheme(),
 		Signer:                        pcrSigner,
