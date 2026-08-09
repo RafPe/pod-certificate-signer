@@ -85,12 +85,24 @@ func failed(reason Reason, err error) error {
 	return &TerminalError{Reason: reason, ConditionType: capiv1beta1.PodCertificateRequestConditionTypeFailed, Err: err}
 }
 
+// podSigner is the consumer-side view of the signing dependency the reconciler
+// needs. Keeping it an interface (rather than the concrete *signer.Signer) lets
+// the reconcile path be unit-tested with a stub.
+type podSigner interface {
+	SignPodCertificate(*podcertificate.PodCertificateConfig) (*podcertificate.PodCertificate, error)
+	IsSignerNameMatching(string) bool
+	Name() string
+}
+
+// Compile-time assertion that the production signer satisfies the seam.
+var _ podSigner = (*signer.Signer)(nil)
+
 // PodCertificateRequestReconciler reconciles a PodCertificateRequest object
 type PodCertificateRequestReconciler struct {
 	client.Client
 	Log           logr.Logger
 	Scheme        *runtime.Scheme
-	Signer        *signer.Signer
+	Signer        podSigner
 	ClusterFqdn   string
 	EventRecorder events.EventRecorder
 	// EnableAnnotationInterpolation allows ${...} placeholders in the
