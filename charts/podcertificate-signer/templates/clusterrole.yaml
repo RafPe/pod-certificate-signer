@@ -20,8 +20,6 @@ rules:
   - pods
   verbs:
   - get
-  - list
-  - watch
 - apiGroups:
   - certificates.k8s.io
   resources:

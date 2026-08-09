@@ -32,6 +32,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -293,6 +294,15 @@ func managerOptions(scheme *runtime.Scheme, cfg managerConfig) ctrl.Options {
 			MaxConcurrentReconciles: cfg.maxConcurrentReconciles,
 			RecoverPanic:            new(true),
 			ReconciliationTimeout:   cfg.reconcileTimeout,
+		},
+		// Pods are excluded from the manager cache: the controller only does
+		// point Gets by name (and re-reads live via the APIReader for
+		// identity), so a cluster-wide pod informer would waste memory and
+		// require list/watch RBAC. Pod reads fall through to the API server.
+		Client: client.Options{
+			Cache: &client.CacheOptions{
+				DisableFor: []client.Object{&corev1.Pod{}},
+			},
 		},
 	}
 }

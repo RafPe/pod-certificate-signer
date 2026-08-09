@@ -138,7 +138,7 @@ type PodCertificateRequestReconciler struct {
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=clustertrustbundles,verbs=get;create;update;patch
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=signers,verbs=sign;attest
 // +kubebuilder:rbac:groups=core;events.k8s.io,resources=events,verbs=create;patch
-// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get
 
 func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// MaxConcurrentReconciles is inherited from the manager-wide controller
