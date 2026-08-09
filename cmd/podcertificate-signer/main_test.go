@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 )
 
 // An empty --signer-name must be rejected fast, before the controller attempts
@@ -52,4 +56,27 @@ func chartDir(t *testing.T) string {
 		t.Fatal("runtime.Caller failed")
 	}
 	return filepath.Join(filepath.Dir(file), "..", "..", "charts", "podcertificate-signer")
+}
+
+// The manager must bypass the cache for Pods: the controller only does point
+// Gets by name (and re-reads live via the APIReader for identity), so a
+// cluster-wide pod informer wastes memory and forces list/watch RBAC the
+// controller does not otherwise need.
+func TestManagerOptionsDisablesPodCache(t *testing.T) {
+	opts := managerOptions(k8sruntime.NewScheme(), managerConfig{baseContext: context.Background()})
+
+	if opts.Client.Cache == nil {
+		t.Fatal("Client.Cache is nil, want pod caching disabled via DisableFor")
+	}
+
+	found := false
+	for _, obj := range opts.Client.Cache.DisableFor {
+		if _, ok := obj.(*corev1.Pod); ok {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("Client.Cache.DisableFor = %v, want it to include *corev1.Pod", opts.Client.Cache.DisableFor)
+	}
 }
