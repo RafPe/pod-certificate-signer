@@ -26,6 +26,7 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/api"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
 	podcertificate "github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
 
@@ -246,6 +247,12 @@ func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capi
 
 	cert, err := r.Signer.SignPodCertificate(pcConfig)
 	if err != nil {
+		// CA-availability failures are transient: a CA rotation can let an
+		// identical request succeed, so requeue rather than record a terminal
+		// Failed outcome the request could never recover from.
+		if errors.Is(err, authority.ErrCASignerUnusable) {
+			return nil, err
+		}
 		return nil, failed(ReasonSigningFailed, err)
 	}
 	return cert, nil

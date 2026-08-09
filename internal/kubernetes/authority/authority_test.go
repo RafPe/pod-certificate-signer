@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -211,8 +212,15 @@ func TestSignRejectsDurationBeyondCA(t *testing.T) {
 	config := testConfig(t)
 	config.Duration = 48 * time.Hour
 
-	if _, err := ca.Sign(config); err == nil {
+	_, err = ca.Sign(config)
+	if err == nil {
 		t.Fatal("want error when certificate would outlive the CA")
+	}
+	// The error must carry ErrCASignerUnusable so the reconciler classifies it
+	// as transient (a CA rotation can let the same request succeed) rather than
+	// recording a terminal Failed outcome.
+	if !errors.Is(err, ErrCASignerUnusable) {
+		t.Errorf("Sign() err = %v, want it to wrap ErrCASignerUnusable", err)
 	}
 }
 

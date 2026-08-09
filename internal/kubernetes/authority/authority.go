@@ -193,12 +193,12 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 
 	nbf := now.Add(-ca.backDate)
 	if !nbf.Before(ca.certificate.NotAfter) {
-		return nil, fmt.Errorf("the signer has expired: NotAfter=%v", ca.certificate.NotAfter)
+		return nil, fmt.Errorf("the signer has expired: NotAfter=%v: %w", ca.certificate.NotAfter, ErrCASignerUnusable)
 	}
 
 	naf := nbf.Add(pcConfig.Duration)
 	if naf.After(ca.certificate.NotAfter) {
-		return nil, fmt.Errorf("certificate validity period exceeds the signer CA validity: notAfter=%v, caNotAfter=%v", naf, ca.certificate.NotAfter)
+		return nil, fmt.Errorf("certificate validity period exceeds the signer CA validity: notAfter=%v, caNotAfter=%v: %w", naf, ca.certificate.NotAfter, ErrCASignerUnusable)
 	}
 	if naf.Before(now) {
 		return nil, fmt.Errorf("certificate not after is in the past: %v", naf)
