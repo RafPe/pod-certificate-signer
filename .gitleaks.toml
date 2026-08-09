@@ -1,0 +1,21 @@
+# gitleaks configuration for the secret-scan workflow.
+#
+# Start from gitleaks' built-in rule set, then allowlist the CA key material
+# that was committed before it was removed. `git rm` does not rewrite history,
+# so the plaintext key in hack/ca-key.pem (and the base64 key embedded in
+# examples/ca_tls_secret.yaml) remain reachable in past commits and would
+# otherwise fail a full-history scan on every run.
+#
+# SECURITY NOTE: that CA private key is COMPROMISED. It must be treated as
+# leaked and revoked - any certificate ever signed by it can no longer be
+# trusted. This allowlist only silences the historical finding for those exact
+# paths; it does not permit new key material (the paths are also gitignored).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Historical, now-removed CA material (key is compromised and revoked)."
+paths = [
+  '''hack/ca-key\.pem''',
+  '''examples/ca_tls_secret\.yaml''',
+]

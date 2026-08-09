@@ -28,3 +28,11 @@ profile.cov
 
 # Kubeconfig might contain secrets
 *.kubeconfig
+
+# Private keys and CA material must never be committed. The dev CA generated
+# by `make helm-install` lands under bin/ (already ignored above), but guard
+# the key patterns broadly in case one is written elsewhere.
+*.pem
+*-key.pem
+tls.key
+ca-key*
