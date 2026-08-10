@@ -89,9 +89,11 @@ func denied(reason Reason, err error) error {
 }
 
 // failed wraps err as a terminal "Failed" outcome: the signer could not issue
-// the certificate (e.g. the associated pod is gone, signing itself failed).
-func failed(reason Reason, err error) error {
-	return &TerminalError{Reason: reason, ConditionType: capiv1beta1.PodCertificateRequestConditionTypeFailed, Err: err}
+// the certificate. The only remaining Failed reason is SigningFailed (a missing
+// pod is now dropped, not failed), so the reason is fixed rather than a
+// parameter; unlike denied, whose reason varies.
+func failed(err error) error {
+	return &TerminalError{Reason: ReasonSigningFailed, ConditionType: capiv1beta1.PodCertificateRequestConditionTypeFailed, Err: err}
 }
 
 // podSigner is the consumer-side view of the signing dependency the reconciler
@@ -301,7 +303,7 @@ func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capi
 		if errors.Is(err, authority.ErrCASignerUnusable) {
 			return nil, err
 		}
-		return nil, failed(ReasonSigningFailed, err)
+		return nil, failed(err)
 	}
 	return cert, nil
 }

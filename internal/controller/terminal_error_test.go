@@ -9,7 +9,7 @@ import (
 
 func TestTerminalError(t *testing.T) {
 	base := errors.New("boom")
-	err := failed(ReasonSigningFailed, base)
+	err := failed(base)
 
 	if err.Error() != "boom" {
 		t.Fatalf("Error() = %q, want %q", err.Error(), "boom")
