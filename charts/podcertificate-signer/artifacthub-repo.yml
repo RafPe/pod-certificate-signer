@@ -1,0 +1,15 @@
+# Artifact Hub repository metadata.
+#
+# This file claims ownership of the OCI Helm repository on Artifact Hub and
+# marks it as a "Verified Publisher". It is pushed ONCE to the OCI registry
+# (not on every chart release) via `oras push ...:artifacthub.io` — see
+# docs/artifact-hub.md for the exact steps.
+#
+# TODO(maintainer): fill in `repositoryID` with the ID shown on the Artifact Hub
+# control panel after you add the repository, and set `owners[].email` to the
+# address on your Artifact Hub account (a mismatch fails ownership verification
+# silently). Then push this file to the registry.
+repositoryID: "" # TODO: paste the Repository ID from the Artifact Hub control panel
+owners:
+  - name: RafPe
+    email: "" # TODO: must match the email on your Artifact Hub account
