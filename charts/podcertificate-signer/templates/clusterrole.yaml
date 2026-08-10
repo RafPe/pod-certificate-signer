@@ -14,6 +14,8 @@ rules:
   verbs:
   - create
   - patch
+# Pods are read directly (uncached) by name during reconcile; get-only, with no
+# list/watch, so the controller does not run a cluster-wide pod informer.
 - apiGroups:
   - ""
   resources:

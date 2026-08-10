@@ -536,6 +536,18 @@ kubectl logs -n pcs-system deployment/podcertificate-signer
 - Use RBAC or ValidatingAdmissionPolicy to restrict access
 - Bonus: Use MutatingAdmissionPolicy/ValidatingAdmissionPolicy to control which `unverifiedUserAnnotations` workloads are allowed to request
 
+### Controller RBAC (least privilege)
+
+The chart grants the controller only the permissions it uses. Notably, `pods`
+is **`get` only** — the controller reads the associated pod directly (uncached)
+and does not `list`/`watch` pods, so it never caches every pod in the cluster.
+
+> [!IMPORTANT]
+> Because `pods` is `get`-only, roll the chart and image out **together**. The
+> previous binary relied on a cached pod informer (`list`/`watch`); upgrading the
+> chart ahead of the image would leave an old controller without the permissions
+> it needs. The chart `appVersion` pins the image tag so they ship as a unit.
+
 🔐 Remember: No security mechanism is effective without strong authentication and authorization. In Kubernetes, security begins with controlling who can access what — user identities , RBAC policies and MutatingAdmissionPolicies/ValidatingAdmissionPolicy to form the foundation of your cluster's defense.
 
 ### 🔁 Rotating the signing CA
