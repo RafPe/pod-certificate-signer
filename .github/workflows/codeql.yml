@@ -33,10 +33,14 @@ jobs:
         uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
         with:
           languages: go
-          # No compilation needed: CodeQL's Go analysis extracts source directly.
-          # This also avoids autobuild tripping over the separate tool module at
-          # internal/tools/go.mod (helm, golangci-lint and friends).
-          build-mode: none
+          # Deterministic build for the extractor. `go build ./...` from the repo
+          # root compiles the main module only; the separate tool module at
+          # internal/tools/go.mod (helm, golangci-lint and friends) is a distinct
+          # module and is not built, so autobuild never has to reason about it.
+          build-mode: manual
+
+      - name: Build
+        run: go build ./...
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
