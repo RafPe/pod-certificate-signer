@@ -81,7 +81,7 @@ vet: ## Run go vet against code.
 	$(GOCMD) vet ./...
 
 .PHONY: test
-test: generate fmt vet  ## Run tests.
+test: generate vet  ## Run tests. Formatting is enforced separately (make fmt / CI gofmt gate), not auto-applied here.
 	@KUBEBUILDER_ASSETS="$$( $(GO_TOOL) setup-envtest use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path )" \
 		$(GOCMD) test \
 			-v \
