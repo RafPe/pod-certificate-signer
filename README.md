@@ -129,6 +129,9 @@ kubectl create secret tls podcertificate-signer-ca \
   --key=ca-key.pem
 ```
 
+> [!WARNING]
+> Use a CA you generated yourself. A sample CA (`examples/ca_tls_secret.yaml`) once shipped with this repository; it is removed from `HEAD` by [#37](https://github.com/rafpe/pod-certificate-signer/pull/37), but its private key remains readable in git history and must never be used anywhere real. See [Rotating the signing CA](#-rotating-the-signing-ca).
+
 ### 2. 🚀 Install the chart
 
 Install directly from GHCR (replace the version with the [latest release](https://github.com/rafpe/pod-certificate-signer/releases)):
@@ -197,7 +200,19 @@ The scheme for configuration keys is `signer-domain/name-<configuration-item>: <
 
 Because a value authored on a pod template is identical for every replica, the intended way to set per-pod identities is `${...}` interpolation of verified fields (see below); a literal `cn: "some-name.com"` that does not match the pod's verified identity is denied. `node.name` and `pod.uid` are available for interpolation but are **not** claimable as a certificate subject (a node identity belongs to the kubelet; a UID is opaque). `ip-san` values have no verified derivation and are denied.
 
-**Escape hatch (not recommended).** To lift these constraints — allowing arbitrary literal `cn`/`san`/`ip-san`/`uris` values — start the controller with `--allow-unverified-identities` (Helm: `signer.allow_unverified_identities: true`). Only do this if a `ValidatingAdmissionPolicy` (or equivalent) already restricts which annotations workloads may set.
+**Escape hatch (not recommended).** To lift these constraints — allowing arbitrary literal `cn`/`san`/`ip-san`/`uris` values — start the controller with `--allow-unverified-identities` (Helm: `signer.allow_unverified_identities: true`). Only do this if a `ValidatingAdmissionPolicy` (or equivalent) already restricts which annotations workloads may set — see below.
+
+#### 🚧 Restricting annotations with a ValidatingAdmissionPolicy
+
+[examples/validating-admission-policy.yaml](./examples/validating-admission-policy.yaml) is a ready-to-apply `ValidatingAdmissionPolicy` and binding that decides, at admission time, which pods may set signer-prefixed `userAnnotations` on a `podCertificate` projected volume:
+
+- `cn`, `san`, `ip-san` and `uris` claim an identity, so they are rejected unless the pod's namespace carries an allowlist label — on the deprecated pod `annotations` path too, which no flag disables and which would otherwise be an open bypass
+- `eku`, `duration` and `refresh` only shape a certificate the pod is already entitled to, so any namespace may set them
+- any other key using the signer's prefix is rejected as a typo
+
+Substitute your own signer name, annotation prefix and label key before applying.
+
+**When to use it.** If you enable `--allow-unverified-identities`, this policy is what replaces the protection you just switched off — it is the "or equivalent" the escape hatch above refers to, and without it any pod author can request a certificate for any name. Under the default constraints it is still worth applying as defense in depth: a pod rejected at admission gives its author an immediate error, instead of a volume that never mounts and a `Denied` `PodCertificateRequest` they have to go and read.
 
 > [!WARNING]
 > **Breaking change.** Earlier releases issued certificates for arbitrary literal `cn`/`san`/`ip-san`/`uris` values and included `clientAuth` in the default extended key usage. Both defaults have changed: unverified identities are now denied, and the default EKU is `serverAuth` only. To restore the previous behaviour set `signer.allow_unverified_identities: true` **and** add `eku: server,client`; the recommended migration is to switch literal values to `${...}` interpolation and request client auth explicitly with the `eku` annotation.
@@ -520,6 +535,32 @@ kubectl logs -n pcs-system deployment/podcertificate-signer
 - Bonus: Use MutatingAdmissionPolicy/ValidatingAdmissionPolicy to control which `unverifiedUserAnnotations` workloads are allowed to request
 
 🔐 Remember: No security mechanism is effective without strong authentication and authorization. In Kubernetes, security begins with controlling who can access what — user identities , RBAC policies and MutatingAdmissionPolicies/ValidatingAdmissionPolicy to form the foundation of your cluster's defense.
+
+### 🔁 Rotating the signing CA
+
+> [!CAUTION]
+> **The sample CA that used to ship with this repository is not a secret.** `examples/ca_tls_secret.yaml` carried a CA private key in plain sight. It is removed from `HEAD` by [#37](https://github.com/rafpe/pod-certificate-signer/pull/37), which replaces it with an ephemeral CA generated at install time — but deleting a file does not unpublish a key, and it remains readable in git history. Anyone can recover it and mint certificates your workloads would trust. If that CA was ever loaded into a cluster that matters, treat it as compromised: rotate now, and treat every certificate issued under it as untrusted.
+
+Rotation is a secret update — there is nothing to restart:
+
+```sh
+kubectl create secret tls podcertificate-signer-ca \
+  --namespace pcs-system \
+  --cert=new-ca.pem \
+  --key=new-ca-key.pem \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+What happens next:
+
+1. **The controller hot-reloads.** It watches the mounted CA files and reloads them in place, so new certificates are signed by the new CA without a rollout. Kubelet refreshes a mounted secret on its sync period (up to ~1 minute), so allow a short delay — and mount the secret as a plain volume, since a `subPath` mount is **never** updated after the pod starts.
+2. **The old CA stays trusted.** The controller republishes its `ClusterTrustBundle` with the new CA followed by the previous ones, keeping up to `--max-previous-ca-certs` (default `2`) of them. Workloads that mount the bundle (see [Requesting PodCertificates for your workload](#requesting-podcertificates-for-your-workload)) therefore keep verifying peers that are still holding a certificate from the old CA.
+3. **Certificates drain on their own.** Already-issued certificates remain valid until they expire — at most the request's `duration` (default `24h`, capped by `maxExpirationSeconds`) — and kubelet then requests a fresh one from the new CA.
+
+> [!IMPORTANT]
+> Leave **at least one full certificate lifetime** between rotations. Rotating more than `--max-previous-ca-certs` times inside that window drops the oldest CA out of the published bundle while certificates signed by it are still in use, and those workloads will fail peer verification. If you must rotate faster, raise `--max-previous-ca-certs` first.
+
+The retained history survives a restart: on startup the controller reseeds it from the `ClusterTrustBundle` it already published, so a rotation performed while the controller was down still keeps the previous CA trusted.
 
 ## 📦 Release process
 
