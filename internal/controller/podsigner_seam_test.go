@@ -55,17 +55,18 @@ func newSigningHarness(t *testing.T, stub *stubSigner) (*PodCertificateRequestRe
 		t.Fatalf("marshal PKIX public key: %v", err)
 	}
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "mypod", Namespace: "ns"}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "mypod", Namespace: "ns", UID: "pod-uid"}}
 	pcr := &capiv1beta1.PodCertificateRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns"},
 		Spec: capiv1beta1.PodCertificateRequestSpec{
 			PodName:       "mypod",
+			PodUID:        "pod-uid",
 			PKIXPublicKey: pkixKey,
 		},
 	}
 
 	cl := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(pod).Build()
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), Signer: stub}
+	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), Signer: stub}
 	ctx := logr.NewContext(context.Background(), logr.Discard())
 	return r, pcr, ctx
 }

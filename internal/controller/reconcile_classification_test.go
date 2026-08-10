@@ -24,18 +24,18 @@ func testPCR() *capiv1beta1.PodCertificateRequest {
 	}
 }
 
-// process() must classify a missing pod as terminal AssociatedPodNotFound.
-func TestProcessPodNotFoundIsTerminal(t *testing.T) {
+// process() must drop (nil, nil) when the pod is absent from both the cache and
+// a live read: the request is stale, not a terminal failure to sign.
+func TestProcessPodNotFoundDropsAsStale(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard()}
+	// The drop path emits an event; see TestReconcileDroppedGonePodEmitsEvent.
+	r := &PodCertificateRequestReconciler{
+		Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10),
+	}
 
 	cert, err := r.process(context.Background(), testPCR())
-	if cert != nil {
-		t.Fatalf("cert = %v, want nil", cert)
-	}
-	var te *TerminalError
-	if !errors.As(err, &te) || te.Reason != ReasonAssociatedPodNotFound {
-		t.Fatalf("err = %v, want terminal ReasonAssociatedPodNotFound", err)
+	if cert != nil || err != nil {
+		t.Fatalf("got (%v, %v), want (nil, nil) drop for a stale request", cert, err)
 	}
 }
 
@@ -92,7 +92,7 @@ func TestRecordFailureTerminalWritesCondition(t *testing.T) {
 		Build()
 	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
 
-	res, err := r.recordFailure(context.Background(), pcr, failed(ReasonSigningFailed, errors.New("x")))
+	res, err := r.recordFailure(context.Background(), pcr, failed(errors.New("x")))
 	if err != nil {
 		t.Fatalf("recordFailure returned err = %v, want nil", err)
 	}
@@ -149,7 +149,7 @@ func TestRecordFailureWriteErrorRequeues(t *testing.T) {
 		Build()
 	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
 
-	if _, err := r.recordFailure(context.Background(), pcr, failed(ReasonSigningFailed, errors.New("boom"))); !errors.Is(err, writeErr) {
+	if _, err := r.recordFailure(context.Background(), pcr, failed(errors.New("boom"))); !errors.Is(err, writeErr) {
 		t.Fatalf("err = %v, want the status-write error returned for requeue", err)
 	}
 }

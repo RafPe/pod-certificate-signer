@@ -43,7 +43,7 @@ func TestRecordTerminal(t *testing.T) {
 		err      error
 		wantType string
 	}{
-		{"failed clears fields", failed(ReasonSigningFailed, errors.New("sign broke")), "Failed"},
+		{"failed clears fields", failed(errors.New("sign broke")), "Failed"},
 		{"denied clears fields", denied(ReasonUnsupportedKeyType, errors.New("bad key")), "Denied"},
 	}
 
