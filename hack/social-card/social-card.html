@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pod-certificate-signer social card</title>
+<style>
+  /* Palette reconstructed from assets/logo.png */
+  :root {
+    --cream:      #FDF6E7; /* logo background (sampled from assets/logo.png) */
+    --cream-deep: #F3E8CD; /* scroll parchment */
+    --navy:       #1D2D44; /* outlines / wordmark */
+    --blue:       #64A0C8; /* mascot body */
+    --blue-deep:  #3E7CA8; /* mascot shading */
+    --blue-soft:  #88AAEE; /* K8s wheel heptagon */
+    --gold:       #F2B92E; /* certificate seal */
+    --green:      #58B432; /* padlock / ribbon */
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body { width: 1280px; height: 640px; overflow: hidden; }
+
+  body {
+    position: relative;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--cream);
+    color: var(--navy);
+  }
+
+  /* mascot cropped out of assets/logo.png (1024x1024):
+     region x:185..965 y:35..785 shown at scale 0.62 via
+     background-size/-position, which excludes the wordmark
+     baked into the bottom of the logo. */
+  .mascot {
+    --scale: 0.62;
+    position: absolute;
+    right: 44px;
+    top: 50%;
+    transform: translateY(-50%);
+    width:  calc(780px * var(--scale));
+    height: calc(750px * var(--scale));
+    background-image: url("../../assets/logo.png");
+    background-size: calc(1024px * var(--scale)) calc(1024px * var(--scale));
+    background-position: calc(-185px * var(--scale)) calc(-35px * var(--scale));
+    background-repeat: no-repeat;
+  }
+
+  .text {
+    position: absolute;
+    left: 72px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 660px;
+  }
+
+  .kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 23px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--blue-deep);
+    margin-bottom: 22px;
+  }
+  .kicker::before {
+    content: "";
+    width: 34px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--gold);
+  }
+
+  h1 {
+    font-size: 64px;
+    line-height: 1.06;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin-bottom: 24px;
+  }
+  h1 .dim { color: var(--blue-deep); }
+
+  .tagline {
+    font-size: 27px;
+    line-height: 1.4;
+    font-weight: 400;
+    color: #3A4A63;
+    margin-bottom: 34px;
+    max-width: 620px;
+  }
+  .tagline strong { color: var(--navy); font-weight: 600; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 40px; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 20px;
+    font-weight: 600;
+    padding: 9px 18px;
+    border-radius: 999px;
+    background: rgba(29, 45, 68, 0.05);
+    border: 2px solid rgba(29, 45, 68, 0.14);
+  }
+  .chip .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .chip.blue  .dot { background: var(--blue); }
+  .chip.gold  .dot { background: var(--gold); }
+  .chip.green .dot { background: var(--green); }
+
+  .repo {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 21px;
+    font-weight: 500;
+    color: #52627D;
+  }
+  .repo svg { width: 24px; height: 24px; fill: #52627D; }
+
+  /* bottom accent bar in palette colors */
+  .accent {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 10px;
+    background: linear-gradient(90deg,
+      var(--navy) 0 25%,
+      var(--blue) 25% 50%,
+      var(--gold) 50% 75%,
+      var(--green) 75% 100%);
+  }
+</style>
+</head>
+<body>
+  <div class="mascot"></div>
+
+  <div class="text">
+    <div class="kicker">Kubernetes &middot; PodCertificateRequest signer</div>
+    <h1>pod<span class="dim">-</span>certificate<span class="dim">-</span>signer</h1>
+    <p class="tagline">Short-lived <strong>x509 certificates</strong> for your pods, issued from
+      <strong>your own CA</strong> &mdash; fully native, no external tooling.</p>
+    <div class="chips">
+      <span class="chip green"><span class="dot"></span>mTLS-ready</span>
+      <span class="chip gold"><span class="dot"></span>Your own CA</span>
+      <span class="chip blue"><span class="dot"></span>ClusterTrustBundle</span>
+    </div>
+    <div class="repo">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      github.com/rafpe/pod-certificate-signer
+    </div>
+  </div>
+
+  <div class="accent"></div>
+</body>
+</html>
