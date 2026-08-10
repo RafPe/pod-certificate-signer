@@ -190,6 +190,18 @@ The scheme for configuration keys is `signer-domain/name-<configuration-item>: <
 > [!NOTE]
 > Keys the signer does not recognize, as well as malformed values (e.g. an invalid duration), result in the request being **Denied** with reason `InvalidUnverifiedUserAnnotations`, as recommended by the Kubernetes API contract for signers.
 
+### 🔒 Identity constraints (default-secure)
+
+> [!IMPORTANT]
+> By default the signer only issues certificates for the **requesting pod's own verified identity**. A `cn`, `san` or `uris` value is accepted only when it resolves to an identity the signer derives from the apiserver-verified `PodCertificateRequest` fields — the pod's name, its canonical Kubernetes DNS forms (`<pod>.<ns>.pod[.<fqdn>]`, `<pod>.<ns>.svc[.<fqdn>]`), its SPIFFE ID, or its service account (`<sa>.<ns>` and the SA SPIFFE ID). Any other value is **Denied**, so a pod author cannot obtain a certificate for an identity it does not own (e.g. `kubernetes.default.svc` or another team's service).
+
+Because a value authored on a pod template is identical for every replica, the intended way to set per-pod identities is `${...}` interpolation of verified fields (see below); a literal `cn: "some-name.com"` that does not match the pod's verified identity is denied. `node.name` and `pod.uid` are available for interpolation but are **not** claimable as a certificate subject (a node identity belongs to the kubelet; a UID is opaque). `ip-san` values have no verified derivation and are denied.
+
+**Escape hatch (not recommended).** To lift these constraints — allowing arbitrary literal `cn`/`san`/`ip-san`/`uris` values — start the controller with `--allow-unverified-identities` (Helm: `signer.allow_unverified_identities: true`). Only do this if a `ValidatingAdmissionPolicy` (or equivalent) already restricts which annotations workloads may set.
+
+> [!WARNING]
+> **Breaking change.** Earlier releases issued certificates for arbitrary literal `cn`/`san`/`ip-san`/`uris` values and included `clientAuth` in the default extended key usage. Both defaults have changed: unverified identities are now denied, and the default EKU is `serverAuth` only. To restore the previous behaviour set `signer.allow_unverified_identities: true` **and** add `eku: server,client`; the recommended migration is to switch literal values to `${...}` interpolation and request client auth explicitly with the `eku` annotation.
+
 ### 🧩 Interpolating pod identity into certificate values
 
 > [!IMPORTANT]
@@ -226,6 +238,9 @@ Unknown variables and unterminated placeholders deny the request with reason `In
 Upstream Kubernetes plans to let pod authors request DNS and IP SANs which kubelet embeds in the PKCS#10 CSR of the `PodCertificateRequest` (today kubelet generates completely empty CSRs). The controller is ready for this behind the `--honor-csr-sans` feature flag (Helm: `signer.honor_csr_sans`, disabled by default): when enabled, CSR-requested DNS and IP SANs are used unless a `san`/`ip-san` annotation overrides them. While disabled, CSR SANs are ignored, which the Kubernetes API contract explicitly allows for signers.
 
 Until then, IP SANs can be requested via the `ip-san` annotation — once kubelet gains native SAN support, the same values move into the pod spec and the annotation simply becomes the override.
+
+> [!NOTE]
+> An IP address has no verified derivation from the request fields, so the `ip-san` annotation is **denied by default** and requires `--allow-unverified-identities` (Helm: `signer.allow_unverified_identities: true`). See [Identity constraints](#-identity-constraints-default-secure).
 
 ### 🏷️ Configuration via Pod Annotations (deprecated)
 
@@ -421,11 +436,13 @@ The certificate configuration is validated against the constraints kube-apiserve
 
 - The certificate duration must be at least `1h` (kube-apiserver minimum) and must not exceed the request's `spec.maxExpirationSeconds` (set by the pod author on the projected volume, defaulted to `24h` by kube-apiserver). The default duration is automatically clamped to `maxExpirationSeconds`.
 - The refresh hint must lie within the window kube-apiserver accepts for `beginRefreshAt`: `refresh` must be at least `10m` and at most the certificate duration minus `10m`.
-- The `eku` annotation accepts the tokens `client` and `server` (comma-separated); unknown tokens deny the request. Certificates for non-RSA keys carry only the `digitalSignature` key usage.
+- The `eku` annotation accepts the tokens `client` and `server` (comma-separated); unknown tokens deny the request. **The default extended key usage is `serverAuth` only** — add `eku: server,client` (or `eku: client`) to request client authentication. Certificates for non-RSA keys carry only the `digitalSignature` key usage.
 
 ## ⌘ Controller commandline options
 Controller is customizable and supports the following arguments along with their default values
 ```
+  -allow-unverified-identities
+    	Allow annotation-provided cn/san/ip-san/uris values that do not resolve to the pod's verified identity. Off by default: unverified identities are denied and the default EKU is serverAuth only.
   -ca-cert-path string
     	CA certificate file.
   -ca-key-path string
