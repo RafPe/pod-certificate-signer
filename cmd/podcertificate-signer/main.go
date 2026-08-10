@@ -38,6 +38,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -150,7 +151,26 @@ func main() {
 		setupLog.Error(err, "unable to create API client")
 		os.Exit(1)
 	}
-	previousCAs := fetchPreviousCAs(ctx, c, signerName)
+	// Read the previous-CA history with bounded retry. A transient read error
+	// must not fall through to an empty history: publishing an empty bundle
+	// would drop previously-trusted CAs. If the history cannot be read, fail
+	// closed rather than risk overwriting the ClusterTrustBundle.
+	bootstrapBackoff := wait.Backoff{
+		Steps:    5,
+		Duration: 500 * time.Millisecond,
+		Factor:   2.0,
+		Jitter:   0.1,
+	}
+	var previousCAs []*x509.Certificate
+	if err := retry.OnError(bootstrapBackoff, func(error) bool { return true }, func() error {
+		var ferr error
+		previousCAs, ferr = fetchPreviousCAs(ctx, c, signerName)
+		return ferr
+	}); err != nil {
+		setupLog.Error(err, "unable to read existing CA history from ClusterTrustBundle; "+
+			"refusing to start to avoid dropping previously-trusted CAs")
+		os.Exit(1)
+	}
 	ca, err := authority.New(
 		caCertPath,
 		caKeyPath,
@@ -384,26 +404,30 @@ func displayCommandlineFlags() {
 	})
 }
 
-// fetchPreviousCAs attempts to read the existing ClusterTrustBundle for the
-// given signer and parse its PEM certificates. Returns nil if the bundle does
-// not exist or cannot be read.
-func fetchPreviousCAs(ctx context.Context, c client.Client, signerName string) []*x509.Certificate {
+// fetchPreviousCAs reads the existing ClusterTrustBundle for the given signer
+// and parses its PEM certificates, so previously-trusted CAs are retained
+// across a restart.
+//
+// A missing bundle is the normal first-run state and yields an empty history
+// with a nil error. Any other read error is returned so the caller can retry
+// or fail closed: silently returning an empty history would overwrite the
+// bundle on startup and drop previously-trusted CAs.
+func fetchPreviousCAs(ctx context.Context, c client.Client, signerName string) ([]*x509.Certificate, error) {
 	bundleName := signer.ClusterTrustBundleName(signerName)
 
 	bundle := &certificatesv1beta1.ClusterTrustBundle{}
 	if err := c.Get(ctx, client.ObjectKey{Name: bundleName}, bundle); err != nil {
 		if apierrors.IsNotFound(err) {
 			setupLog.Info("no existing ClusterTrustBundle found, starting with empty CA history", "name", bundleName)
-		} else {
-			setupLog.Error(err, "unable to read existing ClusterTrustBundle, starting with empty CA history", "name", bundleName)
+			return nil, nil
 		}
-		return nil
+		return nil, fmt.Errorf("read existing ClusterTrustBundle %q: %w", bundleName, err)
 	}
 
 	certs := parsePEMCertificates([]byte(bundle.Spec.TrustBundle))
 	setupLog.Info("bootstrapped previous CA certificates from ClusterTrustBundle", "name", bundleName, "count", len(certs))
 
-	return certs
+	return certs, nil
 }
 
 // parsePEMCertificates extracts x509 certificates from a PEM-encoded bundle.
