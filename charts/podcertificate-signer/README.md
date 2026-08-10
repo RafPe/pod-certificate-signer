@@ -49,6 +49,7 @@ helm install pcs oci://ghcr.io/rafpe/charts/podcertificate-signer \
 | `signer.max_previous_ca_certs` | Previous CAs retained in the ClusterTrustBundle across rotation. | `2` |
 | `signer.enable_annotation_interpolation` | Allow `${...}` placeholders in `cn`/`san`/`uris`, resolved from verified request fields. | `false` |
 | `signer.honor_csr_sans` | Honor SANs from the kubelet PKCS#10 CSR (forward-compat; kubelet emits empty CSRs today). | `false` |
+| **`signer.allow_unverified_identities`** | **Security escape hatch.** When `false`, annotation `cn`/`san`/`ip-san`/`uris` values must resolve to the pod's verified identity, and IP SANs are denied. See [Identity constraints](#identity-constraints-security). | `false` |
 | `manager.max_concurrent_reconciles` | Concurrent reconciles. | `5` |
 | `manager.reconcile_timeout` | Per-reconcile timeout. | `"5m"` |
 | `resources` | Container resource requests/limits (unset by default — set them in production). | `{}` |
@@ -56,6 +57,32 @@ helm install pcs oci://ghcr.io/rafpe/charts/podcertificate-signer \
 | `volumes` / `volumeMounts` | Mount the CA secret at `signer.ca_*_path` (required). | `[]` |
 | `podSecurityContext` / `securityContext` | PSS-restricted defaults (non-root, seccomp `RuntimeDefault`, read-only rootfs, drop `ALL`). | see `values.yaml` |
 | `autoscaling.enabled` | HPA (of limited use for a leader-elected controller). | `false` |
+
+## Identity constraints (security)
+
+By default (`signer.allow_unverified_identities: false`) the controller issues
+certificates **only for the requesting pod's own verified identity**. Annotation
+`cn`/`san`/`uris` values are accepted only when they resolve to an identity
+derived from the apiserver-verified request fields (the pod name, its canonical
+`*.pod`/`*.svc` DNS forms, its SPIFFE ID, and its service account); anything else
+is **Denied**. `ip-san` values are denied (no verified derivation), and the
+default extended key usage is `serverAuth` only.
+
+Set `signer.allow_unverified_identities: true` **only** if you intentionally trust
+pod authors to request arbitrary identities — ideally alongside a
+`ValidatingAdmissionPolicy` that restricts which `userAnnotations` workloads may
+set. Enabling it renders `--allow-unverified-identities` on the controller.
+
+> [!WARNING]
+> **Breaking change.** Literal identity values and `clientAuth` in the default
+> EKU are no longer granted by default. To keep the old behaviour set
+> `signer.allow_unverified_identities: true` and add the `eku: server,client`
+> annotation; prefer migrating to `${...}` interpolation. See the
+> [repository README](../../README.md#-identity-constraints-default-secure).
+
+> The `signer.allow_unverified_identities` value and this behaviour are
+> introduced together with the identity-constraint change (issue #26 / PR #38);
+> until that merges, the value is inert.
 
 ## Notes for this release
 
