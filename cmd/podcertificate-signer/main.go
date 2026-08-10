@@ -32,6 +32,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -121,22 +122,16 @@ func main() {
 	ctx := ctrl.SetupSignalHandler()
 	restCfg := ctrl.GetConfigOrDie()
 
-	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
-		Scheme:                  scheme,
-		HealthProbeBindAddress:  healthProbeBindAddress,
-		LeaderElection:          enableLeaderElection,
-		LeaderElectionID:        leaderElectionID,
-		LeaderElectionNamespace: leaderElectionNamespace,
-		BaseContext:             func() context.Context { return ctx },
-		Metrics: server.Options{
-			BindAddress: metricsBindAddress,
-		},
-		Controller: config.Controller{
-			MaxConcurrentReconciles: maxConcurrentReconciles,
-			RecoverPanic:            new(true),
-			ReconciliationTimeout:   reconcileTimeout,
-		},
-	})
+	mgr, err := ctrl.NewManager(restCfg, managerOptions(scheme, managerConfig{
+		healthProbeBindAddress:  healthProbeBindAddress,
+		metricsBindAddress:      metricsBindAddress,
+		leaderElection:          enableLeaderElection,
+		leaderElectionID:        leaderElectionID,
+		leaderElectionNamespace: leaderElectionNamespace,
+		maxConcurrentReconciles: maxConcurrentReconciles,
+		reconcileTimeout:        reconcileTimeout,
+		baseContext:             ctx,
+	}))
 
 	if err != nil {
 		setupLog.Error(err, "unable to create controller manager")
@@ -267,6 +262,49 @@ func validateFlags(signerName string) error {
 		return errors.New("the --signer-name flag is required")
 	}
 	return nil
+}
+
+// managerConfig carries the controller-manager settings resolved from CLI
+// flags. It exists so the option construction can be unit-tested without
+// parsing flags.
+type managerConfig struct {
+	healthProbeBindAddress  string
+	metricsBindAddress      string
+	leaderElection          bool
+	leaderElectionID        string
+	leaderElectionNamespace string
+	maxConcurrentReconciles int
+	reconcileTimeout        time.Duration
+	baseContext             context.Context
+}
+
+// managerOptions builds the controller-manager options from cfg.
+func managerOptions(scheme *runtime.Scheme, cfg managerConfig) ctrl.Options {
+	return ctrl.Options{
+		Scheme:                  scheme,
+		HealthProbeBindAddress:  cfg.healthProbeBindAddress,
+		LeaderElection:          cfg.leaderElection,
+		LeaderElectionID:        cfg.leaderElectionID,
+		LeaderElectionNamespace: cfg.leaderElectionNamespace,
+		BaseContext:             func() context.Context { return cfg.baseContext },
+		Metrics: server.Options{
+			BindAddress: cfg.metricsBindAddress,
+		},
+		Controller: config.Controller{
+			MaxConcurrentReconciles: cfg.maxConcurrentReconciles,
+			RecoverPanic:            new(true),
+			ReconciliationTimeout:   cfg.reconcileTimeout,
+		},
+		// Pods are excluded from the manager cache: the controller only does
+		// point Gets by name (and re-reads live via the APIReader for
+		// identity), so a cluster-wide pod informer would waste memory and
+		// require list/watch RBAC. Pod reads fall through to the API server.
+		Client: client.Options{
+			Cache: &client.CacheOptions{
+				DisableFor: []client.Object{&corev1.Pod{}},
+			},
+		},
+	}
 }
 
 // displayCommandlineFlags visits all CLI flags and prints them.
