@@ -281,49 +281,17 @@ func NewPodCertificateConfig(
 		config.CommonName = cn
 	}
 
-	// DNS SAN precedence: san annotation > CSR-requested SANs > defaults.
-	switch san, ok := lookup(AnnotationSuffixSAN); {
-	case ok:
-		san, err := expand(AnnotationSuffixSAN, san)
-		if err != nil {
-			return nil, err
-		}
-		names := splitAndTrim(san)
-		if len(names) == 0 {
-			return nil, fmt.Errorf("annotation %q contains no DNS names", annotationKey(signerName, AnnotationSuffixSAN))
-		}
-		if !opts.AllowUnverifiedIdentities {
-			for _, name := range names {
-				if err := assertVerifiedIdentity("DNS name", name, verified); err != nil {
-					return nil, err
-				}
-			}
-		}
-		config.DNSNames = names
-	case opts.HonorCSRSANs && len(opts.CSRDNSNames) > 0:
-		config.DNSNames = opts.CSRDNSNames
+	dnsNames, err := resolveDNSNames(lookup, expand, signerName, verified, opts.AllowUnverifiedIdentities, opts.HonorCSRSANs, opts.CSRDNSNames, config.DNSNames)
+	if err != nil {
+		return nil, err
 	}
+	config.DNSNames = dnsNames
 
-	// IP SAN precedence: ip-san annotation > CSR-requested SANs > none. An IP
-	// address has no verified derivation from the request fields, so an
-	// ip-san annotation is denied unless unverified identities are allowed.
-	switch ipSAN, ok := lookup(AnnotationSuffixIPSAN); {
-	case ok:
-		if !opts.AllowUnverifiedIdentities {
-			return nil, fmt.Errorf("annotation %q: IP SANs are not derived from a verified pod identity and are denied; start the controller with --allow-unverified-identities to allow them", annotationKey(signerName, AnnotationSuffixIPSAN))
-		}
-		ipSAN, err := expand(AnnotationSuffixIPSAN, ipSAN)
-		if err != nil {
-			return nil, err
-		}
-		ips, err := parseIPs(ipSAN)
-		if err != nil {
-			return nil, fmt.Errorf("annotation %q: %w", annotationKey(signerName, AnnotationSuffixIPSAN), err)
-		}
-		config.IPAddresses = ips
-	case opts.HonorCSRSANs && len(opts.CSRIPAddresses) > 0:
-		config.IPAddresses = opts.CSRIPAddresses
+	ipAddresses, err := resolveIPAddresses(lookup, expand, signerName, opts.AllowUnverifiedIdentities, opts.HonorCSRSANs, opts.CSRIPAddresses)
+	if err != nil {
+		return nil, err
 	}
+	config.IPAddresses = ipAddresses
 
 	extKeyUsage, err := resolveExtKeyUsage(lookup, expand, config.ExtKeyUsage, signerName)
 	if err != nil {
@@ -590,6 +558,73 @@ func keyUsageFor(alg x509.PublicKeyAlgorithm) x509.KeyUsage {
 		return x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment
 	}
 	return x509.KeyUsageDigitalSignature
+}
+
+// resolveDNSNames applies the san-annotation > CSR-requested > default
+// precedence for DNS SANs and, when identity constraints are enforced, verifies
+// each resolved name against the pod's verified identity.
+func resolveDNSNames(
+	lookup func(string) (string, bool),
+	expand func(string, string) (string, error),
+	signerName string,
+	verified map[string]struct{},
+	allowUnverified, honorCSR bool,
+	csrDNSNames, defaults []string,
+) ([]string, error) {
+	san, ok := lookup(AnnotationSuffixSAN)
+	if !ok {
+		if honorCSR && len(csrDNSNames) > 0 {
+			return csrDNSNames, nil
+		}
+		return defaults, nil
+	}
+	san, err := expand(AnnotationSuffixSAN, san)
+	if err != nil {
+		return nil, err
+	}
+	names := splitAndTrim(san)
+	if len(names) == 0 {
+		return nil, fmt.Errorf("annotation %q contains no DNS names", annotationKey(signerName, AnnotationSuffixSAN))
+	}
+	if !allowUnverified {
+		for _, name := range names {
+			if err := assertVerifiedIdentity("DNS name", name, verified); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return names, nil
+}
+
+// resolveIPAddresses applies the ip-san-annotation > CSR-requested > none
+// precedence for IP SANs. An IP has no verified derivation from the request
+// fields, so the annotation is denied unless unverified identities are allowed.
+func resolveIPAddresses(
+	lookup func(string) (string, bool),
+	expand func(string, string) (string, error),
+	signerName string,
+	allowUnverified, honorCSR bool,
+	csrIPAddresses []net.IP,
+) ([]net.IP, error) {
+	ipSAN, ok := lookup(AnnotationSuffixIPSAN)
+	if !ok {
+		if honorCSR && len(csrIPAddresses) > 0 {
+			return csrIPAddresses, nil
+		}
+		return nil, nil
+	}
+	if !allowUnverified {
+		return nil, fmt.Errorf("annotation %q: IP SANs are not derived from a verified pod identity and are denied; start the controller with --allow-unverified-identities to allow them", annotationKey(signerName, AnnotationSuffixIPSAN))
+	}
+	ipSAN, err := expand(AnnotationSuffixIPSAN, ipSAN)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := parseIPs(ipSAN)
+	if err != nil {
+		return nil, fmt.Errorf("annotation %q: %w", annotationKey(signerName, AnnotationSuffixIPSAN), err)
+	}
+	return ips, nil
 }
 
 // resolveExtKeyUsage resolves the eku annotation, if present, into ExtKeyUsage
