@@ -45,9 +45,12 @@ spec:
             - --leader-elect={{ .Values.leader_election.enabled }}
             - --leader-election-id={{ include "podcertificate-signer.fullname" . }}
             - --leader-election-namespace={{ .Release.Namespace }}
-            - --ca-cert-path={{ .Values.signer.ca_cert_path }}
-            - --ca-key-path={{ .Values.signer.ca_key_path }}
+            {{- include "podcertificate-signer.validateCA" . }}
+            - --ca-cert-path={{ include "podcertificate-signer.caCertPath" . }}
+            - --ca-key-path={{ include "podcertificate-signer.caKeyPath" . }}
             - --signer-name={{ .Values.signer.name }}
+            - --cluster-fqdn={{ .Values.signer.cluster_fqdn }}
+            - --health-probe-bind-address={{ .Values.health.bind_address }}
             - --zap-log-level={{ .Values.log.level }}
             - --zap-encoder={{ .Values.log.encoder }}
             - --zap-time-encoding={{ .Values.log.time_encoding }}
@@ -89,13 +92,34 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with .Values.volumeMounts }}
+          {{- if or (eq .Values.signer.ca.source "secretRef") .Values.volumeMounts }}
           volumeMounts:
+            {{- if eq .Values.signer.ca.source "secretRef" }}
+            - name: signing-ca
+              mountPath: {{ .Values.signer.ca.secretRef.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
-      {{- with .Values.volumes }}
+      {{- if or (eq .Values.signer.ca.source "secretRef") .Values.volumes }}
       volumes:
+        {{- if eq .Values.signer.ca.source "secretRef" }}
+        - name: signing-ca
+          secret:
+            secretName: {{ .Values.signer.ca.secretRef.name }}
+            optional: false
+            # Project only the CA cert and key, never any other secret keys.
+            items:
+              - key: {{ .Values.signer.ca.secretRef.certKey }}
+                path: {{ .Values.signer.ca.secretRef.certKey }}
+              - key: {{ .Values.signer.ca.secretRef.keyKey }}
+                path: {{ .Values.signer.ca.secretRef.keyKey }}
+        {{- end }}
+        {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

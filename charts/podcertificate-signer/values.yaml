@@ -26,12 +26,34 @@ metrics:
 
 # PodCertificateRequest Signer settings
 signer:
-  # CA cert and private key
-  ca_cert_path: /app/signer/ca/tls.crt
-  ca_key_path: /app/signer/ca/tls.key
+  # Signing CA (certificate + private key) source.
+  #   secretRef — mount an existing Secret (RECOMMENDED). The private key stays in
+  #               a Secret and the chart wires a read-only volume for you; nothing
+  #               to plumb under .Values.volumes/.volumeMounts.
+  #   file      — you provide the cert/key files yourself via .Values.volumes and
+  #               .Values.volumeMounts at the paths below (advanced / BYO mount).
+  ca:
+    source: secretRef
+    secretRef:
+      # Name of an existing Secret (kubernetes.io/tls or Opaque) holding the CA
+      # cert and key. REQUIRED when source=secretRef; only these two keys are
+      # projected into the pod.
+      name: ""
+      certKey: tls.crt
+      keyKey: tls.key
+      mountPath: /app/signer/ca
+    file:
+      certPath: /app/signer/ca/tls.crt
+      keyPath: /app/signer/ca/tls.key
 
-  # Name of the signer
-  name: example.org/signer
+  # Name of the signer. Required - there is no default, so it must be set
+  # explicitly (e.g. --set signer.name=example.org/signer). An empty value
+  # makes the controller fail fast at startup.
+  name: ""
+
+  # FQDN of the cluster, used to build the default certificate DNS names
+  # (<pod>.<ns>.pod.<fqdn> / <pod>.<ns>.svc.<fqdn>).
+  cluster_fqdn: cluster.local
 
   # Max number of previous CA certificates to keep during a CA cert reload
   max_previous_ca_certs: 2

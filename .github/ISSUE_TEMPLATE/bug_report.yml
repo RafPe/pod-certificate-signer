@@ -1,0 +1,73 @@
+name: 🐛 Bug report
+description: Something isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill in as much detail as possible.
+        For security vulnerabilities, do **not** open a public issue — use
+        [GitHub security advisories](https://github.com/RafPe/pod-certificate-signer/security/advisories/new) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including what you expected to happen instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to reproduce the behavior (workload manifest, Helm values, etc.).
+      placeholder: |
+        1. Deploy the controller with ...
+        2. Create a pod with a podCertificate projected volume ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: input
+    id: controller-version
+    attributes:
+      label: Controller version
+      description: Image tag or chart version of pod-certificate-signer.
+      placeholder: v0.5.0
+    validations:
+      required: true
+  - type: input
+    id: kubernetes-version
+    attributes:
+      label: Kubernetes version
+      description: Output of `kubectl version`. The controller requires 1.35+ with the PodCertificateRequest feature gates enabled.
+      placeholder: v1.35.0
+    validations:
+      required: true
+  - type: dropdown
+    id: config-source
+    attributes:
+      label: Configuration source
+      description: How is the certificate configuration provided for the affected workload?
+      options:
+        - unverifiedUserAnnotations on the projected volume
+        - Pod annotations (deprecated)
+        - Defaults only (no per-workload configuration)
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Relevant configuration
+      description: The annotations / projected volume spec / Helm values involved (redact anything sensitive).
+      render: yaml
+  - type: textarea
+    id: logs
+    attributes:
+      label: Controller logs
+      description: Relevant log output from the controller pod (`kubectl logs`).
+      render: shell
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Anything else that helps — PodCertificateRequest status, events, cluster setup, etc.

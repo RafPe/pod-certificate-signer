@@ -137,11 +137,11 @@ kind-stop:  ## Tear down the local development Kind cluster.
 ##@ Build
 
 .PHONY: build
-build: manifests generate fmt vet | $(LOCALBIN)  ## Build manager binary.
+build: generate fmt vet | $(LOCALBIN)  ## Build manager binary.
 	$(GOCMD) build -o $(LOCALBIN)/manager cmd/podcertificate-signer/main.go
 
 .PHONY: run
-run: manifests generate fmt vet ## Run a controller from your host.
+run: generate fmt vet ## Run a controller from your host.
 	$(GOCMD) run ./cmd/podcertificate-signer/main.go
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
@@ -180,15 +180,48 @@ HELM_NAMESPACE ?= pcs-system
 HELM_RELEASE ?= podcertificate-signer
 ## Additional arguments to pass to helm commands
 HELM_EXTRA_ARGS ?=
+## Signer name to deploy with. The chart has no default (--signer-name is
+## required), so the example deploy must set one explicitly.
+SIGNER_NAME ?= example.org/signer
+
+## Dev deployments target the local kind cluster explicitly, so a stray
+## kubeconfig context can never point them at a real cluster. The cluster
+## defaults to the dev one but is overridable via KIND_CLUSTER (the e2e suite
+## sets KIND_CLUSTER=$(KIND_CLUSTER_E2E) in the environment, so `make
+## helm-install` invoked from e2e targets the e2e cluster, not pcs-dev).
+KIND_CLUSTER ?= $(KIND_CLUSTER_DEV)
+DEV_CONTEXT ?= kind-$(KIND_CLUSTER)
+## Ephemeral CA generated at install time. It lives under bin/ (gitignored) and
+## is created fresh on every run - it is never committed.
+DEV_CA_DIR ?= $(LOCALBIN)/dev-ca
+## Name of the TLS secret holding the ephemeral dev CA. Deliberately distinct
+## from the chart's default so it cannot collide with a real CA secret.
+DEV_CA_SECRET ?= podcertificate-signer-ca-dev
+
+.PHONY: dev-ca
+dev-ca: | $(LOCALBIN)  ## Generate an ephemeral self-signed dev CA (tls.crt/tls.key) under bin/.
+	@mkdir -p $(DEV_CA_DIR)
+	@if [ ! -s $(DEV_CA_DIR)/tls.key ] || [ ! -s $(DEV_CA_DIR)/tls.crt ]; then \
+		echo "Generating ephemeral dev CA in $(DEV_CA_DIR) ..."; \
+		openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+			-keyout $(DEV_CA_DIR)/tls.key -out $(DEV_CA_DIR)/tls.crt \
+			-days 30 -subj "/CN=podcertificate-signer-dev-ca" \
+			-addext "basicConstraints=critical,CA:TRUE" \
+			-addext "keyUsage=critical,keyCertSign,cRLSign"; \
+	fi
 
 .PHONY: helm-install
-helm-install:  ## Install the chart with the example CA secret and values. Assumes the image is loadable by the cluster.
-	$(KUBECTL) get ns $(HELM_NAMESPACE) || $(KUBECTL) create ns $(HELM_NAMESPACE)
-	$(KUBECTL) --namespace $(HELM_NAMESPACE) apply -f examples/ca_tls_secret.yaml
-	$(GO_TOOL) helm upgrade --install $(HELM_RELEASE) $(SRC_ROOT)/charts/podcertificate-signer \
+helm-install: dev-ca  ## Install the chart against the dev kind cluster with an ephemeral CA secret and values.
+	$(KUBECTL) --context $(DEV_CONTEXT) get ns $(HELM_NAMESPACE) || $(KUBECTL) --context $(DEV_CONTEXT) create ns $(HELM_NAMESPACE)
+	$(KUBECTL) --context $(DEV_CONTEXT) --namespace $(HELM_NAMESPACE) create secret tls $(DEV_CA_SECRET) \
+		--cert=$(DEV_CA_DIR)/tls.crt --key=$(DEV_CA_DIR)/tls.key \
+		--dry-run=client -o yaml | $(KUBECTL) --context $(DEV_CONTEXT) --namespace $(HELM_NAMESPACE) apply -f -
+	$(GO_TOOL) helm --kube-context $(DEV_CONTEXT) upgrade --install $(HELM_RELEASE) $(SRC_ROOT)/charts/podcertificate-signer \
 		--namespace $(HELM_NAMESPACE) \
 		--set image.repository=$(IMAGE_REPO) \
 		--set image.tag=$(IMAGE_TAG) \
+		--set signer.ca.secretRef.name=$(DEV_CA_SECRET) \
+		--set signer.name=$(SIGNER_NAME) \
 		--wait \
 		--timeout 5m \
 		--values examples/helm-values.yaml \
@@ -198,17 +231,17 @@ helm-install:  ## Install the chart with the example CA secret and values. Assum
 helm-deploy: kind-load-image helm-install  ## Deploy manager to the dev Kind cluster via Helm. Specify an image with IMAGE env var.
 
 .PHONY: helm-uninstall
-helm-uninstall: ## Uninstall the Helm release from the K8s cluster.
-	$(GO_TOOL) helm uninstall $(HELM_RELEASE) --namespace $(HELM_NAMESPACE) --ignore-not-found
+helm-uninstall: ## Uninstall the Helm release from the dev kind cluster.
+	$(GO_TOOL) helm --kube-context $(DEV_CONTEXT) uninstall $(HELM_RELEASE) --namespace $(HELM_NAMESPACE) --ignore-not-found
 
 .PHONY: helm-status
 helm-status: ## Show Helm release status.
-	$(GO_TOOL) helm status $(HELM_RELEASE) --namespace $(HELM_NAMESPACE)
+	$(GO_TOOL) helm --kube-context $(DEV_CONTEXT) status $(HELM_RELEASE) --namespace $(HELM_NAMESPACE)
 
 .PHONY: helm-history
 helm-history: ## Show Helm release history.
-	$(GO_TOOL) helm history $(HELM_RELEASE) --namespace $(HELM_NAMESPACE)
+	$(GO_TOOL) helm --kube-context $(DEV_CONTEXT) history $(HELM_RELEASE) --namespace $(HELM_NAMESPACE)
 
 .PHONY: helm-rollback
 helm-rollback: ## Rollback to previous Helm release.
-	$(GO_TOOL) helm rollback $(HELM_RELEASE) --namespace $(HELM_NAMESPACE)
+	$(GO_TOOL) helm --kube-context $(DEV_CONTEXT) rollback $(HELM_RELEASE) --namespace $(HELM_NAMESPACE)

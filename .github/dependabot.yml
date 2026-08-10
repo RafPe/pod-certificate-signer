@@ -1,0 +1,82 @@
+# Dependabot configuration.
+#
+# Every entry sets exactly one release/* label because
+# .github/workflows/pr-labels.yml fails any PR to main without one:
+#   release/patch -> the update ships in the released binary/image
+#   release/skip  -> build tooling / CI only, nothing shipped
+version: 2
+updates:
+  # Runtime dependencies of the signer binary.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+    open-pull-requests-limit: 5
+    labels:
+      - "release/patch"
+    commit-message:
+      prefix: "build"
+      include: "scope"
+    groups:
+      # k8s.io/* and sigs.k8s.io/* move in lockstep with the Kubernetes
+      # minor pinned by controller-runtime — bump them together.
+      kubernetes:
+        patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
+
+  # Tool-only module (golangci-lint, helm, controller-gen, setup-envtest,
+  # kind). One grouped PR — golangci-lint alone drags in hundreds of
+  # indirect dependencies.
+  - package-ecosystem: "gomod"
+    directory: "/internal/tools"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+    open-pull-requests-limit: 2
+    labels:
+      - "release/skip"
+    commit-message:
+      prefix: "build"
+      include: "scope"
+    groups:
+      tools:
+        patterns:
+          - "*"
+
+  # Keeps the SHA-pinned actions (and their trailing version comments)
+  # in .github/workflows/ fresh.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+    open-pull-requests-limit: 2
+    labels:
+      - "release/skip"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # Keeps the tag@digest pins in the root Dockerfile fresh
+  # (golang builder + distroless base).
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+    open-pull-requests-limit: 2
+    labels:
+      - "release/patch"
+    commit-message:
+      prefix: "build"
+      include: "scope"
