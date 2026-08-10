@@ -4,11 +4,13 @@ run:
 linters:
   default: none
   enable:
+    - bodyclose
     - copyloopvar
     - dupl
     - errcheck
     - ginkgolinter
     - gocyclo
+    - gosec
     - govet
     - ineffassign
     - lll
@@ -31,12 +33,15 @@ linters:
     generated: lax
     rules:
       - linters:
-          - lll
-        path: api/*
-      - linters:
           - dupl
           - lll
         path: internal/*
+      # Tests legitimately shell out to helm/git/kubectl and read fixture
+      # files by path; G204/G304 on that test-only code is noise, not risk.
+      - linters:
+          - gosec
+        text: "G204|G304"
+        path: _test\.go
     paths:
       - third_party$
       - builtin$
