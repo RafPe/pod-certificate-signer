@@ -11,10 +11,8 @@ README](../../README.md).
 
 - Kubernetes **≥ 1.35** with the `PodCertificateRequest` feature gate and the
   `certificates.k8s.io/v1beta1` runtime config enabled (`kubeVersion: ">= 1.35.0"`).
-- A **CA key pair** made available to the controller as a mounted secret. You
-  provide your own CA — the chart does **not** ship one. Create it, then point
-  the chart's `volumes`/`volumeMounts` at it so the files land at
-  `signer.ca_cert_path` / `signer.ca_key_path` (defaults under `/app/signer/ca`).
+- A **CA key pair**. You provide your own CA — the chart does **not** ship one.
+  Create a Secret and reference it (see [Providing the CA](#providing-the-ca)):
 
 ```bash
 kubectl create secret tls podcertificate-signer-ca \
@@ -23,14 +21,54 @@ kubectl create secret tls podcertificate-signer-ca \
 
 ## Install
 
-`signer.name` is **required** — there is no default, so it must be set explicitly:
+`signer.name` and a CA source are **required**:
 
 ```bash
 helm install pcs oci://ghcr.io/rafpe/charts/podcertificate-signer \
   -n pcs-system --create-namespace \
   --set signer.name=example.org/signer \
-  -f my-values.yaml     # must mount the CA secret via volumes/volumeMounts
+  --set signer.ca.secretRef.name=podcertificate-signer-ca
 ```
+
+## Providing the CA
+
+The signing CA is configured under `signer.ca` with an explicit `source`:
+
+- **`secretRef` (recommended, default):** mount an existing Secret. The private
+  key stays in a Secret, the chart wires a **read-only** volume for you, and only
+  the CA cert + key are projected into the pod — no `volumes`/`volumeMounts` to
+  plumb. `signer.ca.secretRef.name` is **required**; an empty name fails
+  `helm install`/`upgrade` at render time rather than crash-looping the pod.
+
+  ```yaml
+  signer:
+    ca:
+      source: secretRef
+      secretRef:
+        name: podcertificate-signer-ca   # existing kubernetes.io/tls or Opaque Secret
+        certKey: tls.crt                  # key in the Secret holding the cert
+        keyKey: tls.key                   # key in the Secret holding the private key
+        mountPath: /app/signer/ca
+  ```
+
+- **`file` (advanced / BYO mount):** you mount the cert/key yourself via
+  `.Values.volumes` / `.Values.volumeMounts` and point at them:
+
+  ```yaml
+  signer:
+    ca:
+      source: file
+      file:
+        certPath: /app/signer/ca/tls.crt
+        keyPath: /app/signer/ca/tls.key
+  volumes: [ ... ]        # your own mount landing the files at the paths above
+  volumeMounts: [ ... ]
+  ```
+
+> Chart values changed here: the old `signer.ca_cert_path` / `signer.ca_key_path`
+> are replaced by the `signer.ca` block above. `secretRef` mode replaces the
+> manual `volumes`/`volumeMounts` CA wiring; use `source: file` to keep the old
+> bring-your-own-mount behaviour.
 
 ## Values
 
@@ -45,7 +83,10 @@ helm install pcs oci://ghcr.io/rafpe/charts/podcertificate-signer \
 | `log.level` / `log.encoder` / `log.time_encoding` | zap logging config. | `info` / `console` / `rfc3339` |
 | **`signer.name`** | **Required.** Signer name this controller claims (`spec.signerName`). Empty makes the controller fail fast at startup. | `""` |
 | **`signer.cluster_fqdn`** | Cluster FQDN used to build the default certificate DNS names (`<pod>.<ns>.pod.<fqdn>` / `<pod>.<ns>.svc.<fqdn>`); rendered as `--cluster-fqdn`. | `cluster.local` |
-| `signer.ca_cert_path` / `signer.ca_key_path` | Mounted CA cert / key paths. | `/app/signer/ca/tls.crt` / `.../tls.key` |
+| `signer.ca.source` | CA source: `secretRef` (recommended) or `file`. See [Providing the CA](#providing-the-ca). | `secretRef` |
+| `signer.ca.secretRef.name` | Existing Secret with the CA cert+key. **Required** when `source=secretRef`. | `""` |
+| `signer.ca.secretRef.certKey` / `.keyKey` / `.mountPath` | Secret keys projected and where they mount. | `tls.crt` / `tls.key` / `/app/signer/ca` |
+| `signer.ca.file.certPath` / `.keyPath` | CA paths when `source=file` (you mount them yourself). | `/app/signer/ca/tls.crt` / `.../tls.key` |
 | `signer.max_previous_ca_certs` | Previous CAs retained in the ClusterTrustBundle across rotation. | `2` |
 | `signer.enable_annotation_interpolation` | Allow `${...}` placeholders in `cn`/`san`/`uris`, resolved from verified request fields. | `false` |
 | `signer.honor_csr_sans` | Honor SANs from the kubelet PKCS#10 CSR (forward-compat; kubelet emits empty CSRs today). | `false` |
@@ -54,7 +95,7 @@ helm install pcs oci://ghcr.io/rafpe/charts/podcertificate-signer \
 | `manager.reconcile_timeout` | Per-reconcile timeout. | `"5m"` |
 | `resources` | Container resource requests/limits (unset by default — set them in production). | `{}` |
 | `serviceAccount.create` / `serviceAccount.automount` | ServiceAccount management. | `true` / `true` |
-| `volumes` / `volumeMounts` | Mount the CA secret at `signer.ca_*_path` (required). | `[]` |
+| `volumes` / `volumeMounts` | Extra volumes/mounts. Only needed to mount the CA yourself when `signer.ca.source=file`; `secretRef` mode wires the CA volume for you. | `[]` |
 | `podSecurityContext` / `securityContext` | PSS-restricted defaults (non-root, seccomp `RuntimeDefault`, read-only rootfs, drop `ALL`). | see `values.yaml` |
 | `autoscaling.enabled` | HPA (of limited use for a leader-elected controller). | `false` |
 

@@ -220,7 +220,7 @@ helm-install: dev-ca  ## Install the chart against the dev kind cluster with an 
 		--namespace $(HELM_NAMESPACE) \
 		--set image.repository=$(IMAGE_REPO) \
 		--set image.tag=$(IMAGE_TAG) \
-		--set 'volumes[0].secret.secretName=$(DEV_CA_SECRET)' \
+		--set signer.ca.secretRef.name=$(DEV_CA_SECRET) \
 		--set signer.name=$(SIGNER_NAME) \
 		--wait \
 		--timeout 5m \
