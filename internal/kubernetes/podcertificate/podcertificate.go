@@ -168,6 +168,15 @@ type Options struct {
 	// when disabled, CSR SANs are ignored, which the API contract
 	// explicitly allows for signers.
 	HonorCSRSANs bool
+	// AllowUnverifiedIdentities lifts the requirement that annotation-provided
+	// cn/san/ip-san/uris values resolve to an identity derived from the
+	// apiserver-verified PodCertificateRequest fields (pod name/namespace/
+	// serviceAccountName/uid + cluster FQDN). It is off by default: without it,
+	// values that do not derive from a verified identity are denied, so a pod
+	// cannot request a certificate for an identity it does not own. IP SANs and
+	// arbitrary literals have no verified derivation and are always denied when
+	// this is false.
+	AllowUnverifiedIdentities bool
 	// CSRDNSNames are the DNS SANs requested via the PKCS#10 CSR.
 	CSRDNSNames []string
 	// CSRIPAddresses are the IP SANs requested via the PKCS#10 CSR.
@@ -236,8 +245,16 @@ func NewPodCertificateConfig(
 		duration = maxExpiration
 	}
 
+	// When identity constraints are enforced (the default), annotation-derived
+	// cn/san/uris values must resolve to one of the identities the signer would
+	// itself derive from the verified request fields; anything else is denied.
+	var verified map[string]struct{}
+	if !opts.AllowUnverifiedIdentities {
+		verified = verifiedIdentities(pcr, clusterFQDN)
+	}
+
 	config := &PodCertificateConfig{
-		CommonName: pod.Name,
+		CommonName: defaultCommonName(pod.Name),
 		DNSNames: []string{
 			fmt.Sprintf("%s.%s.pod.%s", pod.Name, pod.Namespace, clusterFQDN),
 			fmt.Sprintf("%s.%s.svc.%s", pod.Name, pod.Namespace, clusterFQDN),
@@ -246,7 +263,7 @@ func NewPodCertificateConfig(
 		RefreshBefore:      DefaultRefreshBefore,
 		MaxExpiration:      maxExpiration,
 		KeyUsage:           keyUsageFor(publicKeyAlgorithm),
-		ExtKeyUsage:        []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		ExtKeyUsage:        []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		PublicKey:          publicKey,
 		PublicKeyAlgorithm: publicKeyAlgorithm,
 	}
@@ -256,40 +273,25 @@ func NewPodCertificateConfig(
 		if err != nil {
 			return nil, err
 		}
+		if !opts.AllowUnverifiedIdentities {
+			if err := assertVerifiedIdentity("common name", cn, verified); err != nil {
+				return nil, err
+			}
+		}
 		config.CommonName = cn
 	}
 
-	// DNS SAN precedence: san annotation > CSR-requested SANs > defaults.
-	switch san, ok := lookup(AnnotationSuffixSAN); {
-	case ok:
-		san, err := expand(AnnotationSuffixSAN, san)
-		if err != nil {
-			return nil, err
-		}
-		names := splitAndTrim(san)
-		if len(names) == 0 {
-			return nil, fmt.Errorf("annotation %q contains no DNS names", annotationKey(signerName, AnnotationSuffixSAN))
-		}
-		config.DNSNames = names
-	case opts.HonorCSRSANs && len(opts.CSRDNSNames) > 0:
-		config.DNSNames = opts.CSRDNSNames
+	dnsNames, err := resolveDNSNames(lookup, expand, signerName, verified, opts.AllowUnverifiedIdentities, opts.HonorCSRSANs, opts.CSRDNSNames, config.DNSNames)
+	if err != nil {
+		return nil, err
 	}
+	config.DNSNames = dnsNames
 
-	// IP SAN precedence: ip-san annotation > CSR-requested SANs > none.
-	switch ipSAN, ok := lookup(AnnotationSuffixIPSAN); {
-	case ok:
-		ipSAN, err := expand(AnnotationSuffixIPSAN, ipSAN)
-		if err != nil {
-			return nil, err
-		}
-		ips, err := parseIPs(ipSAN)
-		if err != nil {
-			return nil, fmt.Errorf("annotation %q: %w", annotationKey(signerName, AnnotationSuffixIPSAN), err)
-		}
-		config.IPAddresses = ips
-	case opts.HonorCSRSANs && len(opts.CSRIPAddresses) > 0:
-		config.IPAddresses = opts.CSRIPAddresses
+	ipAddresses, err := resolveIPAddresses(lookup, expand, signerName, opts.AllowUnverifiedIdentities, opts.HonorCSRSANs, opts.CSRIPAddresses)
+	if err != nil {
+		return nil, err
 	}
+	config.IPAddresses = ipAddresses
 
 	extKeyUsage, err := resolveExtKeyUsage(lookup, expand, config.ExtKeyUsage, signerName)
 	if err != nil {
@@ -305,6 +307,13 @@ func NewPodCertificateConfig(
 		parsed, err := parseURIs(uris)
 		if err != nil {
 			return nil, fmt.Errorf("annotation %q: %w", annotationKey(signerName, AnnotationSuffixURIs), err)
+		}
+		if !opts.AllowUnverifiedIdentities {
+			for _, uri := range parsed {
+				if err := assertVerifiedIdentity("URI", uri.String(), verified); err != nil {
+					return nil, err
+				}
+			}
 		}
 		config.URIs = parsed
 	}
@@ -334,10 +343,15 @@ func NewPodCertificateConfig(
 // endless requeue loop caused by rejected status updates.
 func (pcc *PodCertificateConfig) Validate() error {
 	if pcc.CommonName == "" {
-		return errors.New("common name is required")
-	}
-	// RFC 5280 ub-common-name; easily exceeded by interpolated pod names.
-	if len(pcc.CommonName) > 64 {
+		// An empty common name is valid as long as the certificate still
+		// carries a subject alternative name to identify by. Go marks the SAN
+		// extension critical in that case, which is exactly what we want for a
+		// SAN-only certificate (see defaultCommonName for long pod names).
+		if len(pcc.DNSNames) == 0 && len(pcc.IPAddresses) == 0 && len(pcc.URIs) == 0 {
+			return errors.New("common name or at least one subject alternative name is required")
+		}
+	} else if len(pcc.CommonName) > 64 {
+		// RFC 5280 ub-common-name; easily exceeded by interpolated pod names.
 		return fmt.Errorf("common name %q exceeds the 64 character limit", pcc.CommonName)
 	}
 	if pcc.Duration < MinDuration {
@@ -428,6 +442,77 @@ func interpolate(value string, vars map[string]string, enabled bool) (string, er
 	return result, nil
 }
 
+// defaultCommonName returns the default certificate common name for a pod.
+// RFC 5280 caps the common name at 64 characters; for longer pod names it
+// returns an empty common name, leaving the certificate to be identified by
+// its subject alternative names (which carry the verifiable identity anyway).
+func defaultCommonName(podName string) string {
+	if len(podName) > 64 {
+		return ""
+	}
+	return podName
+}
+
+// verifiedIdentities returns the set of identity strings (common names, DNS
+// names and URIs) the signer is willing to emit for a request, computed solely
+// from its apiserver-verified fields. Resolved annotation values are accepted
+// only if they are members of this set, so a pod can never obtain a certificate
+// for an identity it does not own. The check is exact string equality on the
+// resolved value, which closes literal-injection loopholes such as
+// "${pod.name}.attacker.com".
+func verifiedIdentities(pcr *capiv1beta1.PodCertificateRequest, clusterFQDN string) map[string]struct{} {
+	ns := pcr.Namespace
+	pod := pcr.Spec.PodName
+	sa := pcr.Spec.ServiceAccountName
+
+	allowed := make(map[string]struct{})
+	add := func(values ...string) {
+		for _, v := range values {
+			if v != "" {
+				allowed[v] = struct{}{}
+			}
+		}
+	}
+
+	// The pod's own identities: its bare name, the canonical Kubernetes DNS
+	// forms (these are exactly what the signer emits by default), and its
+	// SPIFFE ID.
+	if pod != "" {
+		add(
+			pod,
+			pod+"."+ns,
+			pod+"."+ns+".pod",
+			pod+"."+ns+".svc",
+			pod+"."+ns+".pod."+clusterFQDN,
+			pod+"."+ns+".svc."+clusterFQDN,
+			"spiffe://"+clusterFQDN+"/ns/"+ns+"/pod/"+pod,
+		)
+	}
+
+	// The workload's service-account identity - the pod runs as this service
+	// account, so it may identify by it (short DNS form and SPIFFE ID).
+	//
+	// Deliberately excluded: node.name (belongs to the kubelet, not the
+	// workload) and pod.uid (an opaque, non-identifying token). Both remain
+	// available for ${...} interpolation but are not claimable as a subject.
+	if sa != "" {
+		add(
+			sa+"."+ns,
+			"spiffe://"+clusterFQDN+"/ns/"+ns+"/sa/"+sa,
+		)
+	}
+
+	return allowed
+}
+
+// assertVerifiedIdentity reports an error when value is not a verified identity.
+func assertVerifiedIdentity(kind, value string, allowed map[string]struct{}) error {
+	if _, ok := allowed[value]; !ok {
+		return fmt.Errorf("%s %q is not derived from a verified pod identity; build it from ${...} interpolation of verified fields, or start the controller with --allow-unverified-identities", kind, value)
+	}
+	return nil
+}
+
 // checkUnrecognizedUserAnnotations rejects unverifiedUserAnnotations keys the
 // signer does not recognize. Signers should deny such requests, see
 // https://pkg.go.dev/k8s.io/api/certificates/v1beta1#PodCertificateRequestSpec
@@ -473,6 +558,73 @@ func keyUsageFor(alg x509.PublicKeyAlgorithm) x509.KeyUsage {
 		return x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment
 	}
 	return x509.KeyUsageDigitalSignature
+}
+
+// resolveDNSNames applies the san-annotation > CSR-requested > default
+// precedence for DNS SANs and, when identity constraints are enforced, verifies
+// each resolved name against the pod's verified identity.
+func resolveDNSNames(
+	lookup func(string) (string, bool),
+	expand func(string, string) (string, error),
+	signerName string,
+	verified map[string]struct{},
+	allowUnverified, honorCSR bool,
+	csrDNSNames, defaults []string,
+) ([]string, error) {
+	san, ok := lookup(AnnotationSuffixSAN)
+	if !ok {
+		if honorCSR && len(csrDNSNames) > 0 {
+			return csrDNSNames, nil
+		}
+		return defaults, nil
+	}
+	san, err := expand(AnnotationSuffixSAN, san)
+	if err != nil {
+		return nil, err
+	}
+	names := splitAndTrim(san)
+	if len(names) == 0 {
+		return nil, fmt.Errorf("annotation %q contains no DNS names", annotationKey(signerName, AnnotationSuffixSAN))
+	}
+	if !allowUnverified {
+		for _, name := range names {
+			if err := assertVerifiedIdentity("DNS name", name, verified); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return names, nil
+}
+
+// resolveIPAddresses applies the ip-san-annotation > CSR-requested > none
+// precedence for IP SANs. An IP has no verified derivation from the request
+// fields, so the annotation is denied unless unverified identities are allowed.
+func resolveIPAddresses(
+	lookup func(string) (string, bool),
+	expand func(string, string) (string, error),
+	signerName string,
+	allowUnverified, honorCSR bool,
+	csrIPAddresses []net.IP,
+) ([]net.IP, error) {
+	ipSAN, ok := lookup(AnnotationSuffixIPSAN)
+	if !ok {
+		if honorCSR && len(csrIPAddresses) > 0 {
+			return csrIPAddresses, nil
+		}
+		return nil, nil
+	}
+	if !allowUnverified {
+		return nil, fmt.Errorf("annotation %q: IP SANs are not derived from a verified pod identity and are denied; start the controller with --allow-unverified-identities to allow them", annotationKey(signerName, AnnotationSuffixIPSAN))
+	}
+	ipSAN, err := expand(AnnotationSuffixIPSAN, ipSAN)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := parseIPs(ipSAN)
+	if err != nil {
+		return nil, fmt.Errorf("annotation %q: %w", annotationKey(signerName, AnnotationSuffixIPSAN), err)
+	}
+	return ips, nil
 }
 
 // resolveExtKeyUsage resolves the eku annotation, if present, into ExtKeyUsage

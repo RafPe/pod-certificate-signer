@@ -1,0 +1,80 @@
+# EXAMPLE ONLY — restrict which certificate Extended Key Usage (EKU) a workload
+# may request from pod-certificate-signer, per namespace.
+#
+# The signer itself does not police EKU beyond the `client`/`server` token set:
+# any pod may request `eku: client` (EKU only shapes a certificate the pod is
+# already entitled to, so it is not gated by --allow-unverified-identities). If
+# your policy is "only namespaces explicitly opted into client auth may request
+# it", enforce that at admission with a ValidatingAdmissionPolicy like this one.
+#
+# Model: the namespace label `pcs.example.org/eku-profile` selects the allowed
+# tokens:
+#   (unset) or "server" -> server only  (matches the signer's secure default)
+#   "client"            -> client only
+#   "both"              -> server and client
+# A Pod whose podCertificate projection requests an `eku` value outside its
+# namespace's profile is denied at admission.
+#
+# Adjust `signerName`, the label key, and the binding's match rules to fit your
+# environment, and dry-run it (`kubectl apply --dry-run=server`) on your target
+# cluster before enforcing. Not applied by the chart — `kubectl apply -f` it.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: pcs-eku-by-namespace
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  variables:
+    - name: signerName
+      expression: "'example.org/signer'"
+    - name: ekuKey
+      expression: "variables.signerName + '-eku'"
+    # The EKU tokens this namespace may request, from its eku-profile label.
+    - name: profile
+      expression: >-
+        has(namespaceObject.metadata.labels) && 'pcs.example.org/eku-profile' in namespaceObject.metadata.labels
+          ? namespaceObject.metadata.labels['pcs.example.org/eku-profile']
+          : 'server'
+    - name: allowedEku
+      expression: >-
+        variables.profile == 'both' ? ['server', 'client']
+          : (variables.profile == 'client' ? ['client'] : ['server'])
+  validations:
+    # Every podCertificate projection for this signer that sets an `eku` value
+    # must request only tokens allowed for the namespace. Pods with no volumes,
+    # no podCertificate projection, or no eku annotation are unaffected.
+    - expression: >-
+        !has(object.spec.volumes) ||
+        object.spec.volumes.all(v,
+          !has(v.projected) || !has(v.projected.sources) ||
+          v.projected.sources.all(s,
+            !has(s.podCertificate) ||
+            s.podCertificate.signerName != variables.signerName ||
+            !has(s.podCertificate.userAnnotations) ||
+            !(variables.ekuKey in s.podCertificate.userAnnotations) ||
+            s.podCertificate.userAnnotations[variables.ekuKey].split(',').all(token,
+              token.trim() in variables.allowedEku)
+          )
+        )
+      messageExpression: >-
+        'namespace ' + namespaceObject.metadata.name +
+        ' may only request certificate EKU [' + variables.allowedEku.join(', ') +
+        '] for signer ' + variables.signerName +
+        ' — widen it via the pcs.example.org/eku-profile namespace label (server|client|both)'
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: pcs-eku-by-namespace
+spec:
+  policyName: pcs-eku-by-namespace
+  validationActions: ["Deny"]
+  # Applies to all namespaces; the policy defaults unlabeled namespaces to
+  # server-only. Narrow with spec.matchResources.namespaceSelector if preferred.
+  matchResources: {}

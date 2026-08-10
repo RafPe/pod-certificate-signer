@@ -69,6 +69,16 @@ signer:
   # requesting SANs on the projected volume.
   honor_csr_sans: false
 
+  # Security flag: when false (the default), annotation-provided cn/san/ip-san/uris
+  # values must resolve to the requesting pod's apiserver-verified identity (its
+  # name, canonical DNS/SPIFFE forms and its service account); any other value is
+  # denied, so a pod cannot obtain a certificate for an identity it does not own.
+  # IP SANs have no verified derivation and are always denied while this is false.
+  # Set to true ONLY if you intentionally trust pod authors to request arbitrary
+  # identities - see the chart README "Identity constraints" section. This is the
+  # Helm escape hatch for the --allow-unverified-identities controller flag.
+  allow_unverified_identities: false
+
 # Controller manager settings
 manager:
   # Max concurrent reconciles

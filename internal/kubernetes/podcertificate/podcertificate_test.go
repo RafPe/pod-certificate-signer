@@ -70,7 +70,8 @@ func TestNewPodCertificateConfigUserAnnotationsPrecedence(t *testing.T) {
 	pod := testPod(map[string]string{testSignerName + "-cn": "from-pod"})
 	pcr := testPCR(map[string]string{testSignerName + "-cn": "from-pcr"})
 
-	config, err := NewPodCertificateConfig(pcr, pod, Options{}, nil, 0)
+	// Literal values require the unverified-identities opt-in.
+	config, err := NewPodCertificateConfig(pcr, pod, Options{AllowUnverifiedIdentities: true}, nil, 0)
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}
@@ -89,7 +90,8 @@ func TestNewPodCertificateConfigPodAnnotationFallback(t *testing.T) {
 		testSignerName + "-uris":     "spiffe://cluster/ns/myns/pod/mypod",
 	})
 
-	config, err := NewPodCertificateConfig(testPCR(nil), pod, Options{}, nil, 0)
+	// These are literal (non-derived) values, allowed only with the opt-in.
+	config, err := NewPodCertificateConfig(testPCR(nil), pod, Options{AllowUnverifiedIdentities: true}, nil, 0)
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}

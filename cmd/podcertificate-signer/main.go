@@ -74,6 +74,7 @@ func main() {
 	var healthProbeBindAddress, metricsBindAddress string
 	var maxConcurrentReconciles, maxPreviousCACerts int
 	var enableLeaderElection, enableAnnotationInterpolation, honorCSRSANs bool
+	var allowUnverifiedIdentities bool
 	var reconcileTimeout time.Duration
 
 	flag.StringVar(&signerName, "signer-name", "", "Only sign CSR with this .spec.signerName. Required.")
@@ -97,6 +98,10 @@ func main() {
 	flag.BoolVar(&honorCSRSANs, "honor-csr-sans", false,
 		"Honor DNS and IP SANs embedded in the kubelet-generated PKCS#10 CSR when no SAN annotation overrides them. "+
 			"Kubelet generates empty CSRs today; this prepares for upcoming Kubernetes support for requesting SANs.")
+	flag.BoolVar(&allowUnverifiedIdentities, "allow-unverified-identities", false,
+		"Allow cn/san/ip-san/uris annotation values that are not derived from the verified PodCertificateRequest fields "+
+			"(pod name/namespace/serviceAccountName/uid + cluster FQDN). Off by default: leaving it off prevents a pod from "+
+			"requesting a certificate for an identity it does not own.")
 
 	opts := zap.Options{
 		Development:     true,
@@ -228,6 +233,7 @@ func main() {
 		EventRecorder:                 mgr.GetEventRecorder(DefaultControllerName),
 		EnableAnnotationInterpolation: enableAnnotationInterpolation,
 		HonorCSRSANs:                  honorCSRSANs,
+		AllowUnverifiedIdentities:     allowUnverifiedIdentities,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PodCertificateSignerReconciler")
 		os.Exit(1)

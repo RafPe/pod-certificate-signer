@@ -54,7 +54,8 @@ func TestInterpolationDisabledPassesPlainValues(t *testing.T) {
 		testSignerName + "-cn": "plain-name.example.com",
 	})
 
-	config, err := NewPodCertificateConfig(pcr, testPod(nil), Options{}, nil, 0)
+	// A plain literal value requires the unverified-identities opt-in.
+	config, err := NewPodCertificateConfig(pcr, testPod(nil), Options{AllowUnverifiedIdentities: true}, nil, 0)
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}

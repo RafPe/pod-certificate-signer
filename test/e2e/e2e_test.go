@@ -87,11 +87,14 @@ var _ = Describe("Manager", Ordered, func() {
 		By("deploying the controller-manager via Helm")
 		// A single replica keeps the pod-targeted assertions (logs, pod
 		// phase) deterministic; the chart default is 2 for leader election.
-		// Annotation interpolation is enabled so the issuance spec can
-		// exercise ${...} placeholders.
+		// Interpolation is enabled so specs can use ${...} placeholders, and
+		// unverified identities are allowed so the issuance specs can exercise
+		// custom cn/san/ip-san/eku values end to end. Denial of unverified
+		// identities under the secure default is covered by the podcertificate
+		// unit tests (identity_constraints_test.go).
 		cmd = exec.Command("make", "helm-install",
 			fmt.Sprintf("IMAGE=%s", projectImage),
-			"HELM_EXTRA_ARGS=--set replicaCount=1 --set signer.enable_annotation_interpolation=true")
+			"HELM_EXTRA_ARGS=--set replicaCount=1 --set signer.enable_annotation_interpolation=true --set signer.allow_unverified_identities=true")
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 	})

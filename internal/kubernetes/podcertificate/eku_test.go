@@ -45,12 +45,15 @@ func TestEKUAnnotationInvalid(t *testing.T) {
 	}
 }
 
-func TestEKUDefaultUnchanged(t *testing.T) {
+func TestEKUDefaultServerAuthOnly(t *testing.T) {
 	config, err := NewPodCertificateConfig(testPCR(nil), testPod(nil), Options{}, nil, 0)
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}
-	want := []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+	// ClientAuth is an explicit opt-in (via the eku annotation); the default is
+	// ServerAuth only, so a leaked pod certificate cannot be replayed as a
+	// client credential.
+	want := []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
 	if !reflect.DeepEqual(config.ExtKeyUsage, want) {
 		t.Errorf("ExtKeyUsage = %v, want default %v", config.ExtKeyUsage, want)
 	}

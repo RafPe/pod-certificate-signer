@@ -99,6 +99,10 @@ type PodCertificateRequestReconciler struct {
 	// HonorCSRSANs uses DNS/IP SANs embedded in the kubelet-generated CSR
 	// (feature flag, off by default; kubelet generates empty CSRs today).
 	HonorCSRSANs bool
+	// AllowUnverifiedIdentities lifts the requirement that annotation-provided
+	// certificate identities derive from the verified request fields (feature
+	// flag, off by default; keeping it off is the safe, recommended posture).
+	AllowUnverifiedIdentities bool
 }
 
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests,verbs=get;list;watch
@@ -195,9 +199,10 @@ func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capi
 	}
 
 	configOpts := podcertificate.Options{
-		ClusterFQDN:         r.ClusterFqdn,
-		EnableInterpolation: r.EnableAnnotationInterpolation,
-		HonorCSRSANs:        r.HonorCSRSANs,
+		ClusterFQDN:               r.ClusterFqdn,
+		EnableInterpolation:       r.EnableAnnotationInterpolation,
+		HonorCSRSANs:              r.HonorCSRSANs,
+		AllowUnverifiedIdentities: r.AllowUnverifiedIdentities,
 	}
 	var publicKey crypto.PublicKey
 	var publicKeyAlgorithm x509.PublicKeyAlgorithm
