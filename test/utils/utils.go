@@ -62,6 +62,7 @@ func Run(cmd *exec.Cmd) (string, error) {
 // UninstallCertManager uninstalls the cert manager
 func UninstallCertManager() {
 	url := fmt.Sprintf(certmanagerURLTmpl, certmanagerVersion)
+	//nolint:gosec // G204: url is built from constant templates, not user input; e2e test helper only.
 	cmd := exec.Command("kubectl", "delete", "-f", url)
 	if _, err := Run(cmd); err != nil {
 		warnError(err)
@@ -73,6 +74,7 @@ func UninstallCertManager() {
 		"cert-manager-controller",
 	}
 	for _, lease := range kubeSystemLeases {
+		//nolint:gosec // G204: lease names are hard-coded constants; e2e test helper only.
 		cmd = exec.Command("kubectl", "delete", "lease", lease,
 			"-n", "kube-system", "--ignore-not-found", "--force", "--grace-period=0")
 		if _, err := Run(cmd); err != nil {
@@ -84,6 +86,7 @@ func UninstallCertManager() {
 // InstallCertManager installs the cert manager bundle.
 func InstallCertManager() error {
 	url := fmt.Sprintf(certmanagerURLTmpl, certmanagerVersion)
+	//nolint:gosec // G204: url is built from constant templates, not user input; e2e test helper only.
 	cmd := exec.Command("kubectl", "apply", "-f", url)
 	if _, err := Run(cmd); err != nil {
 		return err
@@ -144,6 +147,7 @@ func LoadImageToKindClusterWithName(name string) error {
 	if v, ok := os.LookupEnv("KIND"); ok {
 		kindBinary = v
 	}
+	//nolint:gosec // G204: kind binary/args come from env-configured constants; e2e test helper only.
 	cmd := exec.Command(kindBinary, kindOptions...)
 	_, err := Run(cmd)
 	return err
