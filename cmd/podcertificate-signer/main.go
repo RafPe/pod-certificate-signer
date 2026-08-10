@@ -25,11 +25,13 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap/zapcore"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
@@ -48,6 +50,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/controller"
@@ -67,6 +70,7 @@ const (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	metrics.Registry.MustRegister(ctbPublishFailuresTotal)
 
 	// +kubebuilder:scaffold:scheme
 }
@@ -232,6 +236,13 @@ func main() {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
+	// Also gate readiness on the ClusterTrustBundle publisher: a leader whose
+	// publishes keep failing must be pulled from readiness so the failure is
+	// visible and traffic/leadership can move elsewhere.
+	if err := mgr.AddReadyzCheck("clustertrustbundle", caReadyzCheck(ctbUpdater)); err != nil {
+		setupLog.Error(err, "unable to set up ClusterTrustBundle ready check")
+		os.Exit(1)
+	}
 
 	displayCommandlineFlags()
 
@@ -331,30 +342,63 @@ func (r *caWatchRunnable) Start(ctx context.Context) error {
 // NeedLeaderElection reports false so the CA watcher runs on every replica.
 func (*caWatchRunnable) NeedLeaderElection() bool { return false }
 
-// ctbPublisher keeps the signer's ClusterTrustBundle in sync with the current
-// CA. It publishes once when it starts and again on every CA reload event. It
+// ctbDriftRepairInterval is how often the publisher re-publishes the
+// ClusterTrustBundle even without a CA reload event, to repair external drift
+// (e.g. a manual edit or a lost event).
+const ctbDriftRepairInterval = 10 * time.Minute
+
+// ctbPublishFailuresTotal counts ClusterTrustBundle publish attempts that
+// failed after exhausting their retry budget. It is registered with the
+// controller-runtime metrics registry so it is scraped on the manager's
+// metrics endpoint.
+var ctbPublishFailuresTotal = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "ctb_publish_failures_total",
+	Help: "Total number of ClusterTrustBundle publish attempts that failed after retries.",
+})
+
+// ctbPublisher reconciles the signer's ClusterTrustBundle towards the current
+// CA. It publishes when it starts, on every CA reload event, and on a periodic
+// drift-repair tick. Publishes are retried with exponential backoff and are
+// single-flight (a reconcile triggered while one is in flight is coalesced). It
 // is leader-gated so only the elected leader writes the shared resource.
 type ctbPublisher struct {
-	client client.Client
-	signer *signer.Signer
-	ca     *authority.CertificateAuthority
-	events <-chan struct{}
+	client   client.Client
+	signer   *signer.Signer
+	ca       *authority.CertificateAuthority
+	events   <-chan struct{}
+	interval time.Duration
+	backoff  wait.Backoff
+	failures prometheus.Counter
+
+	// runMu is a single-flight guard: TryLock lets a reconcile skip when
+	// another is already publishing.
+	runMu sync.Mutex
+
+	// healthMu guards the most recent publish outcome, polled by readiness.
+	healthMu       sync.Mutex
+	lastPublishErr error
 }
 
 // Start publishes the ClusterTrustBundle on startup, so a newly-elected leader
-// publishes from the current in-memory CA, and then again on every CA reload
-// event, until ctx is canceled.
+// publishes from the current in-memory CA, then on every CA reload event and on
+// a periodic drift-repair tick, until ctx is canceled.
 func (r *ctbPublisher) Start(ctx context.Context) error {
 	logger := log.FromContext(ctx).WithName("cluster-trust-bundle")
-	logger.Info("starting ClusterTrustBundle updater")
+	logger.Info("starting ClusterTrustBundle publisher", "driftRepairInterval", r.interval)
 
-	r.publish(ctx, logger)
+	ticker := time.NewTicker(r.interval)
+	defer ticker.Stop()
+
+	r.reconcile(ctx, logger)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-r.events:
-			r.publish(ctx, logger)
+			r.reconcile(ctx, logger)
+		case <-ticker.C:
+			// Periodic drift repair, independent of fsnotify events.
+			r.reconcile(ctx, logger)
 		}
 	}
 }
@@ -363,25 +407,62 @@ func (r *ctbPublisher) Start(ctx context.Context) error {
 // ClusterTrustBundle.
 func (*ctbPublisher) NeedLeaderElection() bool { return true }
 
-// publish reconciles the ClusterTrustBundle to the current CA trust bundle,
-// retrying on optimistic-concurrency conflicts.
-func (r *ctbPublisher) publish(ctx context.Context, logger logr.Logger) {
-	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		logger.Info("updating ClusterTrustBundle with new CA certificate")
-		bundle := r.signer.ClusterTrustBundle()
-		// Use the direct API client: reading through the manager's
-		// cache-backed client would start an informer for ClusterTrustBundles,
-		// which requires list/watch RBAC permissions this controller does not
-		// need.
-		_, err := controllerutil.CreateOrPatch(ctx, r.client, bundle, func() error {
-			bundle.Spec.TrustBundle = string(r.ca.TrustBundlePEM())
-			return nil
-		})
-		return err
+// reconcile publishes the current CA trust bundle to the ClusterTrustBundle,
+// retrying with exponential backoff. It is single-flight: if a publish is
+// already in flight the call is skipped, since the in-flight publish will use
+// the latest in-memory CA state anyway. It returns true if a publish ran and
+// false if it was skipped.
+func (r *ctbPublisher) reconcile(ctx context.Context, logger logr.Logger) bool {
+	if !r.runMu.TryLock() {
+		logger.V(1).Info("ClusterTrustBundle publish already in progress, skipping")
+		return false
+	}
+	defer r.runMu.Unlock()
+
+	err := retry.OnError(r.backoff, func(error) bool { return true }, func() error {
+		return r.publishOnce(ctx, logger)
+	})
+	r.recordPublishResult(err)
+	if err != nil {
+		r.failures.Inc()
+		logger.Error(err, "unable to update ClusterTrustBundle after retries")
+	}
+	return true
+}
+
+// publishOnce performs a single CreateOrPatch of the ClusterTrustBundle to the
+// current CA trust bundle. The mutate function overwrites (never merges) the
+// trust bundle, so CA pruning in the rolling window is preserved.
+func (r *ctbPublisher) publishOnce(ctx context.Context, logger logr.Logger) error {
+	bundle := r.signer.ClusterTrustBundle()
+	// Use the direct API client: reading through the manager's cache-backed
+	// client would start an informer for ClusterTrustBundles, which requires
+	// list/watch RBAC permissions this controller does not need.
+	op, err := controllerutil.CreateOrPatch(ctx, r.client, bundle, func() error {
+		bundle.Spec.TrustBundle = string(r.ca.TrustBundlePEM())
+		return nil
 	})
 	if err != nil {
-		logger.Error(err, "unable to update ClusterTrustBundle")
+		return err
 	}
+	logger.Info("reconciled ClusterTrustBundle", "name", bundle.Name, "operation", op)
+	return nil
+}
+
+// recordPublishResult stores the outcome of the most recent reconcile.
+func (r *ctbPublisher) recordPublishResult(err error) {
+	r.healthMu.Lock()
+	defer r.healthMu.Unlock()
+	r.lastPublishErr = err
+}
+
+// Healthy reports a non-nil error when the most recent ClusterTrustBundle
+// publish failed after retries, so a persistently failing publisher fails
+// readiness. It is safe for concurrent use.
+func (r *ctbPublisher) Healthy() error {
+	r.healthMu.Lock()
+	defer r.healthMu.Unlock()
+	return r.lastPublishErr
 }
 
 // newCARunnables wires the CA file watcher and the ClusterTrustBundle publisher
@@ -390,7 +471,20 @@ func (r *ctbPublisher) publish(ctx context.Context, logger logr.Logger) {
 func newCARunnables(c client.Client, s *signer.Signer, ca *authority.CertificateAuthority) (*caWatchRunnable, *ctbPublisher) {
 	events := make(chan struct{}, 2)
 	watcher := &caWatchRunnable{ca: ca, notify: events}
-	publisher := &ctbPublisher{client: c, signer: s, ca: ca, events: events}
+	publisher := &ctbPublisher{
+		client:   c,
+		signer:   s,
+		ca:       ca,
+		events:   events,
+		interval: ctbDriftRepairInterval,
+		backoff: wait.Backoff{
+			Steps:    5,
+			Duration: 500 * time.Millisecond,
+			Factor:   2.0,
+			Jitter:   0.1,
+		},
+		failures: ctbPublishFailuresTotal,
+	}
 	return watcher, publisher
 }
 
