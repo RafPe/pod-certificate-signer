@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -75,7 +76,7 @@ func main() {
 	var enableLeaderElection, enableAnnotationInterpolation, honorCSRSANs bool
 	var reconcileTimeout time.Duration
 
-	flag.StringVar(&signerName, "signer-name", "example.org/signer", "Only sign CSR with this .spec.signerName.")
+	flag.StringVar(&signerName, "signer-name", "", "Only sign CSR with this .spec.signerName. Required.")
 	flag.StringVar(&caCertPath, "ca-cert-path", "", "CA certificate file.")
 	flag.StringVar(&caKeyPath, "ca-key-path", "", "CA private key file.")
 	flag.StringVar(&clusterFqdn, "cluster-fqdn", "cluster.local", "The FQDN of the cluster")
@@ -106,6 +107,12 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	if err := validateFlags(signerName); err != nil {
+		setupLog.Error(err, "invalid command-line flags")
+		os.Exit(1)
+	}
+
 	ctx := ctrl.SetupSignalHandler()
 	restCfg := ctrl.GetConfigOrDie()
 
@@ -242,6 +249,17 @@ func main() {
 		setupLog.Error(err, "unable to start controller manager")
 		os.Exit(1)
 	}
+}
+
+// validateFlags checks required command-line flags. An empty --signer-name is
+// rejected here so the controller fails fast at startup - mirroring the
+// required --ca-cert-path - instead of only surfacing the problem later, after
+// a Kubernetes API connection has been established.
+func validateFlags(signerName string) error {
+	if signerName == "" {
+		return errors.New("the --signer-name flag is required")
+	}
+	return nil
 }
 
 // displayCommandlineFlags visits all CLI flags and prints them.

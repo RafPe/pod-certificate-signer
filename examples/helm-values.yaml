@@ -1,10 +1,13 @@
-volumes:
-  - name: podcertificate-signer-ca
-    secret:
-      secretName: podcertificate-signer-ca
-      optional: false
-
-volumeMounts:
-  - name: podcertificate-signer-ca
-    mountPath: /app/signer/ca
-    readOnly: true
+# Recommended: provide the signing CA from an existing Secret. The chart wires a
+# read-only volume for you at signer.ca.secretRef.mountPath — no volumes /
+# volumeMounts plumbing required.
+#
+# Create the Secret first, e.g.:
+#   kubectl create secret tls podcertificate-signer-ca \
+#     --cert=ca.crt --key=ca.key -n <namespace>
+signer:
+  name: example.org/signer
+  ca:
+    source: secretRef
+    secretRef:
+      name: podcertificate-signer-ca

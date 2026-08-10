@@ -51,6 +51,44 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+CA cert/key paths passed to the controller, derived from the configured CA source.
+For secretRef the files live under the chart-managed mount; for file the operator
+supplies the paths (and mounts them via .Values.volumes/.volumeMounts).
+*/}}
+{{- define "podcertificate-signer.caCertPath" -}}
+{{- $ca := .Values.signer.ca -}}
+{{- if eq $ca.source "secretRef" -}}
+{{- printf "%s/%s" $ca.secretRef.mountPath $ca.secretRef.certKey -}}
+{{- else -}}
+{{- $ca.file.certPath -}}
+{{- end -}}
+{{- end }}
+
+{{- define "podcertificate-signer.caKeyPath" -}}
+{{- $ca := .Values.signer.ca -}}
+{{- if eq $ca.source "secretRef" -}}
+{{- printf "%s/%s" $ca.secretRef.mountPath $ca.secretRef.keyKey -}}
+{{- else -}}
+{{- $ca.file.keyPath -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Fail fast (at template time) on an invalid or incomplete CA source, so a
+misconfiguration is caught by `helm install`/`upgrade` rather than crash-looping
+the controller.
+*/}}
+{{- define "podcertificate-signer.validateCA" -}}
+{{- $ca := .Values.signer.ca -}}
+{{- if not (has $ca.source (list "secretRef" "file")) -}}
+{{- fail (printf "signer.ca.source must be \"secretRef\" or \"file\", got %q" $ca.source) -}}
+{{- end -}}
+{{- if and (eq $ca.source "secretRef") (not $ca.secretRef.name) -}}
+{{- fail "signer.ca.source=secretRef requires signer.ca.secretRef.name (an existing Secret holding the CA cert and key)" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Create the name of the service account to use
 */}}
 {{- define "podcertificate-signer.serviceAccountName" -}}
