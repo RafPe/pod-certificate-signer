@@ -23,6 +23,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -202,7 +203,12 @@ func main() {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+	// Gate readiness on the CA's watcher/reload health: a replica that can no
+	// longer observe CA rotations, or whose reloads have been failing
+	// persistently, must be pulled from readiness so it is not relied upon to
+	// publish or sign with stale material. A transient reload failure keeps the
+	// replica ready, since the last-good CA is retained and signing works.
+	if err := mgr.AddReadyzCheck("readyz", caReadyzCheck(ca)); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
@@ -266,6 +272,21 @@ func managerOptions(scheme *runtime.Scheme, cfg managerConfig) ctrl.Options {
 				DisableFor: []client.Object{&corev1.Pod{}},
 			},
 		},
+	}
+}
+
+// caHealthChecker is the CA health surface consumed by the readiness probe.
+type caHealthChecker interface {
+	// Healthy returns a non-nil error when the CA can no longer track its
+	// on-disk material (watcher dead or reload persistently failing).
+	Healthy() error
+}
+
+// caReadyzCheck adapts a caHealthChecker into a controller-runtime readiness
+// check, so a degraded CA removes the replica from readiness.
+func caReadyzCheck(ca caHealthChecker) healthz.Checker {
+	return func(_ *http.Request) error {
+		return ca.Healthy()
 	}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -114,5 +115,25 @@ func TestCARunnablesLeaderElection(t *testing.T) {
 	}
 	if !leaderGated(publisher) {
 		t.Error("ctbPublisher is not leader-gated; want ClusterTrustBundle writes confined to the leader")
+	}
+}
+
+// stubHealth is a test double for the CA health surface consumed by the readyz
+// check.
+type stubHealth struct{ err error }
+
+func (s stubHealth) Healthy() error { return s.err }
+
+// TestCAReadyzCheck asserts that the readiness check passes when the CA reports
+// healthy and fails when it reports a watcher/reload problem, so a replica that
+// can no longer track CA rotations is removed from readiness.
+func TestCAReadyzCheck(t *testing.T) {
+	if err := caReadyzCheck(stubHealth{err: nil})(nil); err != nil {
+		t.Errorf("readyz check = %v, want nil when the CA is healthy", err)
+	}
+
+	want := errors.New("ca watcher is down")
+	if err := caReadyzCheck(stubHealth{err: want})(nil); err == nil {
+		t.Error("readyz check must fail when the CA reports unhealthy")
 	}
 }
