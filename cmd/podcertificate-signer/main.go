@@ -204,9 +204,10 @@ func main() {
 		os.Exit(1)
 	}
 	// Gate readiness on the CA's watcher/reload health: a replica that can no
-	// longer observe CA rotations (or whose most recent reload failed) must be
-	// pulled from readiness so it is not relied upon to publish or sign with
-	// stale material.
+	// longer observe CA rotations, or whose reloads have been failing
+	// persistently, must be pulled from readiness so it is not relied upon to
+	// publish or sign with stale material. A transient reload failure keeps the
+	// replica ready, since the last-good CA is retained and signing works.
 	if err := mgr.AddReadyzCheck("readyz", caReadyzCheck(ca)); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)

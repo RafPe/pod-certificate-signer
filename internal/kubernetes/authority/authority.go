@@ -53,14 +53,31 @@ type CertificateAuthority struct {
 	reloadAttempts int           // bounded retries for a single reload
 	reloadBackoff  time.Duration // base delay between reload attempts
 
-	// health tracks the most recent reload outcome and whether the watcher
-	// has exited unrecoverably. It is guarded by its own mutex (separate from
-	// mu) so a readiness probe can poll Healthy without contending with a
-	// reload in progress.
-	healthMu      sync.Mutex
-	lastReloadErr error
-	watcherErr    error
+	// health tracks the recent reload outcomes and whether the watcher has
+	// exited unrecoverably. It is guarded by its own mutex (separate from mu)
+	// so a readiness probe can poll Healthy without contending with a reload
+	// in progress.
+	healthMu         sync.Mutex
+	lastReloadErr    error
+	reloadFailures   int       // consecutive failed reload attempts
+	firstFailureTime time.Time // when the current failure streak started
+	watcherErr       error
 }
+
+// Readiness grace period for CA reload failures. A failed reload leaves the
+// last-good CA in place, so signing keeps working; failing readiness on the
+// first blip only flaps the replica in and out of the Service for a condition
+// that usually resolves on the next write. Readiness therefore fails only once
+// the CA has been unloadable persistently: both thresholds must be crossed.
+const (
+	// reloadFailureThreshold is the number of consecutive failed reload
+	// attempts required before readiness may fail.
+	reloadFailureThreshold = 3
+
+	// reloadFailureGracePeriod is how long the failure streak must have
+	// lasted, measured from its first failure, before readiness may fail.
+	reloadFailureGracePeriod = 10 * time.Minute
+)
 
 // WithBackDate is an [Option], which configures the [CertificateAuthority] to
 // use the given backdate when signing certificate requests.
@@ -381,13 +398,11 @@ func (ca *CertificateAuthority) watchLoop(
 			logger.Info("reloading CA certificate")
 			if err := ca.reloadWithRetry(ctx, logger); err != nil {
 				// The last-good CA is retained, so signing keeps working.
-				// Stay watching so a later good write recovers, but record
-				// the failure for the readiness probe.
+				// Stay watching so a later good write recovers; readiness is
+				// only affected once the failures persist (see Healthy).
 				logger.Error(err, "failed to reload CA certificate after retries")
-				ca.recordReloadResult(err)
 				continue
 			}
-			ca.recordReloadResult(nil)
 			logger.Info("CA certificate reloaded successfully")
 
 			// Don't block here, so that reloading the CA can proceed as
@@ -432,6 +447,7 @@ func (ca *CertificateAuthority) drainEvents(ctx context.Context, logger logr.Log
 // reloadWithRetry attempts to reload the CA, retrying on a bounded linear
 // backoff. A failed attempt leaves the last-good CA in place (see load), so
 // callers keep signing with the previous material until a good reload succeeds.
+// Every attempt is recorded for the readiness probe (see Healthy).
 // It returns nil on the first successful reload, ctx.Err() if ctx is canceled,
 // or the final error once the attempt budget is exhausted.
 func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr.Logger) error {
@@ -440,13 +456,23 @@ func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr
 	var err error
 	for attempt := 1; ; attempt++ {
 		if err = ca.load(); err == nil {
+			ca.recordReloadResult(nil)
+
 			return nil
 		}
+
+		// Record each failed attempt rather than only the exhausted burst:
+		// nothing reloads again until the next filesystem event, so a CA that
+		// stays unloadable must be able to cross the readiness threshold
+		// without one.
+		failures := ca.recordReloadResult(err)
 		if attempt >= ca.reloadAttempts {
-			return fmt.Errorf("reload failed after %d attempt(s): %w", attempt, err)
+			return fmt.Errorf("reload failed after %d attempt(s), %d consecutive failure(s): %w",
+				attempt, failures, err)
 		}
 		logger.Error(err, "failed to reload CA certificate, retrying",
-			"attempt", attempt, "maxAttempts", ca.reloadAttempts)
+			"attempt", attempt, "maxAttempts", ca.reloadAttempts,
+			"consecutiveFailures", failures)
 
 		timer := time.NewTimer(min(ca.reloadBackoff*time.Duration(attempt), maxBackoff))
 		select {
@@ -458,11 +484,37 @@ func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr
 	}
 }
 
-// recordReloadResult stores the outcome of the most recent reload attempt.
-func (ca *CertificateAuthority) recordReloadResult(err error) {
+// recordReloadResult stores the outcome of the most recent reload attempt and
+// returns the resulting number of consecutive failures, so callers can report
+// the streak alongside the failure. A successful reload clears the streak.
+func (ca *CertificateAuthority) recordReloadResult(err error) int {
 	ca.healthMu.Lock()
 	defer ca.healthMu.Unlock()
+
 	ca.lastReloadErr = err
+	if err == nil {
+		ca.reloadFailures = 0
+		ca.firstFailureTime = time.Time{}
+
+		return 0
+	}
+
+	if ca.reloadFailures == 0 {
+		ca.firstFailureTime = ca.now()
+	}
+	ca.reloadFailures++
+
+	return ca.reloadFailures
+}
+
+// now returns the current time from the configured clock, which tests replace
+// to exercise time-dependent behavior without sleeping.
+func (ca *CertificateAuthority) now() time.Time {
+	if ca.nowFunc != nil {
+		return ca.nowFunc()
+	}
+
+	return time.Now()
 }
 
 // failWatcher records the watcher's terminal error and returns it, so a caller
@@ -475,14 +527,29 @@ func (ca *CertificateAuthority) failWatcher(err error) error {
 }
 
 // Healthy reports whether the CA is still tracking its on-disk material. It
-// returns a non-nil error if the file watcher has exited unrecoverably or the
-// most recent reload attempt ultimately failed. It is safe for concurrent use
-// and is intended to back a readiness probe.
+// returns a non-nil error if the file watcher has exited unrecoverably, or if
+// reloads have been failing persistently: at least reloadFailureThreshold
+// consecutive attempts spanning at least reloadFailureGracePeriod. Reload
+// failures within that grace period are reported as healthy, because the
+// last-good CA is retained and signing keeps working. It is safe for concurrent
+// use and is intended to back a readiness probe.
 func (ca *CertificateAuthority) Healthy() error {
 	ca.healthMu.Lock()
 	defer ca.healthMu.Unlock()
+
+	// A dead watcher is not a transient file blip: CA rotations would never be
+	// observed again, so it fails readiness immediately.
 	if ca.watcherErr != nil {
 		return ca.watcherErr
 	}
-	return ca.lastReloadErr
+	if ca.lastReloadErr == nil || ca.reloadFailures < reloadFailureThreshold {
+		return nil
+	}
+	failingFor := ca.now().Sub(ca.firstFailureTime)
+	if failingFor < reloadFailureGracePeriod {
+		return nil
+	}
+
+	return fmt.Errorf("CA reload failing for %s across %d consecutive attempts: %w",
+		failingFor.Round(time.Second), ca.reloadFailures, ca.lastReloadErr)
 }
