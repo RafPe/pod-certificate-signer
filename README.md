@@ -212,6 +212,8 @@ Because a value authored on a pod template is identical for every replica, the i
 
 Substitute your own signer name, annotation prefix and label key before applying.
 
+[examples/validating-admission-policy-eku.yaml](./examples/validating-admission-policy-eku.yaml) is a second, standalone example focused on `eku`: it restricts which extended key usages a workload may request — `server`, `client`, or both — based on a `pcs.example.org/eku-profile` namespace label, so client-auth certificates can be confined to specific namespaces rather than available cluster-wide.
+
 **When to use it.** If you enable `--allow-unverified-identities`, this policy is what replaces the protection you just switched off — it is the "or equivalent" the escape hatch above refers to, and without it any pod author can request a certificate for any name. Under the default constraints it is still worth applying as defense in depth: a pod rejected at admission gives its author an immediate error, instead of a volume that never mounts and a `Denied` `PodCertificateRequest` they have to go and read.
 
 > [!WARNING]
@@ -271,7 +273,7 @@ Below is the table with the annotations and example values:
 | `{signer-name}-cn`       | No       | `{pod-name}`                                                                        | `mysigner.example.com/foobar-cn: my-pod.default.pod.cluster.local`                                   |
 | `{signer-name}-san`      | No       | `{pod-name}.{namespace}.pod.cluster.local,{pod-name}.{namespace}.svc.cluster.local` | `mysigner.example.com/foobar-san: my-pod.default.pod.cluster.local,my-pod.default.svc.cluster.local` |
 | `{signer-name}-ip-san`   | No       | `(empty)`                                                                           | `mysigner.example.com/foobar-ip-san: 10.96.0.10,2001:db8::1`                                         |
-| `{signer-name}-eku`      | No       | `server,client`                                                                     | `mysigner.example.com/foobar-eku: client`                                                            |
+| `{signer-name}-eku`      | No       | `server` (serverAuth only; add `client` to opt in)                                  | `mysigner.example.com/foobar-eku: server,client`                                                     |
 | `{signer-name}-uris`     | No       | `(empty)`                                                                           | `mysigner.example.com/foobar-uris: spiffe://cluster.local/ns/default/sa/my-service`                  |
 | `{signer-name}-duration` | No       | `24h`                                                                               | `mysigner.example.com/foobar-duration: 12h`                                                          |
 | `{signer-name}-refresh`  | No       | `15m`                                                                               | `mysigner.example.com/foobar-refresh: 30m`                                                           |

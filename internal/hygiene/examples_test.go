@@ -22,8 +22,22 @@ const admissionregistrationV1 = "admissionregistration.k8s.io/v1"
 // as-is, and the failure modes are quiet ones: a policy whose binding names a
 // different policy, or a validation with an empty expression, is admitted by
 // the apiserver and then permits everything it was written to deny.
-func TestValidatingAdmissionPolicyExampleParses(t *testing.T) {
-	path := filepath.Join("..", "..", "examples", "validating-admission-policy.yaml")
+func TestValidatingAdmissionPolicyExamplesParse(t *testing.T) {
+	for _, name := range []string{
+		"validating-admission-policy.yaml",
+		"validating-admission-policy-eku.yaml",
+	} {
+		t.Run(name, func(t *testing.T) {
+			checkVAPExample(t, filepath.Join("..", "..", "examples", name))
+		})
+	}
+}
+
+// checkVAPExample validates one ValidatingAdmissionPolicy example manifest: the
+// policy and binding parse, the binding names the policy, and every validation
+// carries a non-empty CEL expression.
+func checkVAPExample(t *testing.T, path string) {
+	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("os.ReadFile(%q) = %v, want the ValidatingAdmissionPolicy example to exist", path, err)
