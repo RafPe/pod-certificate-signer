@@ -26,3 +26,36 @@ appVersion: "latest"
 
 # Kubernetes version constraint
 kubeVersion: ">= 1.35.0"
+
+home: https://github.com/rafpe/pod-certificate-signer
+sources:
+  - https://github.com/rafpe/pod-certificate-signer
+maintainers:
+  - name: RafPe
+    url: https://github.com/RafPe
+
+annotations:
+  # Metadata consumed by Artifact Hub (https://artifacthub.io) to enrich the
+  # chart listing. Registration is a one-time manual step — see
+  # docs/artifact-hub.md.
+  artifacthub.io/category: security
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/prerelease: "false"
+  artifacthub.io/links: |
+    - name: Source
+      url: https://github.com/RafPe/pod-certificate-signer
+    - name: Documentation
+      url: https://github.com/RafPe/pod-certificate-signer/tree/main/docs
+    - name: Security policy
+      url: https://github.com/RafPe/pod-certificate-signer/blob/main/SECURITY.md
+  # Image scanned/displayed by Artifact Hub. The release workflow overrides the
+  # chart version/appVersion from the git tag but does NOT currently rewrite this
+  # tag — bump it when it drifts from the released image (see docs/artifact-hub.md).
+  artifacthub.io/images: |
+    - name: pod-certificate-signer
+      image: ghcr.io/rafpe/pod-certificate-signer:v1.2.1
+  # Placeholder: cosign keyless signing arrives with hardening item H7. Once
+  # releases are signed, fill this in so Artifact Hub shows the signature.
+  # artifacthub.io/signKey: |
+  #   fingerprint: <cosign key fingerprint>
+  #   url: <public key URL>

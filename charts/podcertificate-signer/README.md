@@ -119,7 +119,7 @@ set. Enabling it renders `--allow-unverified-identities` on the controller.
 > EKU are no longer granted by default. To keep the old behaviour set
 > `signer.allow_unverified_identities: true` and add the `eku: server,client`
 > annotation; prefer migrating to `${...}` interpolation. See the
-> [repository README](../../README.md#-identity-constraints-default-secure).
+> [identity constraints documentation](../../docs/configuration.md#identity-constraints).
 
 > The `signer.allow_unverified_identities` value and this behaviour are
 > introduced together with the identity-constraint change (issue #26 / PR #38);
