@@ -14,8 +14,11 @@
 useDefault = true
 
 [allowlist]
-description = "Historical, now-removed CA material (key is compromised and revoked)."
+description = "Historical, now-removed CA material (key is compromised and revoked); plus the detector test, which documents PEM key headers by design."
 paths = [
   '''hack/ca-key\.pem''',
   '''examples/ca_tls_secret\.yaml''',
+  # The private-key detector test names example PEM headers in a comment; it
+  # holds no real key material.
+  '''internal/hygiene/hygiene_test\.go''',
 ]

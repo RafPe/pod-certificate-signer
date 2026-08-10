@@ -182,8 +182,12 @@ HELM_RELEASE ?= podcertificate-signer
 HELM_EXTRA_ARGS ?=
 
 ## Dev deployments target the local kind cluster explicitly, so a stray
-## kubeconfig context can never point them at a real cluster.
-DEV_CONTEXT ?= kind-$(KIND_CLUSTER_DEV)
+## kubeconfig context can never point them at a real cluster. The cluster
+## defaults to the dev one but is overridable via KIND_CLUSTER (the e2e suite
+## sets KIND_CLUSTER=$(KIND_CLUSTER_E2E) in the environment, so `make
+## helm-install` invoked from e2e targets the e2e cluster, not pcs-dev).
+KIND_CLUSTER ?= $(KIND_CLUSTER_DEV)
+DEV_CONTEXT ?= kind-$(KIND_CLUSTER)
 ## Ephemeral CA generated at install time. It lives under bin/ (gitignored) and
 ## is created fresh on every run - it is never committed.
 DEV_CA_DIR ?= $(LOCALBIN)/dev-ca
