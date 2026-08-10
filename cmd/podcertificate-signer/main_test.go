@@ -10,6 +10,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
 // An empty --signer-name must be rejected fast, before the controller attempts
@@ -78,5 +79,40 @@ func TestManagerOptionsDisablesPodCache(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("Client.Cache.DisableFor = %v, want it to include *corev1.Pod", opts.Client.Cache.DisableFor)
+	}
+}
+
+// Compile-time guarantees that both CA runnables opt into controller-runtime's
+// leader-election routing explicitly, rather than relying on the implicit
+// "not a LeaderElectionRunnable ⇒ leader-gated" fallback.
+var (
+	_ manager.Runnable               = (*caWatchRunnable)(nil)
+	_ manager.Runnable               = (*ctbPublisher)(nil)
+	_ manager.LeaderElectionRunnable = (*caWatchRunnable)(nil)
+	_ manager.LeaderElectionRunnable = (*ctbPublisher)(nil)
+)
+
+// leaderGated mirrors how controller-runtime's runnable group routes a
+// Runnable: a runnable that does not implement LeaderElectionRunnable, or that
+// reports NeedLeaderElection() == true, is confined to the leader-election
+// group. Encoding the real rule here means the test guards the behaviour, not
+// just a literal return value.
+func leaderGated(r manager.Runnable) bool {
+	ler, ok := r.(manager.LeaderElectionRunnable)
+	return !ok || ler.NeedLeaderElection()
+}
+
+// TestCARunnablesLeaderElection asserts that the CA file watcher runs on every
+// replica (so standby replicas keep their in-memory CA current and never sign
+// or publish with a stale CA after promotion), while the ClusterTrustBundle
+// publisher remains restricted to the elected leader.
+func TestCARunnablesLeaderElection(t *testing.T) {
+	watcher, publisher := newCARunnables(nil, nil, nil)
+
+	if leaderGated(watcher) {
+		t.Error("caWatchRunnable is leader-gated; want it to run on every replica so standby CAs stay current")
+	}
+	if !leaderGated(publisher) {
+		t.Error("ctbPublisher is not leader-gated; want ClusterTrustBundle writes confined to the leader")
 	}
 }
