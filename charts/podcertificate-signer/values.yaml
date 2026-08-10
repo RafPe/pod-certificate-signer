@@ -146,17 +146,18 @@ service:
   # This sets the ports more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
   port: 80
 
-resources: {}
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # choice for the user. This also increases chances charts run on environments with little
-  # resources, such as Minikube. If you do want to specify resources, uncomment the following
-  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
-  # limits:
-  #   cpu: 100m
-  #   memory: 128Mi
-  # requests:
-  #   cpu: 100m
-  #   memory: 128Mi
+# Container resource requests/limits. Conservative production defaults for a
+# lightweight, mostly-idle controller: requests reserve a small baseline so the
+# pod schedules and keeps its Guaranteed share, while the limits cap bursts
+# during reconcile storms and the memory limit guards against a runaway. Tune
+# for your cluster size; set to {} to leave the container unconstrained.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
 
 # This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
 livenessProbe:
@@ -167,6 +168,21 @@ readinessProbe:
   httpGet:
     path: /readyz
     port: http
+
+# PodDisruptionBudget for the controller. With the default replicaCount of 2
+# (leader-elected: one active, one warm standby), minAvailable: 1 lets a node be
+# drained one replica at a time while always keeping a pod that can hold the lease.
+# unhealthyPodEvictionPolicy: AlwaysAllow lets the node drain evict a pod that is
+# already unhealthy (e.g. not yet Ready) so a bad replica can never wedge a drain.
+# NOTE: if you enable the HPA and it scales the Deployment down to 1, minAvailable: 1
+# blocks node drains for the sole pod — switch to maxUnavailable: 1 in that case.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+  # Set maxUnavailable instead of minAvailable (mutually exclusive; minAvailable
+  # wins when both are set).
+  maxUnavailable: ""
+  unhealthyPodEvictionPolicy: AlwaysAllow
 
 # This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
 autoscaling:

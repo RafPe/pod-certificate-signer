@@ -93,7 +93,10 @@ The signing CA is configured under `signer.ca` with an explicit `source`:
 | **`signer.allow_unverified_identities`** | **Security escape hatch.** When `false`, annotation `cn`/`san`/`ip-san`/`uris` values must resolve to the pod's verified identity, and IP SANs are denied. See [Identity constraints](#identity-constraints-security). | `false` |
 | `manager.max_concurrent_reconciles` | Concurrent reconciles. | `5` |
 | `manager.reconcile_timeout` | Per-reconcile timeout. | `"5m"` |
-| `resources` | Container resource requests/limits (unset by default — set them in production). | `{}` |
+| `resources` | Container resource requests/limits. Conservative defaults for a lightweight controller; set `{}` to leave it unconstrained. | requests `100m`/`128Mi`, limits `500m`/`256Mi` |
+| `podDisruptionBudget.enabled` | Create a PodDisruptionBudget for the controller. | `true` |
+| `podDisruptionBudget.minAvailable` / `.maxUnavailable` | Disruption budget (mutually exclusive; `minAvailable` wins when both set). With 2 replicas `minAvailable: 1` drains one at a time; switch to `maxUnavailable: 1` if you scale to a single replica. | `1` / `""` |
+| `podDisruptionBudget.unhealthyPodEvictionPolicy` | Eviction policy so a not-yet-Ready pod can't wedge a node drain. | `AlwaysAllow` |
 | `serviceAccount.create` / `serviceAccount.automount` | ServiceAccount management. | `true` / `true` |
 | `volumes` / `volumeMounts` | Extra volumes/mounts. Only needed to mount the CA yourself when `signer.ca.source=file`; `secretRef` mode wires the CA volume for you. | `[]` |
 | `podSecurityContext` / `securityContext` | PSS-restricted defaults (non-root, seccomp `RuntimeDefault`, read-only rootfs, drop `ALL`). | see `values.yaml` |

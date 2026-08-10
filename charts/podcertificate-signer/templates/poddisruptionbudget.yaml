@@ -1,0 +1,25 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- $pdb := .Values.podDisruptionBudget }}
+{{- if and (not $pdb.minAvailable) (not $pdb.maxUnavailable) }}
+{{- fail "podDisruptionBudget requires either minAvailable or maxUnavailable to be set" }}
+{{- end }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "podcertificate-signer.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "podcertificate-signer.labels" . | nindent 4 }}
+spec:
+  {{- if $pdb.minAvailable }}
+  minAvailable: {{ $pdb.minAvailable }}
+  {{- else }}
+  maxUnavailable: {{ $pdb.maxUnavailable }}
+  {{- end }}
+  {{- with $pdb.unhealthyPodEvictionPolicy }}
+  unhealthyPodEvictionPolicy: {{ . }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "podcertificate-signer.selectorLabels" . | nindent 6 }}
+{{- end }}
