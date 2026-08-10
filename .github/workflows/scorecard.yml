@@ -1,0 +1,59 @@
+name: Scorecard supply-chain security
+
+on:
+  # Re-run when branch protection settings change so the Branch-Protection check
+  # reflects the current configuration.
+  branch_protection_rule:
+  # Keep the analysis current on every push to the default branch.
+  push:
+    branches:
+      - main
+  # Weekly baseline so findings do not go stale between pushes.
+  schedule:
+    - cron: '31 5 * * 1'
+
+# Declare least privilege at the top level; the job grants the extra scopes it
+# needs. We do NOT trigger on pull_request, so fork PRs cannot read these tokens.
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed to upload the SARIF results to the code-scanning dashboard.
+      security-events: write
+      # Needed for OIDC when publish_results is enabled (kept for a clean flip).
+      id-token: write
+      # Read-only access to the repository contents.
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard analysis
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # IMPORTANT: keep this false until the historical committed CA key is
+          # rotated and confirmed by the maintainer. Publishing writes a public,
+          # non-retractable score to the OpenSSF API. Flip to true only then.
+          publish_results: false
+
+      # Persist the SARIF as a build artifact for inspection / debugging.
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scorecard-results
+          path: results.sarif
+          retention-days: 5
+
+      # Surface findings in the repository's code-scanning dashboard.
+      - name: Upload SARIF to code-scanning
+        uses: github/codeql-action/upload-sarif@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3.37.6
+        with:
+          sarif_file: results.sarif
