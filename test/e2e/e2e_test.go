@@ -56,9 +56,10 @@ const signerName = "example.org/signer"
 // trustBundleName is the ClusterTrustBundle the controller maintains for the signer
 const trustBundleName = "example.org:signer:bundle"
 
-// caSecretName is the kubernetes.io/tls secret mounted into the controller as its CA
-// (see examples/ca_tls_secret.yaml)
-const caSecretName = "podcertificate-signer-ca"
+// caSecretName is the kubernetes.io/tls secret mounted into the controller as its CA.
+// `make helm-install` generates an ephemeral dev CA into this secret (DEV_CA_SECRET)
+// and points the chart's CA volume at it, so the e2e must use the same name.
+const caSecretName = "podcertificate-signer-ca-dev"
 
 // workloadPodName / workloadNamespace identify the example workload pod
 // (examples/workload-pod.yaml) used by the certificate issuance spec
