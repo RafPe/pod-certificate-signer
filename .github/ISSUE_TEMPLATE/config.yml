@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/RafPe/pod-certificate-signer/security/advisories/new
+    about: Please report security vulnerabilities privately via GitHub security advisories, not public issues.
+  - name: 💬 Questions & troubleshooting
+    url: https://github.com/RafPe/pod-certificate-signer#-troubleshooting
+    about: Check the README troubleshooting section before opening an issue.
