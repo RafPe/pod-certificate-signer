@@ -40,6 +40,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Mint an OIDC token so cosign can sign the image keyless (Fulcio/Rekor).
+      id-token: write
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
@@ -72,6 +74,7 @@ jobs:
             type=semver,pattern=v{{major}},value=${{ env.RELEASE_TAG }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -81,6 +84,29 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Generate a per-platform SPDX SBOM and attach it to the image index as
+          # an in-toto attestation. buildx fails the build if generation fails, so
+          # a missing SBOM never slips through silently on a signer release.
+          sbom: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      - name: Sign the image (keyless)
+        env:
+          # Pushed image index digest from the build step; sign BY DIGEST so the
+          # signature is bound to the exact content, never a mutable tag.
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          if [ -z "${DIGEST}" ]; then
+            echo "::error::build step produced no image digest; refusing to sign" >&2
+            exit 1
+          fi
+          # Sign the multi-arch image index by digest. Tags resolve to this index
+          # digest, so this is what consumers verify.
+          cosign sign --yes "${IMAGE_REPO}@${DIGEST}"
 
   push-chart:
     name: Package and push Helm chart
@@ -103,6 +129,18 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | \
             helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+
+      - name: Pin the Artifact Hub image annotation to the released tag
+        run: |
+          # yq reads IMAGES via strenv so the multi-line value stays a literal
+          # block scalar instead of collapsing to a quoted one-liner.
+          IMAGES="- name: pod-certificate-signer
+            image: ${IMAGE_REPO}:${RELEASE_TAG}"
+          export IMAGES
+          yq -i '
+            .annotations."artifacthub.io/images" = strenv(IMAGES)
+            | .annotations."artifacthub.io/images" style="literal"
+          ' charts/podcertificate-signer/Chart.yaml
 
       - name: Package the chart
         run: |

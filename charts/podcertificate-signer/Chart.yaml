@@ -48,14 +48,12 @@ annotations:
       url: https://github.com/RafPe/pod-certificate-signer/tree/main/docs
     - name: Security policy
       url: https://github.com/RafPe/pod-certificate-signer/blob/main/SECURITY.md
-  # Image scanned/displayed by Artifact Hub. The release workflow overrides the
-  # chart version/appVersion from the git tag but does NOT currently rewrite this
-  # tag — bump it when it drifts from the released image (see docs/artifact-hub.md).
+  # Image scanned/displayed by Artifact Hub. The release workflow rewrites this
+  # tag to the released version when it packages the chart (see
+  # docs/artifact-hub.md), so the value below only applies to source checkouts.
   artifacthub.io/images: |
     - name: pod-certificate-signer
       image: ghcr.io/rafpe/pod-certificate-signer:v1.2.1
-  # Placeholder: cosign keyless signing arrives with hardening item H7. Once
-  # releases are signed, fill this in so Artifact Hub shows the signature.
-  # artifacthub.io/signKey: |
-  #   fingerprint: <cosign key fingerprint>
-  #   url: <public key URL>
+  # No artifacthub.io/signKey: release images are signed with cosign keyless
+  # (Fulcio/Rekor, no static public key), which Artifact Hub detects on its own.
+  # The verification recipe lives in docs/artifact-hub.md.
