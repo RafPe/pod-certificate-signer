@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
@@ -88,7 +89,10 @@ func TestProcessStalePodUIDDropped(t *testing.T) {
 	cache := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(stalePod).Build()
 	live := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(stalePod).Build()
 	stub := &stubSigner{name: "example.org/signer", cert: stubCert()}
-	r := &PodCertificateRequestReconciler{Client: cache, APIReader: live, Log: logr.Discard(), Signer: stub}
+	// The drop path emits an event; see TestReconcileDroppedGonePodEmitsEvent.
+	r := &PodCertificateRequestReconciler{
+		Client: cache, APIReader: live, Log: logr.Discard(), Signer: stub, EventRecorder: events.NewFakeRecorder(10),
+	}
 	ctx := logr.NewContext(context.Background(), logr.Discard())
 
 	cert, err := r.process(ctx, pcr)

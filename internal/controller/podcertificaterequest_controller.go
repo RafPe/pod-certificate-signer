@@ -45,13 +45,21 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// Reason identifies a terminal/issued outcome recorded on a PodCertificateRequest.
+// Reason identifies an outcome reported for a PodCertificateRequest: a
+// terminal/issued condition recorded on the object, or an event-only outcome
+// where noted below.
 type Reason string
 
 const (
 	ReasonAssociatedPodNotFound Reason = "AssociatedPodNotFound"
 	ReasonSigningFailed         Reason = "SigningFailed"
 	ReasonCertificateIssued     Reason = "CertificateIssued"
+
+	// ReasonAssociatedPodGone is event-only and is never written as a
+	// condition: a request whose pod a live read confirms is gone (absent, or
+	// replaced by a different pod) is dropped, not failed. The event note says
+	// which of the two it was.
+	ReasonAssociatedPodGone Reason = "AssociatedPodGone"
 
 	// Well-known condition reasons defined by the certificates v1beta1 API.
 	ReasonUnsupportedKeyType     Reason = Reason(capiv1beta1.PodCertificateRequestConditionUnsupportedKeyType)
@@ -200,7 +208,10 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 
 // process runs the signing pipeline for a PodCertificateRequest. It returns:
 //   - (cert, nil)  on success
-//   - (nil, nil)   when there is nothing to do (the associated pod is being deleted)
+//   - (nil, nil)   when there is nothing to do: the associated pod is being
+//     deleted, or a live read confirms it is gone (absent, or carrying a
+//     different UID than the request asked for). A confirmed-gone drop emits a
+//     warning event and writes no status; a pod being deleted is silent.
 //   - (nil, *TerminalError) for permanent failures (recorded on the PCR, no retry)
 //   - (nil, err)   for transient failures (requeued with backoff)
 func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest) (*podcertificate.PodCertificate, error) {
@@ -226,6 +237,8 @@ func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capi
 			// The pod is gone on a live read too: the request is stale, not a
 			// terminal failure to sign. Drop it.
 			log.Info("associated pod not found on a live read; dropping stale request")
+			r.recordPodGone(pcr, "associated pod %s/%s (uid %s) not found; dropping request",
+				pcr.Namespace, pcr.Spec.PodName, pcr.Spec.PodUID)
 			return nil, nil
 		case err != nil:
 			return nil, err // transient
@@ -236,6 +249,8 @@ func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capi
 	if crPod.UID != pcr.Spec.PodUID {
 		log.Info("associated pod UID does not match the request; dropping stale request",
 			"podUID", crPod.UID, "requestPodUID", pcr.Spec.PodUID)
+		r.recordPodGone(pcr, "associated pod %s/%s was replaced (request uid %s, live uid %s); dropping request",
+			pcr.Namespace, pcr.Spec.PodName, pcr.Spec.PodUID, crPod.UID)
 		return nil, nil
 	}
 
@@ -318,6 +333,15 @@ func (r *PodCertificateRequestReconciler) recordFailure(ctx context.Context, pcr
 func (r *PodCertificateRequestReconciler) recordTerminal(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, te *TerminalError) error {
 	r.clearPodCertificateRequestStatusFields(pcr)
 	return r.recordOutcome(ctx, pcr, te.ConditionType, te.Reason, te.Err.Error(), corev1.EventTypeWarning)
+}
+
+// recordPodGone emits the warning event for a request dropped because a live
+// read confirmed its pod is gone. The note is supplied by the caller, since
+// "absent" and "replaced by a different pod" are different facts for whoever
+// reads the event. Deliberately no status write: the drop is not a terminal
+// outcome, and the event is the only breadcrumb an operator gets.
+func (r *PodCertificateRequestReconciler) recordPodGone(pcr *capiv1beta1.PodCertificateRequest, noteFmt string, args ...any) {
+	r.EventRecorder.Eventf(pcr, nil, corev1.EventTypeWarning, string(ReasonAssociatedPodGone), "SignPodCertificateRequest", noteFmt, args...)
 }
 
 func (r *PodCertificateRequestReconciler) recordIssued(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, cert *podcertificate.PodCertificate) error {
