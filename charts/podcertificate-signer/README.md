@@ -75,17 +75,3 @@ set. Enabling it renders `--allow-unverified-identities` on the controller.
 > `signer.allow_unverified_identities: true` and add the `eku: server,client`
 > annotation; prefer migrating to `${...}` interpolation. See the
 > [repository README](../../README.md#-identity-constraints-default-secure).
-
-## Related chart changes landing with sibling PRs
-
-These are tracked by the [`code-quality-review` epic (#25)](../../README.md) and
-modify this chart when they merge:
-
-- **#36** adds `signer.cluster_fqdn` (rendered as `--cluster-fqdn`), renders
-  `--health-probe-bind-address` from `health.bind_address`, and makes
-  `signer.name` **required** (its placeholder default is removed).
-- **#33** narrows the controller's `pods` RBAC from `get;list;watch` to `get`
-  (the controller no longer caches all pods). Roll the chart and image out
-  together — `pods: get` is only sufficient for the new binary.
-
-This README will be updated to fold those values in as each PR lands.
