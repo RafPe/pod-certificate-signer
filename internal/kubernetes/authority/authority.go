@@ -24,6 +24,14 @@ import (
 
 var serialNumberLimit = new(big.Int).Lsh(big.NewInt(1), 128)
 
+// ErrCASignerUnusable marks signing failures caused by the state of the CA
+// itself (expired signer, or a request whose lifetime cannot fit inside the
+// remaining CA validity) rather than by the request. Such failures are
+// transient from the request's perspective: a CA rotation can make an
+// identical request succeed, so the reconciler requeues instead of recording
+// a terminal outcome. Callers match it with errors.Is.
+var ErrCASignerUnusable = errors.New("ca signer unusable")
+
 // Option is a function which configures the [CertificateAuthority].
 type Option func(ca *CertificateAuthority) error
 
@@ -185,12 +193,12 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 
 	nbf := now.Add(-ca.backDate)
 	if !nbf.Before(ca.certificate.NotAfter) {
-		return nil, fmt.Errorf("the signer has expired: NotAfter=%v", ca.certificate.NotAfter)
+		return nil, fmt.Errorf("the signer has expired: NotAfter=%v: %w", ca.certificate.NotAfter, ErrCASignerUnusable)
 	}
 
 	naf := nbf.Add(pcConfig.Duration)
 	if naf.After(ca.certificate.NotAfter) {
-		return nil, fmt.Errorf("certificate validity period exceeds the signer CA validity: notAfter=%v, caNotAfter=%v", naf, ca.certificate.NotAfter)
+		return nil, fmt.Errorf("certificate validity period exceeds the signer CA validity: notAfter=%v, caNotAfter=%v: %w", naf, ca.certificate.NotAfter, ErrCASignerUnusable)
 	}
 	if naf.Before(now) {
 		return nil, fmt.Errorf("certificate not after is in the past: %v", naf)
