@@ -29,20 +29,27 @@ import (
 
 	capiv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// durationAnnotation is the spec.unverifiedUserAnnotations key the signer
-// reads the requested certificate duration from. Spelled out here rather than
-// built from the podcertificate constants, which carry a deprecation notice
-// aimed at the pod-annotation fallback.
-const durationAnnotation = testSignerName + "-duration"
+const (
+	// durationAnnotation is the spec.unverifiedUserAnnotations key the signer
+	// reads the requested certificate duration from. Spelled out here rather
+	// than built from the podcertificate constants, which carry a deprecation
+	// notice aimed at the pod-annotation fallback.
+	durationAnnotation = testSignerName + "-duration"
+
+	// foreignSignerName belongs to no controller in this suite, so requests
+	// created under it are never reconciled.
+	foreignSignerName = "example.com/some-other-signer"
+)
 
 var _ = Describe("PodCertificateRequest Controller", func() {
 	Context("When reconciling a request for this signer", func() {
 		It("issues a certificate the API server accepts", func() {
-			pcr := createPodAndRequest("issued", nil)
+			pcr := createPodAndRequest("issued", testSignerName, nil)
 
 			By("waiting for the controller to record the Issued condition")
 			issued := waitForCondition(pcr, capiv1beta1.PodCertificateRequestConditionTypeIssued)
@@ -77,7 +84,7 @@ var _ = Describe("PodCertificateRequest Controller", func() {
 		It("records a terminal Denied status the API server accepts", func() {
 			// The signer rejects durations below kube-apiserver's one hour
 			// minimum, so this drives the reconciler down the terminal path.
-			pcr := createPodAndRequest("denied", map[string]string{durationAnnotation: "30m"})
+			pcr := createPodAndRequest("denied", testSignerName, map[string]string{durationAnnotation: "30m"})
 
 			By("waiting for the controller to record the Denied condition")
 			denied := waitForCondition(pcr, capiv1beta1.PodCertificateRequestConditionTypeDenied)
@@ -96,14 +103,7 @@ var _ = Describe("PodCertificateRequest Controller", func() {
 
 	Context("When the request belongs to another signer", func() {
 		It("leaves the request untouched", func() {
-			pcr := createPodAndRequest("other-signer", nil)
-			pcr.Spec.SignerName = "example.com/some-other-signer"
-
-			// Recreate under the foreign signer name: the spec is immutable,
-			// so the name has to be set at creation time.
-			Expect(k8sClient.Delete(ctx, pcr)).To(Succeed())
-			pcr.ResourceVersion = ""
-			Expect(k8sClient.Create(ctx, pcr)).To(Succeed())
+			pcr := createPodAndRequest("other-signer", foreignSignerName, nil)
 
 			Consistently(func(g Gomega) {
 				var got capiv1beta1.PodCertificateRequest
@@ -112,12 +112,38 @@ var _ = Describe("PodCertificateRequest Controller", func() {
 			}, 3*time.Second, 250*time.Millisecond).Should(Succeed())
 		})
 	})
+
+	Context("When a status write violates the API server's own rules", func() {
+		// This is what makes the specs above meaningful: they assert that the
+		// API server accepted the controller's writes, which only says
+		// something if the API server rejects bad ones. The request is created
+		// for a foreign signer so the controller leaves it alone and the
+		// status below is the only write it ever sees.
+		It("is rejected", func() {
+			pcr := createPodAndRequest("invalid-status", foreignSignerName, nil)
+
+			pcr.Status.Conditions = []metav1.Condition{{
+				Type:               capiv1beta1.PodCertificateRequestConditionTypeIssued,
+				Status:             metav1.ConditionTrue,
+				LastTransitionTime: metav1.Now(),
+				Reason:             string(ReasonCertificateIssued),
+				Message:            "Certificate successfully issued",
+			}}
+			pcr.Status.CertificateChain = "not a PEM certificate"
+
+			err := k8sClient.Status().Update(ctx, pcr)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue(), "expected an Invalid error, got %v", err)
+		})
+	})
 })
 
 // createPodAndRequest creates a pod and a PodCertificateRequest referring to
 // it, both named after suffix, and registers their cleanup. The request
 // carries the pod's live UID, which the reconciler gates on before signing.
-func createPodAndRequest(suffix string, userAnnotations map[string]string) *capiv1beta1.PodCertificateRequest {
+// The signer name is a parameter because the request spec is immutable, so it
+// has to be right at creation time.
+func createPodAndRequest(suffix, signerName string, userAnnotations map[string]string) *capiv1beta1.PodCertificateRequest {
 	GinkgoHelper()
 
 	name := "pcr-" + suffix
@@ -138,7 +164,7 @@ func createPodAndRequest(suffix string, userAnnotations map[string]string) *capi
 	pcr := &capiv1beta1.PodCertificateRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
 		Spec: capiv1beta1.PodCertificateRequestSpec{
-			SignerName:                testSignerName,
+			SignerName:                signerName,
 			PodName:                   pod.Name,
 			PodUID:                    pod.UID,
 			ServiceAccountName:        "default",
