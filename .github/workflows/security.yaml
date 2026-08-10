@@ -1,0 +1,35 @@
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    # Weekly on Mondays at 07:17 UTC. An off-peak minute avoids the scheduled
+    # runs GitHub drops when too many workflows fire on the hour.
+    - cron: '17 7 * * 1'
+
+# Least privilege: the scan only needs to read the checked-out source.
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: Go vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # go.mod declares the 1.26 language floor and the release image builds
+          # with golang:1.26 (its latest patch). Scan with the latest 1.26.x so
+          # standard-library advisories track the toolchain that actually ships.
+          go-version: '1.26'
+          check-latest: true
+
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
