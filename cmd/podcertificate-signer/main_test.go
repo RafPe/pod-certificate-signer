@@ -31,6 +31,8 @@ func TestDeploymentRendersConfiguredFlags(t *testing.T) {
 	out, err := exec.Command(
 		"helm", "template", "podcertificate-signer", chartDir(t),
 		"--kube-version", "1.36.0",
+		// A CA source is required (the chart fails fast otherwise).
+		"--set", "signer.ca.secretRef.name=test-ca",
 	).CombinedOutput()
 	if err != nil {
 		t.Fatalf("helm template: %v\n%s", err, out)
