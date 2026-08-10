@@ -16,10 +16,11 @@ The chart is already prepared for it:
 Registration is a one-time manual step — it needs an Artifact Hub account.
 
 > [!NOTE]
-> Signed releases: cosign keyless signing is tracked separately (hardening item
-> H7). Once releases are signed, Artifact Hub detects and displays the signature
-> automatically, and the `artifacthub.io/signKey` annotation placeholder in
-> `Chart.yaml` should be filled in.
+> Signed releases: the release image is signed with **cosign keyless** signing
+> (Fulcio/Rekor, no static public key), so there is no `artifacthub.io/signKey`
+> annotation to fill in — Artifact Hub detects the signature on its own. See
+> [Verifying the image signature](#verifying-the-image-signature) for how a
+> consumer verifies it.
 
 ## One-time setup
 
@@ -58,9 +59,54 @@ Artifact Hub polls the OCI repository and picks up new chart versions
 automatically; the `artifacthub.io/*` annotations travel with each packaged
 chart.
 
+The release workflow (`.github/workflows/release-image.yml`) overrides the chart
+`version`/`appVersion` from the git tag **and** rewrites the
+`artifacthub.io/images` tag to the released version when it packages the chart,
+so the annotation never drifts from the published image. The value committed in
+`Chart.yaml` only applies to installs from a source checkout.
+
+## Verifying the image signature
+
+Release images are signed keyless with [cosign](https://github.com/sigstore/cosign):
+the signing identity is the GitHub Actions release workflow, certified by Fulcio
+and logged in Rekor — there is no long-lived public key to distribute.
+
 > [!NOTE]
-> The release workflow (`.github/workflows/release-image.yml`) overrides the
-> chart `version`/`appVersion` from the git tag, but does **not** currently
-> rewrite the `artifacthub.io/images` tag in `Chart.yaml`. Bump that annotation
-> when it drifts from the released image, or extend the workflow to rewrite it on
-> release.
+> Signatures and SBOM attestations exist only for releases cut **after** cosign
+> signing landed (hardening item H7). Tags published before that are unsigned;
+> `cosign verify` against them fails as expected.
+
+Verify a released image **by digest** so you verify the exact content a tag
+points at. Resolve the tag to a digest first (with
+[`crane`](https://github.com/google/go-containerregistry), or
+`docker buildx imagetools inspect <image> --format '{{.Manifest.Digest}}'`):
+
+```bash
+IMAGE=ghcr.io/rafpe/pod-certificate-signer:vX.Y.Z
+DIGEST="${IMAGE%:*}@$(crane digest "$IMAGE")"
+
+cosign verify \
+  --certificate-identity-regexp '(?i)^https://github\.com/RafPe/pod-certificate-signer/\.github/workflows/release-image\.yml@.*$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "$DIGEST"
+```
+
+The identity regexp anchors on this repository and its release workflow but stays
+permissive on the git ref, because the release runs through a reusable-workflow
+call and the ref recorded in the certificate is not always the tag. To inspect
+the exact identity that was recorded rather than trusting the pattern:
+
+```bash
+cosign verify --certificate-identity-regexp '.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "$DIGEST" -o text
+```
+
+The image also carries a per-platform SPDX SBOM attached at build time as an
+in-toto attestation. Inspect it with:
+
+```bash
+cosign download sbom "$DIGEST"
+# or
+docker buildx imagetools inspect "$IMAGE" --format '{{ json .SBOM }}'
+```
