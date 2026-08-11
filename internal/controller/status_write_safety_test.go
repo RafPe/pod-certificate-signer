@@ -118,3 +118,74 @@ func TestReconcileRetriesStatusConflict(t *testing.T) {
 		t.Error("no Issued event recorded after the successful write")
 	}
 }
+
+// 49.2 (concurrency): when the conflict is caused by another writer that
+// recorded a terminal outcome first, the retry must not overwrite that outcome
+// with this reconcile's stale result. A PodCertificateRequest is immutable once
+// terminal, so this reconcile lost the race: it must leave the winning outcome
+// in place and announce nothing.
+func TestReconcileConflictPreservesConcurrentTerminalOutcome(t *testing.T) {
+	const signerName = "example.org/signer"
+	pcr, pod := livePCR(t, "race-uid", "race-uid")
+	pcr.Spec.SignerName = signerName
+
+	key := client.ObjectKeyFromObject(pcr)
+	var updateAttempts int
+	cl := fake.NewClientBuilder().
+		WithScheme(newTestScheme(t)).
+		WithObjects(pcr, pod).
+		WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, _ string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				updateAttempts++
+				if updateAttempts == 1 {
+					// A concurrent writer denies the request, then this
+					// reconcile's write loses the race with a conflict.
+					concurrent := &capiv1beta1.PodCertificateRequest{}
+					if err := c.Get(ctx, key, concurrent); err != nil {
+						return err
+					}
+					concurrent.Status.Conditions = []metav1.Condition{{
+						Type:               capiv1beta1.PodCertificateRequestConditionTypeDenied,
+						Status:             metav1.ConditionTrue,
+						LastTransitionTime: metav1.Now(),
+						Reason:             string(ReasonInvalidUserAnnotations),
+						Message:            "denied by a concurrent writer",
+					}}
+					if err := c.Status().Update(ctx, concurrent); err != nil {
+						return err
+					}
+					return apierrors.NewConflict(
+						schema.GroupResource{Group: "certificates.k8s.io", Resource: "podcertificaterequests"},
+						obj.GetName(), errors.New("resourceVersion mismatch"))
+				}
+				return c.Status().Update(ctx, obj, opts...)
+			},
+		}).
+		Build()
+
+	stub := &stubSigner{name: signerName, cert: stubCert()}
+	rec := events.NewFakeRecorder(10)
+	r := &PodCertificateRequestReconciler{
+		Client: cl, APIReader: cl, Log: logr.Discard(), Signer: stub, EventRecorder: rec,
+	}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile() error = %v, want nil (losing the race to a terminal outcome is not a failure)", err)
+	}
+
+	got := &capiv1beta1.PodCertificateRequest{}
+	if err := cl.Get(context.Background(), key, got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got.Status.Conditions) != 1 ||
+		got.Status.Conditions[0].Type != capiv1beta1.PodCertificateRequestConditionTypeDenied {
+		t.Fatalf("persisted conditions = %+v, want the concurrent Denied outcome preserved, not overwritten by this reconcile's Issued",
+			got.Status.Conditions)
+	}
+	select {
+	case e := <-rec.Events:
+		t.Errorf("recorded event %q, want none: a reconcile that lost the race must announce nothing", e)
+	default:
+	}
+}
