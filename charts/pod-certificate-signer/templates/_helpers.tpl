@@ -1,7 +1,7 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "podcertificate-signer.name" -}}
+{{- define "pod-certificate-signer.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
@@ -10,7 +10,7 @@ Create a default fully qualified app name.
 We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
 If release name contains chart name it will be used as a full name.
 */}}
-{{- define "podcertificate-signer.fullname" -}}
+{{- define "pod-certificate-signer.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -26,16 +26,16 @@ If release name contains chart name it will be used as a full name.
 {{/*
 Create chart name and version as used by the chart label.
 */}}
-{{- define "podcertificate-signer.chart" -}}
+{{- define "pod-certificate-signer.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Common labels
 */}}
-{{- define "podcertificate-signer.labels" -}}
-helm.sh/chart: {{ include "podcertificate-signer.chart" . }}
-{{ include "podcertificate-signer.selectorLabels" . }}
+{{- define "pod-certificate-signer.labels" -}}
+helm.sh/chart: {{ include "pod-certificate-signer.chart" . }}
+{{ include "pod-certificate-signer.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
@@ -45,8 +45,8 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels
 */}}
-{{- define "podcertificate-signer.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "podcertificate-signer.name" . }}
+{{- define "pod-certificate-signer.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "pod-certificate-signer.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
@@ -55,7 +55,7 @@ CA cert/key paths passed to the controller, derived from the configured CA sourc
 For secretRef the files live under the chart-managed mount; for file the operator
 supplies the paths (and mounts them via .Values.volumes/.volumeMounts).
 */}}
-{{- define "podcertificate-signer.caCertPath" -}}
+{{- define "pod-certificate-signer.caCertPath" -}}
 {{- $ca := .Values.signer.ca -}}
 {{- if eq $ca.source "secretRef" -}}
 {{- printf "%s/%s" $ca.secretRef.mountPath $ca.secretRef.certKey -}}
@@ -64,7 +64,7 @@ supplies the paths (and mounts them via .Values.volumes/.volumeMounts).
 {{- end -}}
 {{- end }}
 
-{{- define "podcertificate-signer.caKeyPath" -}}
+{{- define "pod-certificate-signer.caKeyPath" -}}
 {{- $ca := .Values.signer.ca -}}
 {{- if eq $ca.source "secretRef" -}}
 {{- printf "%s/%s" $ca.secretRef.mountPath $ca.secretRef.keyKey -}}
@@ -78,7 +78,7 @@ Fail fast (at template time) on an invalid or incomplete CA source, so a
 misconfiguration is caught by `helm install`/`upgrade` rather than crash-looping
 the controller.
 */}}
-{{- define "podcertificate-signer.validateCA" -}}
+{{- define "pod-certificate-signer.validateCA" -}}
 {{- $ca := .Values.signer.ca -}}
 {{- if not (has $ca.source (list "secretRef" "file")) -}}
 {{- fail (printf "signer.ca.source must be \"secretRef\" or \"file\", got %q" $ca.source) -}}
@@ -91,9 +91,9 @@ the controller.
 {{/*
 Create the name of the service account to use
 */}}
-{{- define "podcertificate-signer.serviceAccountName" -}}
+{{- define "pod-certificate-signer.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
-{{- default (include "podcertificate-signer.fullname" .) .Values.serviceAccount.name }}
+{{- default (include "pod-certificate-signer.fullname" .) .Values.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}

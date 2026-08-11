@@ -14,7 +14,7 @@ func TestDeploymentRendersAllowUnverifiedIdentities(t *testing.T) {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm not installed; skipping chart render assertion")
 	}
-	out, err := exec.Command("helm", "template", "test", "../../charts/podcertificate-signer", "--kube-version", "1.35.0",
+	out, err := exec.Command("helm", "template", "test", "../../charts/pod-certificate-signer", "--kube-version", "1.35.0",
 		// A CA source is required (the chart fails fast otherwise).
 		"--set", "signer.ca.secretRef.name=test-ca").CombinedOutput()
 	if err != nil {

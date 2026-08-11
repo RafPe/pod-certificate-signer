@@ -42,7 +42,7 @@ import (
 const namespace = "pcs-system"
 
 // releaseName is the Helm release (and thereby resource fullname) of the deployment
-const releaseName = "podcertificate-signer"
+const releaseName = "pod-certificate-signer"
 
 // serviceAccountName created by the Helm chart
 const serviceAccountName = releaseName

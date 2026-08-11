@@ -214,9 +214,9 @@ The chart renders these from Helm values; you rarely set them directly.
 ## Helm values
 
 The complete values reference — every key, default and the CA-source abstraction
-— lives in the [chart README](../charts/podcertificate-signer/README.md) and is
+— lives in the [chart README](../charts/pod-certificate-signer/README.md) and is
 documented inline in
-[`values.yaml`](../charts/podcertificate-signer/values.yaml). The essentials:
+[`values.yaml`](../charts/pod-certificate-signer/values.yaml). The essentials:
 
 ### Providing the CA
 
@@ -268,14 +268,14 @@ left as a conscious operator choice and should be set for production:
   apiVersion: policy/v1
   kind: PodDisruptionBudget
   metadata:
-    name: podcertificate-signer
+    name: pod-certificate-signer
     namespace: pcs-system
   spec:
     minAvailable: 1
     unhealthyPodEvictionPolicy: AlwaysAllow
     selector:
       matchLabels:
-        app.kubernetes.io/name: podcertificate-signer
+        app.kubernetes.io/name: pod-certificate-signer
   ```
 
 > [!NOTE]

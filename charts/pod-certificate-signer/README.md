@@ -1,4 +1,4 @@
-# podcertificate-signer (Helm chart)
+# pod-certificate-signer (Helm chart)
 
 Deploys the **pod-certificate-signer** controller — a signer for the built-in
 `certificates.k8s.io/v1beta1` `PodCertificateRequest` API that issues short-lived
@@ -15,7 +15,7 @@ README](../../README.md).
   Create a Secret and reference it (see [Providing the CA](#providing-the-ca)):
 
 ```bash
-kubectl create secret tls podcertificate-signer-ca \
+kubectl create secret tls pod-certificate-signer-ca \
   --cert=ca.crt --key=ca.key -n <namespace>
 ```
 
@@ -24,10 +24,10 @@ kubectl create secret tls podcertificate-signer-ca \
 `signer.name` and a CA source are **required**:
 
 ```bash
-helm install pcs oci://ghcr.io/rafpe/charts/podcertificate-signer \
+helm install pcs oci://ghcr.io/rafpe/charts/pod-certificate-signer \
   -n pcs-system --create-namespace \
   --set signer.name=example.org/signer \
-  --set signer.ca.secretRef.name=podcertificate-signer-ca
+  --set signer.ca.secretRef.name=pod-certificate-signer-ca
 ```
 
 ## Providing the CA
@@ -45,7 +45,7 @@ The signing CA is configured under `signer.ca` with an explicit `source`:
     ca:
       source: secretRef
       secretRef:
-        name: podcertificate-signer-ca   # existing kubernetes.io/tls or Opaque Secret
+        name: pod-certificate-signer-ca   # existing kubernetes.io/tls or Opaque Secret
         certKey: tls.crt                  # key in the Secret holding the cert
         keyKey: tls.key                   # key in the Secret holding the private key
         mountPath: /app/signer/ca

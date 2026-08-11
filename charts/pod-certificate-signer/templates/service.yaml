@@ -2,10 +2,10 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "podcertificate-signer.fullname" . }}
+  name: {{ include "pod-certificate-signer.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "podcertificate-signer.labels" . | nindent 4 }}
+    {{- include "pod-certificate-signer.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   ports:
@@ -20,5 +20,5 @@ spec:
       protocol: TCP
       name: http
   selector:
-    {{- include "podcertificate-signer.selectorLabels" . | nindent 4 }}
+    {{- include "pod-certificate-signer.selectorLabels" . | nindent 4 }}
 {{- end }}

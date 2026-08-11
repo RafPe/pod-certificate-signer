@@ -49,7 +49,7 @@ The chart is published to GHCR as an OCI artifact on every release, alongside
 the controller image. `signer.name` and a CA source are **required**:
 
 ```sh
-helm install podcertificate-signer oci://ghcr.io/rafpe/charts/podcertificate-signer \
+helm install pod-certificate-signer oci://ghcr.io/rafpe/charts/pod-certificate-signer \
   --version <X.Y.Z> \
   --namespace pcs-system \
   --set signer.name=coolcert.example.com/foo \
@@ -66,7 +66,7 @@ the chart wires a read-only volume for the Secret automatically — there is no
 Confirm the controller is running and has published its trust bundle:
 
 ```sh
-kubectl -n pcs-system rollout status deploy/podcertificate-signer
+kubectl -n pcs-system rollout status deploy/pod-certificate-signer
 kubectl get clustertrustbundle
 ```
 

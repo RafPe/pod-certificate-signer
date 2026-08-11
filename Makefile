@@ -177,7 +177,7 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 ## Namespace to deploy the Helm release
 HELM_NAMESPACE ?= pcs-system
 ## Name of the Helm release
-HELM_RELEASE ?= podcertificate-signer
+HELM_RELEASE ?= pod-certificate-signer
 ## Additional arguments to pass to helm commands
 HELM_EXTRA_ARGS ?=
 ## Signer name to deploy with. The chart has no default (--signer-name is
@@ -216,7 +216,7 @@ helm-install: dev-ca  ## Install the chart against the dev kind cluster with an 
 	$(KUBECTL) --context $(DEV_CONTEXT) --namespace $(HELM_NAMESPACE) create secret tls $(DEV_CA_SECRET) \
 		--cert=$(DEV_CA_DIR)/tls.crt --key=$(DEV_CA_DIR)/tls.key \
 		--dry-run=client -o yaml | $(KUBECTL) --context $(DEV_CONTEXT) --namespace $(HELM_NAMESPACE) apply -f -
-	$(GO_TOOL) helm --kube-context $(DEV_CONTEXT) upgrade --install $(HELM_RELEASE) $(SRC_ROOT)/charts/podcertificate-signer \
+	$(GO_TOOL) helm --kube-context $(DEV_CONTEXT) upgrade --install $(HELM_RELEASE) $(SRC_ROOT)/charts/pod-certificate-signer \
 		--namespace $(HELM_NAMESPACE) \
 		--set image.repository=$(IMAGE_REPO) \
 		--set image.tag=$(IMAGE_TAG) \
