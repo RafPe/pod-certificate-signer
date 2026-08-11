@@ -262,9 +262,11 @@ func NewPodCertificateConfig(
 		verified = verifiedIdentities(pcr, clusterFQDN)
 	}
 
+	defaultDNSNames, dnsLabelTooLong := defaultPodDNSNames(pod.Name, pod.Namespace, clusterFQDN)
+
 	config := &PodCertificateConfig{
 		CommonName:         defaultCommonName(pod.Name),
-		DNSNames:           defaultPodDNSNames(pod.Name, pod.Namespace, clusterFQDN),
+		DNSNames:           defaultDNSNames,
 		Duration:           duration,
 		RefreshBefore:      DefaultRefreshBefore,
 		MaxExpiration:      maxExpiration,
@@ -292,6 +294,16 @@ func NewPodCertificateConfig(
 		return nil, err
 	}
 	config.DNSNames = dnsNames
+
+	// If the default pod DNS SANs were dropped for an over-long label and no
+	// annotation/CSR SAN took their place, the certificate loses its canonical
+	// DNS identity. Surface it so the operator can add an explicit SAN; the
+	// reconciler turns this into a Warning event and a log line.
+	if dnsLabelTooLong && len(config.DNSNames) == 0 {
+		config.Warnings = append(config.Warnings, fmt.Sprintf(
+			"default pod DNS SANs omitted: pod name %q exceeds the %d-character DNS label limit; request an explicit SAN via the san annotation if one is needed",
+			pod.Name, dnsLabelMaxLen))
+	}
 
 	ipAddresses, err := resolveIPAddresses(lookup, expand, signerName, opts.AllowUnverifiedIdentities, opts.HonorCSRSANs, opts.CSRIPAddresses)
 	if err != nil {
@@ -463,31 +475,23 @@ func defaultCommonName(podName string) string {
 const dnsLabelMaxLen = 63
 
 // defaultPodDNSNames returns the canonical pod DNS SANs
-// <pod>.<ns>.pod|svc.<fqdn>. The pod name forms the first DNS label, which
-// RFC 1035 caps at 63 characters, so a longer pod name is truncated to keep the
-// label valid; the certificate stays identifiable by its SANs (and long pod
-// names already fall back to a SAN-only common name, see defaultCommonName).
-// Truncation means two pods whose names share their first 63 characters receive
-// the same default SANs - an accepted trade-off for keeping the label valid.
-func defaultPodDNSNames(podName, namespace, clusterFQDN string) []string {
-	label := truncateDNSLabel(podName)
-	if label == "" {
-		return nil
+// <pod>.<ns>.pod|svc.<fqdn>. The pod name forms the leading DNS label(s), which
+// RFC 1035 caps at 63 characters each. When a label would exceed that limit the
+// SANs are omitted entirely (skipped=true) rather than truncated: truncation
+// would give two pods whose names share their first 63 characters identical
+// pod/svc SANs, letting one impersonate the other. The pod stays identifiable by
+// its common name (see defaultCommonName) or an explicit san annotation; callers
+// surface skipped so the operator can act.
+func defaultPodDNSNames(podName, namespace, clusterFQDN string) (names []string, skipped bool) {
+	for _, label := range strings.Split(podName, ".") {
+		if len(label) > dnsLabelMaxLen {
+			return nil, true
+		}
 	}
 	return []string{
-		fmt.Sprintf("%s.%s.pod.%s", label, namespace, clusterFQDN),
-		fmt.Sprintf("%s.%s.svc.%s", label, namespace, clusterFQDN),
-	}
-}
-
-// truncateDNSLabel bounds s to a valid DNS label length, trimming any trailing
-// "-" or "." a naive cut could expose so the result stays a well-formed label
-// (a trailing hyphen or an empty label would be invalid).
-func truncateDNSLabel(s string) string {
-	if len(s) <= dnsLabelMaxLen {
-		return s
-	}
-	return strings.TrimRight(s[:dnsLabelMaxLen], "-.")
+		fmt.Sprintf("%s.%s.pod.%s", podName, namespace, clusterFQDN),
+		fmt.Sprintf("%s.%s.svc.%s", podName, namespace, clusterFQDN),
+	}, false
 }
 
 // verifiedIdentities returns the set of identity strings (common names, DNS

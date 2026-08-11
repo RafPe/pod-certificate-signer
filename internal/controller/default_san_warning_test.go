@@ -18,7 +18,7 @@ import (
 // told, so process() emits a Warning event explaining why the default SAN was
 // dropped.
 func TestProcessLongPodNameEmitsDefaultSANWarning(t *testing.T) {
-	pcr, pod := livePCR(t, "uid-1", "uid-1")
+	pcr, pod := livePCR(t, "uid-long", "uid-long")
 	longName := strings.Repeat("a", 64)
 	pcr.Spec.PodName = longName
 	pod.Name = longName

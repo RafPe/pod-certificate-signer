@@ -296,6 +296,13 @@ func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capi
 	if err != nil {
 		return nil, denied(ReasonInvalidUserAnnotations, err)
 	}
+	// Non-fatal notices (e.g. default pod DNS SANs dropped for an over-long pod
+	// name): the certificate still issues, but the operator must see why a
+	// default was omitted, so surface each as a Warning event and a log line.
+	for _, warning := range pcConfig.Warnings {
+		log.Info(warning)
+		r.EventRecorder.Eventf(pcr, nil, corev1.EventTypeWarning, string(ReasonDefaultSANSkipped), "SignPodCertificateRequest", "%s", warning)
+	}
 	pcConfig.LogConfiguration(ctx)
 
 	if err := pcConfig.Validate(); err != nil {
