@@ -163,19 +163,23 @@ type Options struct {
 	EnableInterpolation bool
 	// HonorCSRSANs uses the DNS and IP SANs embedded in the
 	// kubelet-generated PKCS#10 CSR (CSRDNSNames/CSRIPAddresses) when no
-	// san/ip-san annotation overrides them. Kubelet generates empty CSRs today,
-	// so this is inert until Kubernetes starts embedding requested SANs;
-	// when disabled, CSR SANs are ignored, which the API contract
-	// explicitly allows for signers.
+	// san/ip-san annotation overrides them. CSR SANs are still subject to the
+	// identity constraints below: unless AllowUnverifiedIdentities is set, CSR
+	// DNS SANs must clear the same verified-identity allowlist as annotation
+	// values, and CSR IP SANs (which have no verified derivation) are denied.
+	// Kubelet generates empty CSRs today, so this is inert until Kubernetes
+	// starts embedding requested SANs; when disabled, CSR SANs are ignored,
+	// which the API contract explicitly allows for signers.
 	HonorCSRSANs bool
-	// AllowUnverifiedIdentities lifts the requirement that annotation-provided
-	// cn/san/ip-san/uris values resolve to an identity derived from the
-	// apiserver-verified PodCertificateRequest fields (pod name/namespace/
-	// serviceAccountName/uid + cluster FQDN). It is off by default: without it,
-	// values that do not derive from a verified identity are denied, so a pod
-	// cannot request a certificate for an identity it does not own. IP SANs and
-	// arbitrary literals have no verified derivation and are always denied when
-	// this is false.
+	// AllowUnverifiedIdentities lifts the requirement that certificate identities
+	// resolve to one derived from the apiserver-verified PodCertificateRequest
+	// fields (pod name/namespace/serviceAccountName/uid + cluster FQDN). It
+	// governs both annotation-provided cn/san/ip-san/uris values and, when
+	// HonorCSRSANs is set, the SANs requested via the CSR. It is off by default:
+	// without it, values that do not derive from a verified identity are denied,
+	// so a pod cannot request a certificate for an identity it does not own. IP
+	// SANs and arbitrary literals have no verified derivation and are always
+	// denied when this is false.
 	AllowUnverifiedIdentities bool
 	// CSRDNSNames are the DNS SANs requested via the PKCS#10 CSR.
 	CSRDNSNames []string
@@ -254,11 +258,8 @@ func NewPodCertificateConfig(
 	}
 
 	config := &PodCertificateConfig{
-		CommonName: defaultCommonName(pod.Name),
-		DNSNames: []string{
-			fmt.Sprintf("%s.%s.pod.%s", pod.Name, pod.Namespace, clusterFQDN),
-			fmt.Sprintf("%s.%s.svc.%s", pod.Name, pod.Namespace, clusterFQDN),
-		},
+		CommonName:         defaultCommonName(pod.Name),
+		DNSNames:           defaultPodDNSNames(pod.Name, pod.Namespace, clusterFQDN),
 		Duration:           duration,
 		RefreshBefore:      DefaultRefreshBefore,
 		MaxExpiration:      maxExpiration,
@@ -453,6 +454,37 @@ func defaultCommonName(podName string) string {
 	return podName
 }
 
+// dnsLabelMaxLen is the maximum length of a single DNS label (RFC 1035 §2.3.4).
+const dnsLabelMaxLen = 63
+
+// defaultPodDNSNames returns the canonical pod DNS SANs
+// <pod>.<ns>.pod|svc.<fqdn>. The pod name forms the first DNS label, which
+// RFC 1035 caps at 63 characters, so a longer pod name is truncated to keep the
+// label valid; the certificate stays identifiable by its SANs (and long pod
+// names already fall back to a SAN-only common name, see defaultCommonName).
+// Truncation means two pods whose names share their first 63 characters receive
+// the same default SANs - an accepted trade-off for keeping the label valid.
+func defaultPodDNSNames(podName, namespace, clusterFQDN string) []string {
+	label := truncateDNSLabel(podName)
+	if label == "" {
+		return nil
+	}
+	return []string{
+		fmt.Sprintf("%s.%s.pod.%s", label, namespace, clusterFQDN),
+		fmt.Sprintf("%s.%s.svc.%s", label, namespace, clusterFQDN),
+	}
+}
+
+// truncateDNSLabel bounds s to a valid DNS label length, trimming any trailing
+// "-" or "." a naive cut could expose so the result stays a well-formed label
+// (a trailing hyphen or an empty label would be invalid).
+func truncateDNSLabel(s string) string {
+	if len(s) <= dnsLabelMaxLen {
+		return s
+	}
+	return strings.TrimRight(s[:dnsLabelMaxLen], "-.")
+}
+
 // verifiedIdentities returns the set of identity strings (common names, DNS
 // names and URIs) the signer is willing to emit for a request, computed solely
 // from its apiserver-verified fields. Resolved annotation values are accepted
@@ -574,6 +606,15 @@ func resolveDNSNames(
 	san, ok := lookup(AnnotationSuffixSAN)
 	if !ok {
 		if honorCSR && len(csrDNSNames) > 0 {
+			// CSR-requested SANs are attacker-influenced just like annotation
+			// values, so they must clear the same verified-identity allowlist.
+			if !allowUnverified {
+				for _, name := range csrDNSNames {
+					if err := assertVerifiedIdentity("CSR DNS name", name, verified); err != nil {
+						return nil, err
+					}
+				}
+			}
 			return csrDNSNames, nil
 		}
 		return defaults, nil
@@ -609,6 +650,12 @@ func resolveIPAddresses(
 	ipSAN, ok := lookup(AnnotationSuffixIPSAN)
 	if !ok {
 		if honorCSR && len(csrIPAddresses) > 0 {
+			// An IP has no verified derivation from the request fields, so
+			// CSR-requested IP SANs are denied under the same rule as the
+			// ip-san annotation unless unverified identities are allowed.
+			if !allowUnverified {
+				return nil, errors.New("CSR IP SANs are not derived from a verified pod identity and are denied; start the controller with --allow-unverified-identities to allow them")
+			}
 			return csrIPAddresses, nil
 		}
 		return nil, nil

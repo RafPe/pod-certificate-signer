@@ -125,7 +125,9 @@ type PodCertificateRequestReconciler struct {
 	// certificate configuration annotations (feature flag, off by default).
 	EnableAnnotationInterpolation bool
 	// HonorCSRSANs uses DNS/IP SANs embedded in the kubelet-generated CSR
-	// (feature flag, off by default; kubelet generates empty CSRs today).
+	// (feature flag, off by default; kubelet generates empty CSRs today). CSR
+	// SANs remain subject to the identity constraints unless
+	// AllowUnverifiedIdentities is set.
 	HonorCSRSANs bool
 	// AllowUnverifiedIdentities lifts the requirement that annotation-provided
 	// certificate identities derive from the verified request fields (feature
