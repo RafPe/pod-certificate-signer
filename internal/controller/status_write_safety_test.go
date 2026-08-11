@@ -60,7 +60,7 @@ func TestRecordOutcomeNoEventWhenStatusWriteFails(t *testing.T) {
 // status is persisted once, and the signer runs exactly once.
 func TestReconcileRetriesStatusConflict(t *testing.T) {
 	const signerName = "example.org/signer"
-	pcr, pod := livePCR(t, "uid-1", "uid-1")
+	pcr, pod := livePCR(t, "conflict-uid", "conflict-uid")
 	pcr.Spec.SignerName = signerName // otherwise Reconcile returns early and nothing is written
 
 	var updateAttempts, successfulWrites int
