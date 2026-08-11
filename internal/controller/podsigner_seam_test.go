@@ -26,11 +26,13 @@ type stubSigner struct {
 	cert      *podcertificate.PodCertificate
 	err       error
 	called    bool
+	signings  int
 	gotConfig *podcertificate.PodCertificateConfig
 }
 
 func (s *stubSigner) SignPodCertificate(cfg *podcertificate.PodCertificateConfig) (*podcertificate.PodCertificate, error) {
 	s.called = true
+	s.signings++
 	s.gotConfig = cfg
 	return s.cert, s.err
 }

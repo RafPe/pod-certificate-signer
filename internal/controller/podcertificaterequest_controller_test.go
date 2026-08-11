@@ -78,6 +78,24 @@ var _ = Describe("PodCertificateRequest Controller", func() {
 			Expect(got.Status.NotAfter.Sub(got.Status.NotBefore.Time)).
 				To(BeNumerically("<=", time.Duration(testMaxExpirationSeconds)*time.Second))
 		})
+
+		It("emits a single Issued event only once the status is persisted", func() {
+			pcr := createPodAndRequest("issued-event", testSignerName, nil)
+
+			By("waiting for the Issued condition, so the status write has landed")
+			waitForCondition(pcr, capiv1beta1.PodCertificateRequestConditionTypeIssued)
+
+			By("observing exactly one CertificateIssued event for the request")
+			// The event recorder is asynchronous, so the event may lag the
+			// condition; poll until it appears, then hold to prove the reconcile
+			// does not re-emit it on subsequent passes.
+			Eventually(func(g Gomega) {
+				g.Expect(issuedEventsFor(g, pcr)).To(HaveLen(1))
+			}, 30*time.Second, 200*time.Millisecond).Should(Succeed())
+			Consistently(func(g Gomega) {
+				g.Expect(issuedEventsFor(g, pcr)).To(HaveLen(1))
+			}, 3*time.Second, 250*time.Millisecond).Should(Succeed())
+		})
 	})
 
 	Context("When the request carries an invalid configuration", func() {
@@ -197,6 +215,22 @@ func newStubPKCS10Request() []byte {
 	Expect(err).NotTo(HaveOccurred())
 
 	return csr
+}
+
+// issuedEventsFor returns the CertificateIssued events the API server holds for
+// the given request. Events are listed as core/v1 and filtered in Go, which
+// sidesteps field-selector support questions and keeps the assertion explicit.
+func issuedEventsFor(g Gomega, pcr *capiv1beta1.PodCertificateRequest) []corev1.Event {
+	var list corev1.EventList
+	g.Expect(k8sClient.List(ctx, &list, client.InNamespace(pcr.Namespace))).To(Succeed())
+
+	var out []corev1.Event
+	for _, e := range list.Items {
+		if e.InvolvedObject.Name == pcr.Name && e.Reason == string(ReasonCertificateIssued) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // waitForCondition polls the request until the controller records the given
