@@ -71,6 +71,7 @@ See [docs/architecture.md](./docs/architecture.md) for the full C4 model (system
 | Threat model, reporting policy, supported versions | [SECURITY.md](./SECURITY.md) |
 | All chart values | [charts/pod-certificate-signer/README.md](./charts/pod-certificate-signer/README.md) |
 | Publishing the chart on Artifact Hub | [docs/artifact-hub.md](./docs/artifact-hub.md) |
+| Cutting a release, backfilling artifacts (maintainers) | [docs/releasing.md](./docs/releasing.md) |
 
 ## Release process
 
@@ -79,6 +80,10 @@ Releases are label-driven: every PR targeting `main` carries exactly one
 check. Publishing a release tags `vX.Y.Z`, pushes the multi-arch image to
 `ghcr.io/rafpe/pod-certificate-signer`, and packages the Helm chart to
 `oci://ghcr.io/rafpe/charts/pod-certificate-signer`.
+
+Maintainers: see [docs/releasing.md](./docs/releasing.md) for the cut-a-release
+flow, backfilling artifacts after a failed build, and the one-time GHCR/Artifact
+Hub steps.
 
 ## Contributing
 
