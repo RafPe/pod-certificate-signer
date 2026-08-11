@@ -42,7 +42,7 @@ jobs:
           # IMPORTANT: keep this false until the historical committed CA key is
           # rotated and confirmed by the maintainer. Publishing writes a public,
           # non-retractable score to the OpenSSF API. Flip to true only then.
-          publish_results: false
+          publish_results: true
 
       # Persist the SARIF as a build artifact for inspection / debugging.
       - name: Upload SARIF artifact

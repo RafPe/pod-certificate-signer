@@ -8,7 +8,7 @@
 [![Release](https://img.shields.io/github/v/release/rafpe/pod-certificate-signer?logo=github)](https://github.com/rafpe/pod-certificate-signer/releases)
 [![Go](https://img.shields.io/github/go-mod/go-version/rafpe/pod-certificate-signer)](./go.mod)
 [![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/podcertificate-signer)](https://artifacthub.io/packages/search?repo=podcertificate-signer)
-<!-- Scorecard badge: add after publish_results flip post-CA-rotation -->
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/RafPe/pod-certificate-signer/badge)](https://scorecard.dev/viewer/?uri=github.com/RafPe/pod-certificate-signer)
 
 # pod-certificate-signer
 
