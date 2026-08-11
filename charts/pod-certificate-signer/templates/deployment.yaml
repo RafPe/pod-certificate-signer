@@ -19,6 +19,10 @@ spec:
         prometheus.io/name: {{ include "pod-certificate-signer.fullname" . }}
         prometheus.io/scrape: "true"
         prometheus.io/port: {{ .Values.metrics.bind_address | trimPrefix ":" | quote }}
+        # When secured, the endpoint is HTTPS and requires a bearer token, so
+        # annotation-based scraping cannot authenticate on its own - use a
+        # ServiceMonitor with a token and TLS config (see the chart README).
+        prometheus.io/scheme: {{ if .Values.metrics.insecure }}"http"{{ else }}"https"{{ end }}
         {{- end }}
         {{- with .Values.podAnnotations }}
           {{- toYaml . | nindent 8 }}
@@ -55,6 +59,7 @@ spec:
             - --zap-encoder={{ .Values.log.encoder }}
             - --zap-time-encoding={{ .Values.log.time_encoding }}
             - --metrics-bind-address={{ .Values.metrics.bind_address }}
+            - --metrics-secure={{ not .Values.metrics.insecure }}
             - --max-concurrent-reconciles={{ .Values.manager.max_concurrent_reconciles }}
             - --reconcile-timeout={{ .Values.manager.reconcile_timeout }}
             - --max-previous-ca-certs={{ .Values.signer.max_previous_ca_certs }}

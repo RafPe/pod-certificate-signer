@@ -21,8 +21,42 @@ log:
 
 # Metrics settings
 metrics:
+  # Expose the metrics port on the Service and add the Prometheus scrape
+  # annotations to the pod. Orthogonal to the auth toggle below.
   enable_scraping: true
   bind_address: ":9090"
+
+  # Secure the metrics endpoint (DEFAULT, recommended). When true the controller
+  # serves /metrics over HTTPS and requires every scrape to authenticate (a
+  # Kubernetes bearer token, verified via TokenReview) and be authorized (via
+  # SubjectAccessReview for GET on the /metrics nonResourceURL). A scraper must
+  # present a ServiceAccount token bound to the metrics-reader ClusterRole and
+  # trust (or skip verifying) the controller's self-signed serving certificate.
+  #
+  # BREAKING: unauthenticated plaintext scrapes that worked before now fail.
+  # Set insecure: true ONLY to restore the legacy behaviour (renders
+  # --metrics-secure=false). See the chart README "Metrics authentication".
+  insecure: false
+
+  # Metrics-reader ClusterRole granting GET on the /metrics nonResourceURL. Bind
+  # it (via your own ClusterRoleBinding or a ServiceMonitor's ServiceAccount) to
+  # the identity Prometheus scrapes with. Ignored when metrics.insecure is true.
+  reader:
+    create: true
+
+  # Optional NetworkPolicy restricting ingress to the metrics port. Off by
+  # default so it does not silently block scrapers in clusters without a
+  # NetworkPolicy controller. When enabled, only sources matching the selectors
+  # below may reach the metrics port; an empty from-list allows all sources. The
+  # health/readiness probe port stays open to all sources regardless.
+  networkPolicy:
+    enabled: false
+    # Namespace label selector for allowed scrapers, e.g. {kubernetes.io/metadata.name: monitoring}.
+    namespaceSelector: {}
+    # Pod label selector for allowed scrapers. With namespaceSelector empty this
+    # matches pods in this release's namespace only; pair it with a
+    # namespaceSelector to allow a scraper in another namespace.
+    podSelector: {}
 
 # PodCertificateRequest Signer settings
 signer:

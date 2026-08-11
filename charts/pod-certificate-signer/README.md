@@ -80,6 +80,10 @@ The signing CA is configured under `signer.ca` with an explicit `source`:
 | `health.bind_address` | Health/readiness bind address; rendered as both the container port **and** the `--health-probe-bind-address` flag. | `":8081"` |
 | `metrics.enable_scraping` | Expose the metrics port and Prometheus scrape annotations. | `true` |
 | `metrics.bind_address` | Metrics server bind address. | `":9090"` |
+| **`metrics.insecure`** | **Security escape hatch.** When `false` (default) `/metrics` is served over HTTPS and every scrape must authenticate (TokenReview) and be authorized (SubjectAccessReview). `true` restores the legacy unauthenticated plaintext endpoint. See [Metrics authentication](#metrics-authentication-security). | `false` |
+| `metrics.reader.create` | Create the `*-metrics-reader` ClusterRole (`get` on the `/metrics` nonResourceURL) to bind to your scraper. Ignored when `metrics.insecure`. | `true` |
+| `metrics.networkPolicy.enabled` | Create an optional NetworkPolicy restricting ingress to the metrics port. | `false` |
+| `metrics.networkPolicy.namespaceSelector` / `.podSelector` | Label selectors for allowed scrapers when the NetworkPolicy is enabled (empty allows all). | `{}` / `{}` |
 | `log.level` / `log.encoder` / `log.time_encoding` | zap logging config. | `info` / `console` / `rfc3339` |
 | **`signer.name`** | **Required.** Signer name this controller claims (`spec.signerName`). Empty makes the controller fail fast at startup. | `""` |
 | **`signer.cluster_fqdn`** | Cluster FQDN used to build the default certificate DNS names (`<pod>.<ns>.pod.<fqdn>` / `<pod>.<ns>.svc.<fqdn>`); rendered as `--cluster-fqdn`. | `cluster.local` |
@@ -127,6 +131,32 @@ set. Enabling it renders `--allow-unverified-identities` on the controller.
 > The `signer.allow_unverified_identities` value and this behaviour are
 > introduced together with the identity-constraint change (issue #26 / PR #38);
 > until that merges, the value is inert.
+
+## Metrics authentication (security)
+
+By default (`metrics.insecure: false`) the controller serves `/metrics` over
+**HTTPS** and requires every scrape to be **authenticated** (a Kubernetes bearer
+token, verified via `TokenReview`) and **authorized** (`SubjectAccessReview` for
+`get` on the `/metrics` nonResourceURL). This renders `--metrics-secure=true` and
+adds `create` on `tokenreviews`/`subjectaccessreviews` to the controller
+ClusterRole.
+
+> [!WARNING]
+> **Breaking change.** Unauthenticated plaintext scrapes that worked before now
+> fail. Prometheus must scrape over `https`, present a ServiceAccount token bound
+> to the `*-metrics-reader` ClusterRole, and trust (or skip verifying) the
+> controller's in-memory self-signed serving certificate.
+
+Bind the rendered `<release>-metrics-reader` ClusterRole to your scraper's
+ServiceAccount and point a `ServiceMonitor` (or equivalent) at the endpoint with
+`scheme: https`, a `bearerTokenFile`, and `tlsConfig.insecureSkipVerify: true`
+(or your serving CA). Full walkthrough in the
+[configuration docs](../../docs/configuration.md#metrics-authentication).
+
+Set `metrics.insecure: true` **only** to restore the legacy unauthenticated
+plaintext endpoint, and only when the port is protected by other means. An
+optional `metrics.networkPolicy` (off by default) restricts ingress to the
+metrics port to selected namespaces/pods.
 
 ## Notes for this release
 

@@ -98,4 +98,12 @@ func TestNetworkPolicyOptional(t *testing.T) {
 	if !strings.Contains(on, "kind: NetworkPolicy") {
 		t.Errorf("metrics.networkPolicy.enabled=true must render a NetworkPolicy:\n%s", on)
 	}
+	// The policy selects the controller pods for Ingress, which denies all
+	// unlisted traffic - so it must keep the health/probe port open alongside
+	// the restricted metrics port, or the kubelet probes get black-holed.
+	for _, want := range []string{"port: http", "port: metrics"} {
+		if !strings.Contains(on, want) {
+			t.Errorf("NetworkPolicy must keep %q reachable; missing from:\n%s", want, on)
+		}
+	}
 }

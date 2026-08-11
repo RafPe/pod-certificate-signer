@@ -51,6 +51,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/controller"
@@ -81,7 +82,7 @@ func main() {
 	var healthProbeBindAddress, metricsBindAddress string
 	var maxConcurrentReconciles, maxPreviousCACerts int
 	var enableLeaderElection, enableAnnotationInterpolation, honorCSRSANs bool
-	var allowUnverifiedIdentities bool
+	var allowUnverifiedIdentities, metricsSecure bool
 	var reconcileTimeout time.Duration
 
 	flag.StringVar(&signerName, "signer-name", "", "Only sign CSR with this .spec.signerName. Required.")
@@ -96,6 +97,10 @@ func main() {
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&metricsBindAddress, "metrics-bind-address", ":9090", "The address on which to bind the metrics server.")
+	flag.BoolVar(&metricsSecure, "metrics-secure", true,
+		"Serve the metrics endpoint over HTTPS and require authentication (TokenReview) and authorization "+
+			"(SubjectAccessReview) for every scrape. On by default. Set to false to fall back to the legacy "+
+			"unauthenticated plaintext endpoint - see the chart's metrics.insecure escape hatch.")
 	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 5, "maximum number of concurrent reconciles which can be run.")
 	flag.IntVar(&maxPreviousCACerts, "max-previous-ca-certs", 2, "maximum number of previous CA certificates to keep during CA rotation.")
 	flag.DurationVar(&reconcileTimeout, "reconcile-timeout", 5*time.Minute, "maximum duration of a reconcile before it times out.")
@@ -133,6 +138,7 @@ func main() {
 	mgr, err := ctrl.NewManager(restCfg, managerOptions(scheme, managerConfig{
 		healthProbeBindAddress:  healthProbeBindAddress,
 		metricsBindAddress:      metricsBindAddress,
+		metricsSecure:           metricsSecure,
 		leaderElection:          enableLeaderElection,
 		leaderElectionID:        leaderElectionID,
 		leaderElectionNamespace: leaderElectionNamespace,
@@ -271,6 +277,7 @@ func validateFlags(signerName string) error {
 type managerConfig struct {
 	healthProbeBindAddress  string
 	metricsBindAddress      string
+	metricsSecure           bool
 	leaderElection          bool
 	leaderElectionID        string
 	leaderElectionNamespace string
@@ -288,9 +295,7 @@ func managerOptions(scheme *runtime.Scheme, cfg managerConfig) ctrl.Options {
 		LeaderElectionID:        cfg.leaderElectionID,
 		LeaderElectionNamespace: cfg.leaderElectionNamespace,
 		BaseContext:             func() context.Context { return cfg.baseContext },
-		Metrics: server.Options{
-			BindAddress: cfg.metricsBindAddress,
-		},
+		Metrics:                 metricsServerOptions(cfg),
 		Controller: config.Controller{
 			MaxConcurrentReconciles: cfg.maxConcurrentReconciles,
 			RecoverPanic:            new(true),
@@ -306,6 +311,33 @@ func managerOptions(scheme *runtime.Scheme, cfg managerConfig) ctrl.Options {
 			},
 		},
 	}
+}
+
+// metricsServerOptions builds the metrics server options from cfg. By default
+// the endpoint is served over HTTPS and every scrape is authenticated (via a
+// TokenReview) and authorized (via a SubjectAccessReview) against the
+// kube-apiserver, so metrics are not exposed to any pod that can reach the
+// service. The insecure escape hatch restores the legacy plaintext,
+// unauthenticated endpoint for operators who explicitly opt into it.
+//
+// The self-signed serving certificate is generated in memory by
+// controller-runtime (no on-disk fixture directory is configured), so this is
+// compatible with a read-only root filesystem.
+func metricsServerOptions(cfg managerConfig) server.Options {
+	opts := server.Options{
+		BindAddress: cfg.metricsBindAddress,
+	}
+	if cfg.metricsSecure {
+		opts.SecureServing = true
+		// FilterProvider authenticates the bearer token and authorizes the
+		// "get" verb on the /metrics nonResourceURL. The controller's
+		// ServiceAccount therefore needs create on tokenreviews and
+		// subjectaccessreviews (wired in the chart ClusterRole), and scrapers
+		// need get on the /metrics nonResourceURL (the metrics-reader
+		// ClusterRole).
+		opts.FilterProvider = filters.WithAuthenticationAndAuthorization
+	}
+	return opts
 }
 
 // caHealthChecker is the CA health surface consumed by the readiness probe.

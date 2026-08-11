@@ -14,6 +14,9 @@ spec:
       targetPort: metrics
       protocol: TCP
       name: metrics
+      # Secured metrics are served over HTTPS; advertise the scheme so
+      # ServiceMonitors and clients pick TLS. Plain HTTP under the insecure hatch.
+      appProtocol: {{ if .Values.metrics.insecure }}http{{ else }}https{{ end }}
     {{- end }}
     - port: {{ .Values.service.port }}
       targetPort: http
