@@ -107,41 +107,71 @@ func TestDefaultEKUServerAuthOnly(t *testing.T) {
 	}
 }
 
-// (5): A pod name longer than the 64-character RFC 5280 common name limit must
-// still yield a configuration whose default CN passes validation (SAN-only or
-// truncated), rather than an un-issuable request.
-func TestLongPodNameYieldsValidDefaultCN(t *testing.T) {
-	pod := testPod(nil)
-	pod.Name = strings.Repeat("a", 65)
-	pcr := testPCR(nil)
-	pcr.Spec.PodName = pod.Name
+// (5): A pod name over the 63-character DNS label limit must not receive a
+// truncated, collision-prone default SAN. At 64 characters the common name still
+// carries the identity, so the certificate issues with no default DNS SANs. Past
+// the 64-character CN limit as well, with no annotation to supply an identity,
+// the configuration is denied at validation rather than issued without a
+// verifiable subject.
+func TestLongPodNameIdentityFallback(t *testing.T) {
+	t.Run("64 chars: CN carries identity, config validates", func(t *testing.T) {
+		name := strings.Repeat("a", 64)
+		pod := testPod(nil)
+		pod.Name = name
+		pcr := testPCR(nil)
+		pcr.Spec.PodName = name
 
-	config, err := NewPodCertificateConfig(pcr, pod, Options{}, nil, 0)
-	if err != nil {
-		t.Fatalf("NewPodCertificateConfig: %v", err)
-	}
-	if len(config.CommonName) > 64 {
-		t.Errorf("CommonName length = %d, want <= 64 for a long pod name", len(config.CommonName))
-	}
-	if err := config.Validate(); err != nil {
-		t.Errorf("Validate() = %v, want nil for a long pod name default CN", err)
-	}
+		config, err := NewPodCertificateConfig(pcr, pod, Options{}, nil, 0)
+		if err != nil {
+			t.Fatalf("NewPodCertificateConfig: %v", err)
+		}
+		if config.CommonName != name {
+			t.Errorf("CommonName = %q, want the 64-char pod name", config.CommonName)
+		}
+		if len(config.DNSNames) != 0 {
+			t.Errorf("DNSNames = %v, want none for an over-long label", config.DNSNames)
+		}
+		if err := config.Validate(); err != nil {
+			t.Errorf("Validate() = %v, want nil (the CN carries the identity)", err)
+		}
+	})
+
+	t.Run("65 chars, no annotation: denied at validation", func(t *testing.T) {
+		name := strings.Repeat("a", 65)
+		pod := testPod(nil)
+		pod.Name = name
+		pcr := testPCR(nil)
+		pcr.Spec.PodName = name
+
+		config, err := NewPodCertificateConfig(pcr, pod, Options{}, nil, 0)
+		if err != nil {
+			t.Fatalf("NewPodCertificateConfig: %v", err)
+		}
+		if config.CommonName != "" {
+			t.Errorf("CommonName = %q, want empty for a pod name over the CN limit", config.CommonName)
+		}
+		if err := config.Validate(); err == nil {
+			t.Error("Validate() = nil, want denial when there is neither a CN nor a SAN")
+		}
+	})
 }
 
-// A pod name longer than the 63-character DNS label limit (RFC 1035) must not
-// produce an invalid label in the default SANs <pod>.<ns>.pod|svc.<fqdn>. The
-// first label is truncated to stay valid. Boundaries: 63 chars is kept verbatim,
-// 64+ is truncated, and a truncation that would land on a dot or hyphen must not
-// leave an empty or otherwise malformed label.
-func TestLongPodNameDefaultDNSLabels(t *testing.T) {
+// A pod name whose DNS label(s) exceed the 63-character RFC 1035 limit must not
+// receive a truncated default SAN: truncation would give two pods sharing a
+// 63-character prefix identical pod/svc SANs, so one could impersonate the
+// other. Instead the default pod DNS SANs are omitted entirely and a warning is
+// surfaced. Boundary: a 63-character label is kept; 64+ yields no default SANs.
+func TestLongPodNameOmitsDefaultDNSSANs(t *testing.T) {
 	cases := []struct {
-		name    string
-		podName string
+		name        string
+		podName     string
+		wantSANs    bool
+		wantWarning bool
 	}{
-		{"exactly 63 chars kept", strings.Repeat("a", 63)},
-		{"64 chars truncated", strings.Repeat("a", 64)},
-		{"65 chars truncated", strings.Repeat("a", 65)},
-		{"truncation cut lands on a dot", strings.Repeat("a", 62) + "." + strings.Repeat("b", 10)},
+		{"exactly 63 chars kept", strings.Repeat("a", 63), true, false},
+		{"64 chars omitted", strings.Repeat("a", 64), false, true},
+		{"65 chars omitted", strings.Repeat("a", 65), false, true},
+		{"multi-label within limit kept", strings.Repeat("a", 40) + "." + strings.Repeat("b", 40), true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -154,6 +184,7 @@ func TestLongPodNameDefaultDNSLabels(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewPodCertificateConfig: %v", err)
 			}
+			// Whatever survives must be a valid label - no empty or >63 label.
 			for _, dns := range config.DNSNames {
 				for _, label := range strings.Split(dns, ".") {
 					if len(label) == 0 || len(label) > 63 {
@@ -161,6 +192,42 @@ func TestLongPodNameDefaultDNSLabels(t *testing.T) {
 					}
 				}
 			}
+			if gotSANs := len(config.DNSNames) > 0; gotSANs != tc.wantSANs {
+				t.Errorf("has default DNS SANs = %v (%v), want %v", gotSANs, config.DNSNames, tc.wantSANs)
+			}
+			gotWarning := false
+			for _, w := range config.Warnings {
+				if strings.Contains(w, "DNS label limit") {
+					gotWarning = true
+				}
+			}
+			if gotWarning != tc.wantWarning {
+				t.Errorf("DNS-label warning surfaced = %v (%v), want %v", gotWarning, config.Warnings, tc.wantWarning)
+			}
 		})
+	}
+}
+
+// Two distinct pods whose names share a 63-character prefix must not receive
+// identical default SANs - the collision truncation would introduce, letting one
+// pod's certificate impersonate the other. Each simply gets no default DNS SANs.
+func TestLongPodNameNoDefaultSANCollision(t *testing.T) {
+	prefix := strings.Repeat("a", 63)
+	build := func(podName string) *PodCertificateConfig {
+		pod := testPod(nil)
+		pod.Name = podName
+		pcr := testPCR(nil)
+		pcr.Spec.PodName = podName
+		config, err := NewPodCertificateConfig(pcr, pod, Options{}, nil, 0)
+		if err != nil {
+			t.Fatalf("NewPodCertificateConfig(%q): %v", podName, err)
+		}
+		return config
+	}
+
+	a := build(prefix + "x")
+	b := build(prefix + "y")
+	if len(a.DNSNames) != 0 || len(b.DNSNames) != 0 {
+		t.Fatalf("want no default DNS SANs for over-long names, got a=%v b=%v", a.DNSNames, b.DNSNames)
 	}
 }

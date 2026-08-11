@@ -61,6 +61,11 @@ const (
 	// which of the two it was.
 	ReasonAssociatedPodGone Reason = "AssociatedPodGone"
 
+	// ReasonDefaultSANSkipped is event-only: the certificate still issues, but a
+	// default that could not be applied (e.g. the pod DNS SANs for an over-long
+	// pod name) is surfaced as a Warning event so the operator can see why.
+	ReasonDefaultSANSkipped Reason = "DefaultSANSkipped"
+
 	// Well-known condition reasons defined by the certificates v1beta1 API.
 	ReasonUnsupportedKeyType     Reason = Reason(capiv1beta1.PodCertificateRequestConditionUnsupportedKeyType)
 	ReasonInvalidUserAnnotations Reason = Reason(capiv1beta1.PodCertificateRequestConditionInvalidUserConfig)

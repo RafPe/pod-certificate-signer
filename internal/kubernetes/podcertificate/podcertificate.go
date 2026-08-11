@@ -44,6 +44,11 @@ type PodCertificateConfig struct {
 	ExtKeyUsage        []x509.ExtKeyUsage // TODO: Customizable Ext Key Usage via Policies or other aliases i.e. client-server-auth , ssl ,
 	PublicKey          crypto.PublicKey
 	PublicKeyAlgorithm x509.PublicKeyAlgorithm
+	// Warnings are non-fatal notices about how the configuration was resolved
+	// (e.g. default pod DNS SANs omitted for an over-long pod name). The
+	// certificate still issues; the reconciler surfaces each as a Warning event
+	// and a log line so the operator can see why a default was dropped.
+	Warnings []string
 }
 
 // Well-known configuration annotation suffixes understood by the signer.
