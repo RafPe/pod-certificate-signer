@@ -82,8 +82,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # No GitHub Actions layer cache: releases are infrequent, and the gha
+          # cache backend fails hard ("failed to reserve cache") under this
+          # reusable-workflow context, which would take the whole build down.
           # Generate a per-platform SPDX SBOM and attach it to the image index as
           # an in-toto attestation. buildx fails the build if generation fails, so
           # a missing SBOM never slips through silently on a signer release.
