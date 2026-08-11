@@ -127,3 +127,40 @@ func TestLongPodNameYieldsValidDefaultCN(t *testing.T) {
 		t.Errorf("Validate() = %v, want nil for a long pod name default CN", err)
 	}
 }
+
+// A pod name longer than the 63-character DNS label limit (RFC 1035) must not
+// produce an invalid label in the default SANs <pod>.<ns>.pod|svc.<fqdn>. The
+// first label is truncated to stay valid. Boundaries: 63 chars is kept verbatim,
+// 64+ is truncated, and a truncation that would land on a dot or hyphen must not
+// leave an empty or otherwise malformed label.
+func TestLongPodNameDefaultDNSLabels(t *testing.T) {
+	cases := []struct {
+		name    string
+		podName string
+	}{
+		{"exactly 63 chars kept", strings.Repeat("a", 63)},
+		{"64 chars truncated", strings.Repeat("a", 64)},
+		{"65 chars truncated", strings.Repeat("a", 65)},
+		{"truncation cut lands on a dot", strings.Repeat("a", 62) + "." + strings.Repeat("b", 10)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := testPod(nil)
+			pod.Name = tc.podName
+			pcr := testPCR(nil)
+			pcr.Spec.PodName = tc.podName
+
+			config, err := NewPodCertificateConfig(pcr, pod, Options{}, nil, 0)
+			if err != nil {
+				t.Fatalf("NewPodCertificateConfig: %v", err)
+			}
+			for _, dns := range config.DNSNames {
+				for _, label := range strings.Split(dns, ".") {
+					if len(label) == 0 || len(label) > 63 {
+						t.Errorf("DNS name %q has invalid label %q (len %d)", dns, label, len(label))
+					}
+				}
+			}
+		})
+	}
+}
