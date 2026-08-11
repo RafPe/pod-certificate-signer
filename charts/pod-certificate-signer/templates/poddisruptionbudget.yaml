@@ -6,10 +6,10 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "podcertificate-signer.fullname" . }}
+  name: {{ include "pod-certificate-signer.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "podcertificate-signer.labels" . | nindent 4 }}
+    {{- include "pod-certificate-signer.labels" . | nindent 4 }}
 spec:
   {{- if $pdb.minAvailable }}
   minAvailable: {{ $pdb.minAvailable }}
@@ -21,5 +21,5 @@ spec:
   {{- end }}
   selector:
     matchLabels:
-      {{- include "podcertificate-signer.selectorLabels" . | nindent 6 }}
+      {{- include "pod-certificate-signer.selectorLabels" . | nindent 6 }}
 {{- end }}

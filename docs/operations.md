@@ -135,7 +135,7 @@ controller logs alongside.
 ### Logs
 
 ```sh
-kubectl logs -n pcs-system deployment/podcertificate-signer
+kubectl logs -n pcs-system deployment/pod-certificate-signer
 ```
 
 Adjust verbosity with `log.level` (`info`, `error`, `debug`, `panic`) and

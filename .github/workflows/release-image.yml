@@ -30,7 +30,7 @@ env:
   # image.repository value.
   IMAGE_REPO: ghcr.io/rafpe/pod-certificate-signer
   # OCI registry namespace the Helm chart is pushed to; the chart lands at
-  # ghcr.io/rafpe/charts/podcertificate-signer.
+  # ghcr.io/rafpe/charts/pod-certificate-signer.
   CHART_REPO: ghcr.io/rafpe/charts
 
 jobs:
@@ -140,16 +140,16 @@ jobs:
           yq -i '
             .annotations."artifacthub.io/images" = strenv(IMAGES)
             | .annotations."artifacthub.io/images" style="literal"
-          ' charts/podcertificate-signer/Chart.yaml
+          ' charts/pod-certificate-signer/Chart.yaml
 
       - name: Package the chart
         run: |
           VERSION="${RELEASE_TAG#v}"
-          helm package charts/podcertificate-signer \
+          helm package charts/pod-certificate-signer \
             --version "${VERSION}" \
             --app-version "${RELEASE_TAG}"
 
       - name: Push the chart
         run: |
           VERSION="${RELEASE_TAG#v}"
-          helm push "podcertificate-signer-${VERSION}.tgz" "oci://${CHART_REPO}"
+          helm push "pod-certificate-signer-${VERSION}.tgz" "oci://${CHART_REPO}"

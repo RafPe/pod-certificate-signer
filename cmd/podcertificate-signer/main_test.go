@@ -35,7 +35,7 @@ func TestDeploymentRendersConfiguredFlags(t *testing.T) {
 	}
 
 	out, err := exec.Command(
-		"helm", "template", "podcertificate-signer", chartDir(t),
+		"helm", "template", "pod-certificate-signer", chartDir(t),
 		"--kube-version", "1.36.0",
 		// A CA source is required (the chart fails fast otherwise).
 		"--set", "signer.ca.secretRef.name=test-ca",
@@ -57,7 +57,7 @@ func chartDir(t *testing.T) string {
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	return filepath.Join(filepath.Dir(file), "..", "..", "charts", "podcertificate-signer")
+	return filepath.Join(filepath.Dir(file), "..", "..", "charts", "pod-certificate-signer")
 }
 
 // The manager must bypass the cache for Pods: the controller only does point

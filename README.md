@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
 [![Release](https://img.shields.io/github/v/release/rafpe/pod-certificate-signer?logo=github)](https://github.com/rafpe/pod-certificate-signer/releases)
 [![Go](https://img.shields.io/github/go-mod/go-version/rafpe/pod-certificate-signer)](./go.mod)
-[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/podcertificate-signer)](https://artifacthub.io/packages/search?repo=podcertificate-signer)
+[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/pod-certificate-signer)](https://artifacthub.io/packages/search?repo=pod-certificate-signer)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/RafPe/pod-certificate-signer/badge)](https://scorecard.dev/viewer/?uri=github.com/RafPe/pod-certificate-signer)
 
 # pod-certificate-signer
@@ -37,7 +37,7 @@ kubectl create namespace pcs-system
 kubectl create secret tls podcertificate-signer-ca \
   --namespace pcs-system --cert=ca.pem --key=ca-key.pem
 
-helm install podcertificate-signer oci://ghcr.io/rafpe/charts/podcertificate-signer \
+helm install pod-certificate-signer oci://ghcr.io/rafpe/charts/pod-certificate-signer \
   --namespace pcs-system \
   --set signer.name=coolcert.example.com/foo \
   --set signer.ca.secretRef.name=podcertificate-signer-ca
@@ -69,7 +69,7 @@ See [docs/architecture.md](./docs/architecture.md) for the full C4 model (system
 | CA rotation, leader election, readiness, upgrades, troubleshooting | [docs/operations.md](./docs/operations.md) |
 | C4 diagrams, component overview, security posture | [docs/architecture.md](./docs/architecture.md) |
 | Threat model, reporting policy, supported versions | [SECURITY.md](./SECURITY.md) |
-| All chart values | [charts/podcertificate-signer/README.md](./charts/podcertificate-signer/README.md) |
+| All chart values | [charts/pod-certificate-signer/README.md](./charts/pod-certificate-signer/README.md) |
 | Publishing the chart on Artifact Hub | [docs/artifact-hub.md](./docs/artifact-hub.md) |
 
 ## Release process
@@ -78,7 +78,7 @@ Releases are label-driven: every PR targeting `main` carries exactly one
 `release/*` label (`major`/`minor`/`patch`/`skip`), enforced by a required
 check. Publishing a release tags `vX.Y.Z`, pushes the multi-arch image to
 `ghcr.io/rafpe/pod-certificate-signer`, and packages the Helm chart to
-`oci://ghcr.io/rafpe/charts/podcertificate-signer`.
+`oci://ghcr.io/rafpe/charts/pod-certificate-signer`.
 
 ## Contributing
 

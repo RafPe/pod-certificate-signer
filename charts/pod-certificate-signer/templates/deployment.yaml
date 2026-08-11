@@ -1,22 +1,22 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "podcertificate-signer.fullname" . }}
+  name: {{ include "pod-certificate-signer.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "podcertificate-signer.labels" . | nindent 4 }}
+    {{- include "pod-certificate-signer.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
     matchLabels:
-      {{- include "podcertificate-signer.selectorLabels" . | nindent 6 }}
+      {{- include "pod-certificate-signer.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       annotations:
         {{- if .Values.metrics.enable_scraping }}
-        prometheus.io/name: {{ include "podcertificate-signer.fullname" . }}
+        prometheus.io/name: {{ include "pod-certificate-signer.fullname" . }}
         prometheus.io/scrape: "true"
         prometheus.io/port: {{ .Values.metrics.bind_address | trimPrefix ":" | quote }}
         {{- end }}
@@ -24,7 +24,7 @@ spec:
           {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "podcertificate-signer.labels" . | nindent 8 }}
+        {{- include "pod-certificate-signer.labels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -33,7 +33,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "podcertificate-signer.serviceAccountName" . }}
+      serviceAccountName: {{ include "pod-certificate-signer.serviceAccountName" . }}
       {{- with .Values.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
@@ -43,11 +43,11 @@ spec:
           command:
             - /manager
             - --leader-elect={{ .Values.leader_election.enabled }}
-            - --leader-election-id={{ include "podcertificate-signer.fullname" . }}
+            - --leader-election-id={{ include "pod-certificate-signer.fullname" . }}
             - --leader-election-namespace={{ .Release.Namespace }}
-            {{- include "podcertificate-signer.validateCA" . }}
-            - --ca-cert-path={{ include "podcertificate-signer.caCertPath" . }}
-            - --ca-key-path={{ include "podcertificate-signer.caKeyPath" . }}
+            {{- include "pod-certificate-signer.validateCA" . }}
+            - --ca-cert-path={{ include "pod-certificate-signer.caCertPath" . }}
+            - --ca-key-path={{ include "pod-certificate-signer.caKeyPath" . }}
             - --signer-name={{ .Values.signer.name }}
             - --cluster-fqdn={{ .Values.signer.cluster_fqdn }}
             - --health-probe-bind-address={{ .Values.health.bind_address }}

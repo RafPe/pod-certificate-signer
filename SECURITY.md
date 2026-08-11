@@ -47,7 +47,7 @@ Only the newest release line receives security fixes. There are no backports.
 
 Security fixes ship as patch releases of the current line (image
 `ghcr.io/rafpe/pod-certificate-signer`, chart
-`oci://ghcr.io/rafpe/charts/podcertificate-signer`).
+`oci://ghcr.io/rafpe/charts/pod-certificate-signer`).
 
 ## Threat model
 

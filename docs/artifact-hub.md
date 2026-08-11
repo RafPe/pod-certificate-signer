@@ -1,15 +1,15 @@
 # Publishing on Artifact Hub
 
 [Artifact Hub](https://artifacthub.io) is where most Helm users discover charts.
-Listing `podcertificate-signer` there makes it installable and searchable beyond
+Listing `pod-certificate-signer` there makes it installable and searchable beyond
 GitHub.
 
 The chart is already prepared for it:
 
-- [`charts/podcertificate-signer/Chart.yaml`](../charts/podcertificate-signer/Chart.yaml)
+- [`charts/pod-certificate-signer/Chart.yaml`](../charts/pod-certificate-signer/Chart.yaml)
   carries `artifacthub.io/*` annotations (category, license, links, images) that
   populate the listing.
-- [`charts/podcertificate-signer/artifacthub-repo.yml`](../charts/podcertificate-signer/artifacthub-repo.yml)
+- [`charts/pod-certificate-signer/artifacthub-repo.yml`](../charts/pod-certificate-signer/artifacthub-repo.yml)
   is the ownership file used to claim the repository and become a Verified
   Publisher.
 
@@ -28,12 +28,12 @@ Registration is a one-time manual step — it needs an Artifact Hub account.
 
 2. **Add the repository** under *Control Panel → Repositories → Add*:
    - **Kind:** `Helm charts`
-   - **Name:** `podcertificate-signer` (this becomes the URL slug and **must**
+   - **Name:** `pod-certificate-signer` (this becomes the URL slug and **must**
      match the Artifact Hub badge in the README)
-   - **URL:** `oci://ghcr.io/rafpe/charts/podcertificate-signer`
+   - **URL:** `oci://ghcr.io/rafpe/charts/pod-certificate-signer`
 
 3. **Copy the Repository ID** shown for the new repository and paste it into
-   `charts/podcertificate-signer/artifacthub-repo.yml` (replacing the
+   `charts/pod-certificate-signer/artifacthub-repo.yml` (replacing the
    `repositoryID` placeholder). Also set `owners[].email` to the address on your
    Artifact Hub account. Commit that change.
 
@@ -44,9 +44,9 @@ Registration is a one-time manual step — it needs an Artifact Hub account.
    ```bash
    echo "$GITHUB_TOKEN" | oras login ghcr.io -u <your-github-user> --password-stdin
 
-   oras push ghcr.io/rafpe/charts/podcertificate-signer:artifacthub.io \
+   oras push ghcr.io/rafpe/charts/pod-certificate-signer:artifacthub.io \
      --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
-     charts/podcertificate-signer/artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
+     charts/pod-certificate-signer/artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
    ```
 
 Artifact Hub re-indexes the repository within a few minutes and shows the chart,

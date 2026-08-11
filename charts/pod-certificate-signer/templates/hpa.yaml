@@ -2,14 +2,14 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "podcertificate-signer.fullname" . }}
+  name: {{ include "pod-certificate-signer.fullname" . }}
   labels:
-    {{- include "podcertificate-signer.labels" . | nindent 4 }}
+    {{- include "pod-certificate-signer.labels" . | nindent 4 }}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "podcertificate-signer.fullname" . }}
+    name: {{ include "pod-certificate-signer.fullname" . }}
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
   metrics:

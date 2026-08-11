@@ -1,0 +1,14 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "pod-certificate-signer.fullname" . }}
+  labels:
+    {{- include "pod-certificate-signer.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "pod-certificate-signer.fullname" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "pod-certificate-signer.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
