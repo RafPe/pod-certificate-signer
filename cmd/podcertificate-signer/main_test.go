@@ -83,6 +83,42 @@ func TestManagerOptionsDisablesPodCache(t *testing.T) {
 	}
 }
 
+// TestManagerOptionsSecuresMetricsByDefault asserts that, with the secure
+// metrics toggle on, the metrics server is configured to require
+// authentication and authorization (via controller-runtime's TokenReview /
+// SubjectAccessReview filter) and to serve over HTTPS. This is the behaviour
+// that rejects an unauthenticated scrape.
+func TestManagerOptionsSecuresMetrics(t *testing.T) {
+	opts := managerOptions(k8sruntime.NewScheme(), managerConfig{
+		baseContext:   context.Background(),
+		metricsSecure: true,
+	})
+
+	if !opts.Metrics.SecureServing {
+		t.Error("Metrics.SecureServing = false, want true so the endpoint is served over HTTPS")
+	}
+	if opts.Metrics.FilterProvider == nil {
+		t.Error("Metrics.FilterProvider = nil, want the authn/authz filter so unauthenticated scrapes are rejected")
+	}
+}
+
+// TestManagerOptionsInsecureMetricsEscapeHatch asserts that the insecure escape
+// hatch turns the auth filter and HTTPS off, restoring the legacy plaintext,
+// unauthenticated metrics endpoint for operators who opt into it.
+func TestManagerOptionsInsecureMetricsEscapeHatch(t *testing.T) {
+	opts := managerOptions(k8sruntime.NewScheme(), managerConfig{
+		baseContext:   context.Background(),
+		metricsSecure: false,
+	})
+
+	if opts.Metrics.SecureServing {
+		t.Error("Metrics.SecureServing = true, want false when the insecure escape hatch is set")
+	}
+	if opts.Metrics.FilterProvider != nil {
+		t.Error("Metrics.FilterProvider is set, want nil when the insecure escape hatch is set")
+	}
+}
+
 // Compile-time guarantees that both CA runnables opt into controller-runtime's
 // leader-election routing explicitly, rather than relying on the implicit
 // "not a LeaderElectionRunnable ⇒ leader-gated" fallback.
