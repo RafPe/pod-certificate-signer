@@ -8,13 +8,14 @@ import (
 
 func renderChartResult(t *testing.T, values ...string) (string, error) {
 	t.Helper()
-	args := []string{
+	args := make([]string, 0, 11+2*len(values))
+	args = append(args,
 		"template", "test", "../../charts/pod-certificate-signer",
 		"--namespace", "pcs-system",
 		"--kube-version", "1.35.0",
 		"--set", "signer.ca.secretRef.name=test-ca",
 		"--set", "signer.name=example.org/signer",
-	}
+	)
 	for _, value := range values {
 		args = append(args, "--set", value)
 	}
