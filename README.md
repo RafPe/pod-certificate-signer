@@ -107,15 +107,16 @@ for rollout and scope details.
 
 ## Release process
 
-Releases are label-driven: every PR targeting `main` carries exactly one
-`release/*` label (`major`/`minor`/`patch`/`skip`), enforced by a required
-check. Publishing a release tags `vX.Y.Z`, pushes the multi-arch image to
-`ghcr.io/rafpe/pod-certificate-signer`, and packages the Helm chart to
-`oci://ghcr.io/rafpe/charts/pod-certificate-signer`.
+Releases are review-gated and label-driven. Every ordinary PR carries exactly
+one `release/*` label and every non-skip PR adds a changelog fragment. Ordinary
+merges never publish. A maintainer runs **Prepare Release**, reviews the
+automation-owned `release/next` PR, and its merge triggers full verification,
+E2E, an immutable `vX.Y.Z` tag, the signed multi-arch image, and the matching
+OCI Helm chart.
 
 Maintainers: see [docs/releasing.md](./docs/releasing.md) for the cut-a-release
-flow, backfilling artifacts after a failed build, and the one-time GHCR/Artifact
-Hub steps.
+flow, recovery rules, artifact verification, and the one-time GHCR/Artifact Hub
+steps.
 
 ## Contributing
 

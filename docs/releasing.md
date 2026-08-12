@@ -1,88 +1,69 @@
 # Releasing (maintainer runbook)
 
-How a release is cut, how to recover a failed artifact build, and the one-time
-steps for a new package. The `release/*` label contract itself is in
-[CONTRIBUTING.md](../CONTRIBUTING.md).
+The project uses a review-gated release pipeline. Ordinary pull requests never publish
+a release. They only contribute a SemVer signal and, unless skipped, a
+small changelog fragment.
 
-## How it works
+## Release model
 
-Releases are driven by [release-drafter](../.github/release-drafter.yml):
+| Concept | Contract |
+| --- | --- |
+| Release label | Every ordinary PR has exactly one of `release/major`, `release/minor`, `release/patch`, or `release/skip`. |
+| Changelog fragment | Every non-skip PR adds `.changes/unreleased/*.yaml`; skip PRs add none. |
+| Prepare Release | A manual workflow computes the next version, batches fragments, and opens or updates `release/next -> main`. It never publishes. |
+| Release approval | A maintainer reviews and merges the generated PR carrying `autorelease: pending`. |
+| Verification | The exact merge commit passes unit checks and the reusable Kind E2E suite before tagging. |
+| Publication | The serialized workflow creates an annotated immutable tag, publishes the signed image and chart, verifies success, then makes the draft GitHub Release public. |
 
-- Every merged PR carries exactly one `release/*` label (enforced by
-  `pr-labels.yml`). release-drafter keeps a rolling **draft** of the next
-  release, grouped into sections by label; the version resolves to the **max**
-  label since the last release (`major` > `minor` > `patch`).
-- **Merging a PR that is _not_ `release/skip` publishes** the draft: `release.yml`
-  tags `vX.Y.Z`, then calls `release-image.yml` to build the multi-arch image
-  (cosign keyless-signed + SBOM) and package + push the chart to
-  `oci://ghcr.io/rafpe/charts/pod-certificate-signer:X.Y.Z`.
-- Merging a `release/skip` PR only updates the draft.
+The largest label since the previous release wins: `major > minor > patch`.
+If only skip changes have landed, no release should be prepared.
 
 ## Cutting a release
 
-1. Merge everything intended for the release.
-2. **Curate the notes (optional but recommended):** make sure each merged PR
-   since the last release carries its true `release/*` category — release-drafter
-   reads the PRs' *current* labels at publish time, so re-labelling merged PRs
-   reshapes the draft.
-3. **Preview:** the draft updates in **Releases** on every merge. To refresh it
-   without publishing, merge any `release/skip` PR.
-4. **Publish:** merge one PR with a non-`skip` label (e.g. `release/major`). This
-   triggers `release.yml` → publishes `vX.Y.Z` + tag → builds and pushes the
-   image and chart.
-5. **Verify:**
-   - Release + tag on GitHub, notes categorised as expected.
-   - Image `ghcr.io/rafpe/pod-certificate-signer:vX.Y.Z` (plus `vX.Y`, `vX`,
-     `latest`) and a `sha256-…` cosign signature tag.
-   - Chart `ghcr.io/rafpe/charts/pod-certificate-signer:X.Y.Z`.
+1. Merge all intended ordinary PRs. Confirm their labels and fragments are
+   accurate.
+2. Run **Actions -> Prepare Release -> Run workflow** on `main`, or:
 
-   ```bash
-   gh release view vX.Y.Z
-   gh api "users/RafPe/packages/container/pod-certificate-signer/versions" \
-     --jq '.[].metadata.container.tags[]'
-   gh api "users/RafPe/packages/container/charts%2Fpod-certificate-signer/versions" \
-     --jq '.[].metadata.container.tags[]'
+   ```sh
+   gh workflow run prepare-release.yml --ref main
    ```
 
-## Backfilling artifacts (image/chart build failed)
+3. Review the generated `release/next -> main` PR. Check its version,
+   `CHANGELOG.md` section, release notes, and that no unreleased fragments remain.
+4. Merge that PR. This is the explicit publication approval.
+5. Watch **Release**. It verifies the merge commit, runs unit checks and E2E,
+   creates the annotated tag, publishes artifacts, and finally publishes the
+   GitHub Release.
+6. Verify the release, image, signature, SBOM, and chart:
 
-The release + tag publish **first**; the artifact build runs after. If that build
-fails (e.g. a transient buildx error), the release exists but the image/chart are
-missing. Land any fix on `main`, then re-run **only** the artifact build against
-the existing tag — no re-release:
+   ```sh
+   gh release view vX.Y.Z
+   cosign verify \
+     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+     --certificate-identity-regexp 'release-image\.yml' \
+     ghcr.io/rafpe/pod-certificate-signer:vX.Y.Z
+   helm show chart oci://ghcr.io/rafpe/charts/pod-certificate-signer --version X.Y.Z
+   ```
 
-```bash
-gh workflow run release-image.yml --ref main -f tag=vX.Y.Z
-gh run watch "$(gh run list --workflow=release-image.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
-```
+## Recovery
 
-`--ref main` uses the current workflow definition (so fix forward first); the job
-checks out the `vX.Y.Z` source. Verify the image/chart tags as above.
+Tags are immutable: never delete or move a release tag. If publication fails
+after the tag is created, fix the workflow on `main` and dispatch **Release**
+with the existing `vX.Y.Z` tag. Recovery verifies that the tag resolves to a
+commit on `main`, reruns checks and E2E, and resumes publication. It refuses a
+published release or a tag that points elsewhere.
 
-## One-time: a new package
+## Repository setup
 
-When a new image or chart **package name** is first pushed, GHCR makes it
-**private**. Make it public so consumers (and Artifact Hub) can pull it
-unauthenticated:
+Create the four `release/*` labels and `autorelease: pending`, and make **PR
+Release Metadata** a required status check. Protect `main` so the generated
+release PR is reviewed like any other PR. New GHCR packages default to private;
+make the image and chart packages public, then follow [Artifact Hub](artifact-hub.md).
 
-- GitHub → profile → **Packages** → the package → **Package settings** →
-  **Change visibility → Public**.
+## Maintainer checks
 
-## One-time: Artifact Hub
-
-Follow [docs/artifact-hub.md](./artifact-hub.md) to claim the repository (add it,
-paste the Repository ID into `charts/pod-certificate-signer/artifacthub-repo.yml`,
-`oras push` the ownership file). After that, Artifact Hub polls the OCI repo and
-picks up new chart versions automatically. The signature-verification recipe for
-consumers is in the same doc.
-
-## Gotchas
-
-- **No GHA build cache.** `cache-to: type=gha` fails hard (`failed to reserve
-  cache`) under the `workflow_call` context and takes the build down; it was
-  removed. Don't re-add it without confirming the cache backend works there.
-- **cosign needs `id-token: write` on the caller.** A called workflow's jobs are
-  capped by the caller's permissions, so `release.yml`'s `publish-artifacts` grants
-  it too — otherwise the OIDC token is never minted on the real release path.
-- **Chart `.tgz` name follows `Chart.yaml` `name`.** If the chart is renamed,
-  keep the `helm push` filename in `release-image.yml` in sync.
+- Keep action SHAs and tool versions pinned.
+- Keep the Kind version pinned in `test-e2e.yml`; releases must not download an
+  unspecified latest binary.
+- Keep `release-image.yml` as the only artifact publisher.
+- Run `sh scripts/release-contract-check.sh` when changing release automation.
