@@ -103,7 +103,7 @@ var _ = Describe("Manager", Ordered, func() {
 		// unit tests (identity_constraints_test.go).
 		cmd = exec.Command("make", "helm-install",
 			fmt.Sprintf("IMAGE=%s", projectImage),
-			"HELM_EXTRA_ARGS=--set replicaCount=1 --set signer.enable_annotation_interpolation=true --set signer.allow_unverified_identities=true")
+			"HELM_EXTRA_ARGS=--set replicaCount=1 --set signer.enable_annotation_interpolation=true --set signer.allow_unverified_identities=true --set admissionPolicies.dnsSANValidation.enabled=true")
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 	})
@@ -493,6 +493,8 @@ var _ = Describe("Manager", Ordered, func() {
 			}, 5*time.Minute).Should(Succeed())
 		})
 	})
+
+	defineAdmissionPolicyTests()
 })
 
 // getMetricsOutput retrieves and returns the logs from the curl pod used to access the metrics endpoint.
