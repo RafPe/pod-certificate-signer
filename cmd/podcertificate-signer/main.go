@@ -56,6 +56,7 @@ import (
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/controller"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
 	// +kubebuilder:scaffold:imports
 )
@@ -127,7 +128,7 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	if err := validateFlags(signerName); err != nil {
+	if err := validateFlags(signerName, clusterFqdn); err != nil {
 		setupLog.Error(err, "invalid command-line flags")
 		os.Exit(1)
 	}
@@ -260,13 +261,14 @@ func main() {
 	}
 }
 
-// validateFlags checks required command-line flags. An empty --signer-name is
-// rejected here so the controller fails fast at startup - mirroring the
-// required --ca-cert-path - instead of only surfacing the problem later, after
-// a Kubernetes API connection has been established.
-func validateFlags(signerName string) error {
+// validateFlags checks command-line flags that must fail before the controller
+// establishes a Kubernetes API connection.
+func validateFlags(signerName, clusterFQDN string) error {
 	if signerName == "" {
 		return errors.New("the --signer-name flag is required")
+	}
+	if err := podcertificate.ValidateClusterFQDN(clusterFQDN); err != nil {
+		return fmt.Errorf("invalid --cluster-fqdn %q: %w", clusterFQDN, err)
 	}
 	return nil
 }

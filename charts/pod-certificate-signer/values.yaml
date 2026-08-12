@@ -113,6 +113,23 @@ signer:
   # Helm escape hatch for the --allow-unverified-identities controller flag.
   allow_unverified_identities: false
 
+# Optional, independently selectable ValidatingAdmissionPolicies. These
+# cluster-scoped policies provide preventive feedback when Pods are admitted;
+# signer-side validation remains authoritative even when every policy is off.
+admissionPolicies:
+  # Validates explicit DNS SANs requested through projected podCertificate
+  # userAnnotations for this signer, after expanding the interpolation values
+  # available during Pod admission.
+  dnsSANValidation:
+    enabled: false
+    # Supported modes: Deny, or Warn/Audit during a staged rollout. Kubernetes
+    # does not permit Deny and Warn in the same binding.
+    validationActions:
+      - Deny
+    # Empty selectors apply the binding to Pods in every namespace.
+    namespaceSelector: {}
+    objectSelector: {}
+
 # Controller manager settings
 manager:
   # Max concurrent reconciles

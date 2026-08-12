@@ -79,7 +79,9 @@ workload can only interpolate its **own** verified identity:
 
 Unknown variables and unterminated placeholders deny the request with reason
 `InvalidUnverifiedUserAnnotations`. Values are validated **after** expansion,
-including the 64-character common-name limit.
+including the 64-character common-name limit and DNS-1123 SAN limits. DNS SAN
+labels may contain at most 63 characters and the complete name at most 253;
+wildcard SANs are not supported.
 
 ### CSR-requested SANs (forward compatibility)
 
@@ -170,13 +172,53 @@ request a certificate for any name. Under the default constraints it is still
 worth applying as defense in depth: a pod rejected at admission gets an immediate
 error, instead of a volume that never mounts and a `Denied` request to go read.
 
+### Preventive DNS SAN admission policy
+
+The chart can also manage a signer-specific DNS SAN policy. Policies live under
+the `admissionPolicies` map so each policy remains independently selectable as
+the catalog grows:
+
+```yaml
+admissionPolicies:
+  dnsSANValidation:
+    enabled: true
+    validationActions:
+      - Warn
+      - Audit
+    namespaceSelector: {}
+    objectSelector: {}
+```
+
+The policy inspects Pods on create and update when a projected `podCertificate`
+volume names this chart's `signer.name` and supplies the matching `-san`
+`userAnnotations` key. It expands the values available at admission time
+(`${pod.name}`, `${pod.namespace}`, `${pod.serviceAccountName}`, and
+`${cluster.fqdn}`), then checks comma-separated DNS names, label lengths, total
+length, and DNS-1123 syntax. It ignores other signers, Pods without an explicit
+SAN annotation, CSR SANs, and generated defaults; those remain signer-side
+concerns.
+
+Start with `Warn` and `Audit`, observe warnings/audit events, narrow rollout with
+`namespaceSelector` or `objectSelector` if needed, then use `Deny`. Kubernetes
+does not allow `Deny` and `Warn` together in one binding, and the chart schema
+rejects that combination. The feature is disabled by default because enabling a
+cluster-scoped admission control is an operator rollout decision.
+
+This is complementary defense in depth, not an alternative to signer
+validation. The signer validates annotation, CSR, and generated DNS SANs after
+the source is resolved in both constrained and
+`--allow-unverified-identities` modes. That flag relaxes ownership checks only;
+it never permits malformed DNS identities.
+
 ## Validation rules
 
 The controller performs these validations by default:
 
 1. **CA files present** — the mounted CA cert/key files exist and load.
 2. **CA valid** — the CA is a valid, non-expired CA.
-3. **Request configuration** — the `unverifiedUserAnnotations` (or deprecated
+3. **Cluster FQDN valid** — `--cluster-fqdn` is a DNS-1123 subdomain; invalid
+   operator configuration fails controller startup.
+4. **Request configuration** — the `unverifiedUserAnnotations` (or deprecated
    annotations) are validated against the constraints the apiserver enforces on
    the request status, so misconfigurations are denied immediately:
    - Duration is at least `1h` and no more than the request's
@@ -186,6 +228,9 @@ The controller performs these validations by default:
    - `eku` accepts `client` and/or `server`; unknown tokens deny. The default is
      `serverAuth` only. Certificates for non-RSA keys carry only the
      `digitalSignature` key usage.
+   - Every selected DNS SAN is a DNS-1123 subdomain with labels of at most 63
+     characters and a total length of at most 253 characters. Invalid values are
+     rejected, never truncated or rewritten. Wildcard SANs are rejected.
 
 ## Controller CLI flags
 

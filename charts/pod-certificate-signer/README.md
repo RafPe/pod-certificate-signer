@@ -95,6 +95,9 @@ The signing CA is configured under `signer.ca` with an explicit `source`:
 | `signer.enable_annotation_interpolation` | Allow `${...}` placeholders in `cn`/`san`/`uris`, resolved from verified request fields. | `false` |
 | `signer.honor_csr_sans` | Honor SANs from the kubelet PKCS#10 CSR (forward-compat; kubelet emits empty CSRs today). | `false` |
 | **`signer.allow_unverified_identities`** | **Security escape hatch.** When `false`, annotation `cn`/`san`/`ip-san`/`uris` values must resolve to the pod's verified identity, and IP SANs are denied. See [Identity constraints](#identity-constraints-security). | `false` |
+| `admissionPolicies.dnsSANValidation.enabled` | Create a signer-specific policy and binding that validate explicit Pod certificate DNS SANs before admission. | `false` |
+| `admissionPolicies.dnsSANValidation.validationActions` | Binding actions. Use `Warn`/`Audit` to stage, then `Deny`; `Deny` and `Warn` cannot be combined. | `[Deny]` |
+| `admissionPolicies.dnsSANValidation.namespaceSelector` / `.objectSelector` | Optional selectors limiting where the DNS SAN binding applies. | `{}` / `{}` |
 | `manager.max_concurrent_reconciles` | Concurrent reconciles. | `5` |
 | `manager.reconcile_timeout` | Per-reconcile timeout. | `"5m"` |
 | `resources` | Container resource requests/limits. Conservative defaults for a lightweight controller; set `{}` to leave it unconstrained. | requests `100m`/`128Mi`, limits `500m`/`256Mi` |
@@ -157,6 +160,31 @@ Set `metrics.insecure: true` **only** to restore the legacy unauthenticated
 plaintext endpoint, and only when the port is protected by other means. An
 optional `metrics.networkPolicy` (off by default) restricts ingress to the
 metrics port to selected namespaces/pods.
+
+## Preventive admission policies
+
+`admissionPolicies` is a map of independently enabled safeguards. The initial
+`dnsSANValidation` policy validates explicit DNS SAN annotations after
+admission-time interpolation and rejects malformed DNS-1123 names, labels over
+63 characters, names over 253 characters, empty list members, and unsupported
+placeholders.
+
+```yaml
+admissionPolicies:
+  dnsSANValidation:
+    enabled: true
+    validationActions:
+      - Warn
+      - Audit
+    namespaceSelector: {}
+    objectSelector: {}
+```
+
+Use `Warn` and `Audit` for rollout visibility, then change the actions to
+`[Deny]`. The policy only sees explicit `userAnnotations` on a Pod's projected
+`podCertificate` source. Signer-side validation remains mandatory and also
+covers CSR SANs and generated defaults, regardless of
+`signer.allow_unverified_identities`.
 
 ## Notes for this release
 

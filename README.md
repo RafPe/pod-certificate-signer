@@ -56,9 +56,41 @@ See [docs/architecture.md](./docs/architecture.md) for the full C4 model (system
 - **Native API, no sidecars** — signs the built-in `PodCertificateRequest`; nothing to inject into workloads.
 - **Per-workload certificates** — CN, SANs, IP SANs, URIs, EKU, duration and refresh via `unverifiedUserAnnotations` on the projected volume.
 - **Default-secure identity** — by default a pod can only obtain a certificate for its own apiserver-verified identity; `${...}` interpolation fills in per-pod values.
+- **Preventive admission checks** — independently selectable Helm-managed `ValidatingAdmissionPolicy` resources can reject malformed explicit DNS SANs before a pod is stored.
 - **CA hot-reload** — the CA cert/key are reloaded from disk on change; rotate without a restart.
 - **Trust distribution** — the current and previous CAs are published as a `ClusterTrustBundle` for workloads to mount.
 - **Hardened by default** — distroless non-root image, static CGO-disabled binary, restricted Pod Security Standard, least-privilege RBAC.
+
+### DNS SAN validation behavior
+
+The signer always validates the final DNS SAN list after annotation selection,
+interpolation, or CSR/default fallback. The optional admission policy provides
+earlier feedback for explicit `podCertificate.userAnnotations` while preserving
+the signer as the authoritative boundary.
+
+| Request case | Preventive admission policy | Authoritative signer |
+| --- | --- | --- |
+| Valid explicit or interpolated DNS SAN | Admits | Issues if identity authorization also succeeds |
+| DNS label longer than 63 characters, name longer than 253 characters, or malformed DNS syntax | Denies the Pod when enabled with `Deny` | Denies the certificate request in every mode |
+| Unsupported or unterminated `${...}` in an explicit SAN | Denies the Pod | Denies the certificate request |
+| CSR-provided DNS SAN | Out of scope | Validates before identity authorization |
+| Generated default for a pod name longer than 63 characters | Out of scope | Omits the default SAN and emits `ReasonDefaultSANSkipped` |
+
+Enable the first policy independently and stage it with `Warn`/`Audit` before
+switching to `Deny`:
+
+```yaml
+admissionPolicies:
+  dnsSANValidation:
+    enabled: true
+    validationActions:
+      - Deny
+    namespaceSelector: {}
+    objectSelector: {}
+```
+
+See [configuration](./docs/configuration.md#preventive-dns-san-admission-policy)
+for rollout and scope details.
 
 ## Documentation
 

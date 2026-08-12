@@ -17,11 +17,29 @@ import (
 // An empty --signer-name must be rejected fast, before the controller attempts
 // any Kubernetes API calls, mirroring the required --ca-cert-path handling.
 func TestValidateFlagsRequiresSignerName(t *testing.T) {
-	if err := validateFlags(""); err == nil {
+	if err := validateFlags("", "cluster.local"); err == nil {
 		t.Error("validateFlags(\"\") = nil, want error for empty signer name")
 	}
-	if err := validateFlags("example.org/signer"); err != nil {
+	if err := validateFlags("example.org/signer", "cluster.local"); err != nil {
 		t.Errorf("validateFlags(%q) = %v, want nil", "example.org/signer", err)
+	}
+}
+
+func TestValidateFlagsRejectsInvalidClusterFQDN(t *testing.T) {
+	for _, clusterFQDN := range []string{
+		strings.Repeat("a", 64) + ".example",
+		"bad_fqdn.example",
+		"a..example",
+	} {
+		t.Run(clusterFQDN, func(t *testing.T) {
+			err := validateFlags("example.org/signer", clusterFQDN)
+			if err == nil {
+				t.Fatalf("validateFlags(clusterFQDN=%q) error = nil, want invalid DNS error", clusterFQDN)
+			}
+			if !strings.Contains(err.Error(), clusterFQDN) {
+				t.Errorf("validateFlags(clusterFQDN=%q) error = %q, want offending value", clusterFQDN, err)
+			}
+		})
 	}
 }
 

@@ -6,6 +6,23 @@ import (
 	"testing"
 )
 
+func renderChartResult(t *testing.T, values ...string) (string, error) {
+	t.Helper()
+	args := make([]string, 0, 11+2*len(values))
+	args = append(args,
+		"template", "test", "../../charts/pod-certificate-signer",
+		"--namespace", "pcs-system",
+		"--kube-version", "1.35.0",
+		"--set", "signer.ca.secretRef.name=test-ca",
+		"--set", "signer.name=example.org/signer",
+	)
+	for _, value := range values {
+		args = append(args, "--set", value)
+	}
+	out, err := exec.Command("helm", args...).CombinedOutput()
+	return string(out), err
+}
+
 // TestDeploymentRendersAllowUnverifiedIdentities guards the Helm escape hatch
 // for the identity-constraint default introduced in this change: the chart must
 // expose --allow-unverified-identities so operators can opt out via values
@@ -105,5 +122,75 @@ func TestNetworkPolicyOptional(t *testing.T) {
 		if !strings.Contains(on, want) {
 			t.Errorf("NetworkPolicy must keep %q reachable; missing from:\n%s", want, on)
 		}
+	}
+}
+
+func TestDNSSANAdmissionPolicyDisabledByDefault(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm not installed; skipping chart render assertion")
+	}
+	out, err := renderChartResult(t)
+	if err != nil {
+		t.Fatalf("renderChart() error = %v\n%s", err, out)
+	}
+	if strings.Contains(out, "kind: ValidatingAdmissionPolicy") {
+		t.Fatalf("renderChart() contains admission policy while disabled by default:\n%s", out)
+	}
+}
+
+func TestDNSSANAdmissionPolicyRendersIndependently(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm not installed; skipping chart render assertion")
+	}
+	out, err := renderChartResult(t,
+		"admissionPolicies.dnsSANValidation.enabled=true",
+		"admissionPolicies.dnsSANValidation.validationActions={Warn,Audit}",
+		"admissionPolicies.dnsSANValidation.namespaceSelector.matchLabels.policy=enabled",
+		"admissionPolicies.dnsSANValidation.objectSelector.matchLabels.certificate=required",
+	)
+	if err != nil {
+		t.Fatalf("renderChart() error = %v\n%s", err, out)
+	}
+
+	wants := []string{
+		"kind: ValidatingAdmissionPolicy\n",
+		"kind: ValidatingAdmissionPolicyBinding\n",
+		"name: test-pod-certificate-signer-dns-san-validation",
+		"podcertificate-signer.io/policy: dns-san-validation",
+		"validationActions:\n    - Warn\n    - Audit",
+		"policy: enabled",
+		"certificate: required",
+		"example.org/signer-san",
+		"cluster.local",
+		"format.dns1123Subdomain",
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Errorf("renderChart() output does not contain %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDNSSANAdmissionPolicyRejectsInvalidActions(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm not installed; skipping chart render assertion")
+	}
+	tests := []struct {
+		name   string
+		action string
+	}{
+		{name: "unknown action", action: "Block"},
+		{name: "deny and warn", action: "{Deny,Warn}"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := renderChartResult(t,
+				"admissionPolicies.dnsSANValidation.enabled=true",
+				"admissionPolicies.dnsSANValidation.validationActions="+tt.action,
+			)
+			if err == nil {
+				t.Fatalf("renderChart(validationActions=%s) error = nil, want schema rejection\n%s", tt.action, out)
+			}
+		})
 	}
 }
