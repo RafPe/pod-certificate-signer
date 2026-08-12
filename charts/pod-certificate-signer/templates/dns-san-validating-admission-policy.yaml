@@ -1,0 +1,92 @@
+{{- if .Values.admissionPolicies.dnsSANValidation.enabled }}
+{{- $name := printf "%s-dns-san-validation" (include "pod-certificate-signer.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- $sanKey := printf "%s-san" .Values.signer.name }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "pod-certificate-signer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-policy
+    podcertificate-signer.io/policy: dns-san-validation
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  variables:
+    - name: signerName
+      expression: {{ .Values.signer.name | quote }}
+    - name: sanKey
+      expression: {{ $sanKey | quote }}
+    - name: clusterFQDN
+      expression: {{ .Values.signer.cluster_fqdn | quote }}
+  validations:
+    - expression: >-
+        !has(object.spec.volumes) || object.spec.volumes.all(volume,
+          !has(volume.projected) || volume.projected.sources.all(source,
+            !has(source.podCertificate) ||
+            source.podCertificate.signerName != variables.signerName ||
+            !has(source.podCertificate.userAnnotations) ||
+            !(variables.sanKey in source.podCertificate.userAnnotations) ||
+            source.podCertificate.userAnnotations[variables.sanKey].split(',').all(rawSAN,
+              rawSAN.trim() != '' &&
+              !rawSAN.trim()
+                .replace('${pod.name}', object.metadata.name)
+                .replace('${pod.namespace}', request.namespace)
+                .replace('${pod.serviceAccountName}',
+                  has(object.spec.serviceAccountName) && object.spec.serviceAccountName != '' ?
+                    object.spec.serviceAccountName : 'default')
+                .replace('${cluster.fqdn}', variables.clusterFQDN)
+                .contains('${') &&
+              rawSAN.trim()
+                .replace('${pod.name}', object.metadata.name)
+                .replace('${pod.namespace}', request.namespace)
+                .replace('${pod.serviceAccountName}',
+                  has(object.spec.serviceAccountName) && object.spec.serviceAccountName != '' ?
+                    object.spec.serviceAccountName : 'default')
+                .replace('${cluster.fqdn}', variables.clusterFQDN).size() <= 253 &&
+              rawSAN.trim()
+                .replace('${pod.name}', object.metadata.name)
+                .replace('${pod.namespace}', request.namespace)
+                .replace('${pod.serviceAccountName}',
+                  has(object.spec.serviceAccountName) && object.spec.serviceAccountName != '' ?
+                    object.spec.serviceAccountName : 'default')
+                .replace('${cluster.fqdn}', variables.clusterFQDN)
+                .split('.').all(label, label.size() <= 63) &&
+              !format.dns1123Subdomain().validate(
+                rawSAN.trim()
+                  .replace('${pod.name}', object.metadata.name)
+                  .replace('${pod.namespace}', request.namespace)
+                  .replace('${pod.serviceAccountName}',
+                    has(object.spec.serviceAccountName) && object.spec.serviceAccountName != '' ?
+                      object.spec.serviceAccountName : 'default')
+                  .replace('${cluster.fqdn}', variables.clusterFQDN)
+              ).hasValue()
+            )
+          )
+        )
+      message: Pod certificate DNS SANs must resolve to valid DNS-1123 names; each label must be at most 63 characters, the complete name at most 253 characters, and only ${pod.name}, ${pod.namespace}, ${pod.serviceAccountName}, and ${cluster.fqdn} interpolation variables are supported.
+      reason: Invalid
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "pod-certificate-signer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-policy
+    podcertificate-signer.io/policy: dns-san-validation
+spec:
+  policyName: {{ $name }}
+  validationActions:
+    {{- toYaml .Values.admissionPolicies.dnsSANValidation.validationActions | nindent 4 }}
+  matchResources:
+    namespaceSelector:
+      {{- toYaml .Values.admissionPolicies.dnsSANValidation.namespaceSelector | nindent 6 }}
+    objectSelector:
+      {{- toYaml .Values.admissionPolicies.dnsSANValidation.objectSelector | nindent 6 }}
+{{- end }}

@@ -156,7 +156,7 @@ func TestDNSSANAdmissionPolicyRendersIndependently(t *testing.T) {
 		"kind: ValidatingAdmissionPolicyBinding\n",
 		"name: test-pod-certificate-signer-dns-san-validation",
 		"podcertificate-signer.io/policy: dns-san-validation",
-		"validationActions:\n  - Warn\n  - Audit",
+		"validationActions:\n    - Warn\n    - Audit",
 		"policy: enabled",
 		"certificate: required",
 		"example.org/signer-san",
