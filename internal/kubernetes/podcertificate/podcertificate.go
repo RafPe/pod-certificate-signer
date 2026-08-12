@@ -14,6 +14,7 @@ import (
 
 	capiv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/api"
@@ -601,9 +602,28 @@ func keyUsageFor(alg x509.PublicKeyAlgorithm) x509.KeyUsage {
 	return x509.KeyUsageDigitalSignature
 }
 
+// validateDNSNames verifies that every resolved certificate DNS SAN is a valid
+// DNS-1123 subdomain. This syntax check is independent of identity ownership:
+// AllowUnverifiedIdentities may relax who owns a name, but it never permits a
+// malformed name. Wildcards are deliberately unsupported because the signer
+// authorizes identities by exact match.
+func validateDNSNames(names []string) error {
+	for _, name := range names {
+		if problems := validation.IsDNS1123Subdomain(name); len(problems) > 0 {
+			return fmt.Errorf("DNS name %q is invalid: %s", name, strings.Join(problems, "; "))
+		}
+		for _, label := range strings.Split(name, ".") {
+			if problems := validation.IsDNS1123Label(label); len(problems) > 0 {
+				return fmt.Errorf("DNS name %q is invalid: label %q: %s", name, label, strings.Join(problems, "; "))
+			}
+		}
+	}
+	return nil
+}
+
 // resolveDNSNames applies the san-annotation > CSR-requested > default
-// precedence for DNS SANs and, when identity constraints are enforced, verifies
-// each resolved name against the pod's verified identity.
+// precedence for DNS SANs, validates the selected names, and, when identity
+// constraints are enforced, verifies each name against the pod's identity.
 func resolveDNSNames(
 	lookup func(string) (string, bool),
 	expand func(string, string) (string, error),
@@ -615,6 +635,9 @@ func resolveDNSNames(
 	san, ok := lookup(AnnotationSuffixSAN)
 	if !ok {
 		if honorCSR && len(csrDNSNames) > 0 {
+			if err := validateDNSNames(csrDNSNames); err != nil {
+				return nil, err
+			}
 			// CSR-requested SANs are attacker-influenced just like annotation
 			// values, so they must clear the same verified-identity allowlist.
 			if !allowUnverified {
@@ -626,6 +649,9 @@ func resolveDNSNames(
 			}
 			return csrDNSNames, nil
 		}
+		if err := validateDNSNames(defaults); err != nil {
+			return nil, err
+		}
 		return defaults, nil
 	}
 	san, err := expand(AnnotationSuffixSAN, san)
@@ -635,6 +661,9 @@ func resolveDNSNames(
 	names := splitAndTrim(san)
 	if len(names) == 0 {
 		return nil, fmt.Errorf("annotation %q contains no DNS names", annotationKey(signerName, AnnotationSuffixSAN))
+	}
+	if err := validateDNSNames(names); err != nil {
+		return nil, err
 	}
 	if !allowUnverified {
 		for _, name := range names {
