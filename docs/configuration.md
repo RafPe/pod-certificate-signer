@@ -216,7 +216,9 @@ The controller performs these validations by default:
 
 1. **CA files present** — the mounted CA cert/key files exist and load.
 2. **CA valid** — the CA is a valid, non-expired CA.
-3. **Request configuration** — the `unverifiedUserAnnotations` (or deprecated
+3. **Cluster FQDN valid** — `--cluster-fqdn` is a DNS-1123 subdomain; invalid
+   operator configuration fails controller startup.
+4. **Request configuration** — the `unverifiedUserAnnotations` (or deprecated
    annotations) are validated against the constraints the apiserver enforces on
    the request status, so misconfigurations are denied immediately:
    - Duration is at least `1h` and no more than the request's
