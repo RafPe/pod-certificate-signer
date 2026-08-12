@@ -3,46 +3,129 @@ name: Release
 on:
   pull_request:
     types: [closed]
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vX.Y.Z tag to recover
+        required: true
 
 permissions: {}
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  release:
-    name: Tag and release
-    if: github.event.pull_request.merged == true
+  verify:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       github.event.pull_request.head.ref == 'release/next' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'autorelease: pending'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.target.outputs.tag }}
+      sha: ${{ steps.target.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            tag="${INPUT_TAG}"
+            git fetch origin "refs/tags/${tag}:refs/tags/${tag}"
+            sha=$(git rev-list -n 1 "${tag}")
+          else
+            case "${PR_TITLE}" in
+              "chore: release v"*) tag="${PR_TITLE#chore: release }" ;;
+              *) echo "::error::release PR title must be 'chore: release vX.Y.Z'"; exit 1 ;;
+            esac
+            sha="${MERGE_SHA}"
+          fi
+          echo "${tag}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::invalid release tag"; exit 1; }
+          git merge-base --is-ancestor "${sha}" origin/main || { echo "::error::release commit is not on main"; exit 1; }
+          grep -q "^## \[${tag#v}\]" CHANGELOG.md || { echo "::error::CHANGELOG.md lacks ${tag}"; exit 1; }
+          if find .changes/unreleased -name '*.yaml' -print -quit | grep -q .; then
+            echo "::error::unbatched changelog fragments remain"; exit 1
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
+
+  check:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make test vet
+      - run: sh scripts/release-contract-check.sh
+
+  e2e:
+    needs: verify
+    permissions:
+      contents: read
+    uses: ./.github/workflows/test-e2e.yml
+    with:
+      target_ref: ${{ needs.verify.outputs.sha }}
+
+  tag:
+    needs: [verify, check, e2e]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: read
-    outputs:
-      tag_name: ${{ steps.drafter.outputs.tag_name }}
     steps:
-      # A merge labeled release/skip only updates the running release draft.
-      # Any other release/* label publishes the release, which creates the
-      # v* tag.
-      - name: Draft or publish the release
-        id: drafter
-        uses: release-drafter/release-drafter@34d80673e067bdc0c24568d3af899c216adcfaa9 # v7.7.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          publish: ${{ !contains(github.event.pull_request.labels.*.name, 'release/skip') }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ needs.verify.outputs.sha }}
+          fetch-depth: 0
+      - env:
+          TAG: ${{ needs.verify.outputs.tag }}
+          SHA: ${{ needs.verify.outputs.sha }}
+        run: |
+          if git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
+            [ "$(git rev-list -n 1 "${TAG}")" = "${SHA}" ] || { echo "::error::immutable tag points elsewhere"; exit 1; }
+          else
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git tag -a "${TAG}" -m "Release ${TAG}" "${SHA}"
+            git push origin "refs/tags/${TAG}"
+          fi
 
-  # The tag above is created with the workflow GITHUB_TOKEN, which never
-  # triggers other workflows - so the artifacts workflow is invoked directly
-  # instead of relying on its tag push trigger.
   publish-artifacts:
-    name: Publish release artifacts
-    needs: release
-    if: github.event.pull_request.merged == true && !contains(github.event.pull_request.labels.*.name, 'release/skip')
+    needs: [verify, tag]
     permissions:
       contents: read
       packages: write
-      # A called workflow's jobs are capped by the caller's grant, so the OIDC
-      # token cosign needs for keyless signing must be granted here too.
       id-token: write
     uses: ./.github/workflows/release-image.yml
     with:
-      tag: ${{ needs.release.outputs.tag_name }}
+      tag: ${{ needs.verify.outputs.tag }}
+
+  publish-release:
+    needs: [verify, publish-artifacts]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.verify.outputs.tag }}
+        run: |
+          gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft | grep -qx true || {
+            echo "::error::expected an existing draft release for ${TAG}"; exit 1;
+          }
+          gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false

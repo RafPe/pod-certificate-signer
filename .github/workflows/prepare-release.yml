@@ -1,0 +1,56 @@
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: draft
+        uses: release-drafter/release-drafter@34d80673e067bdc0c24568d3af899c216adcfaa9 # v7.7.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          publish: false
+      - name: Batch changelog fragments
+        env:
+          VERSION: ${{ steps.draft.outputs.tag_name }}
+          RELEASE_BODY: ${{ steps.draft.outputs.body }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -n "${VERSION}" || { echo "::error::release-drafter produced no version"; exit 1; }
+          mapfile -d '' fragments < <(find .changes/unreleased -maxdepth 1 -name '*.yaml' -print0 | sort -z)
+          test "${#fragments[@]}" -gt 0 || { echo "::notice::No releasable changelog fragments"; exit 0; }
+          version="${VERSION#v}"
+          notes=$(for file in "${fragments[@]}"; do yq -r '"- " + .body' "${file}"; done)
+          grep -q '<!-- next-release -->' CHANGELOG.md || { echo "::error::missing changelog insertion marker"; exit 1; }
+          {
+            sed -n '1,/<!-- next-release -->/p' CHANGELOG.md
+            printf '\n## [%s] - %s\n\n%s\n' "${version}" "$(date -u +%F)" "${notes}"
+            sed -n '/<!-- next-release -->/,$p' CHANGELOG.md | tail -n +2
+          } > CHANGELOG.md.new
+          mv CHANGELOG.md.new CHANGELOG.md
+          rm "${fragments[@]}"
+          git checkout -B release/next
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add CHANGELOG.md .changes
+          git commit -m "chore: release ${VERSION}"
+          git push --force origin release/next
+          printf '%s\n' "${RELEASE_BODY}" > release-pr-body.md
+          gh pr create --base main --head release/next --title "chore: release ${VERSION}" \
+            --label "autorelease: pending" --body-file release-pr-body.md 2>/dev/null ||
+            gh pr edit release/next --title "chore: release ${VERSION}" \
+              --add-label "autorelease: pending" --body-file release-pr-body.md

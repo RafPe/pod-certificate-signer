@@ -2,6 +2,12 @@ name: E2E Tests
 
 on:
   pull_request:
+  workflow_call:
+    inputs:
+      target_ref:
+        description: Commit to test; defaults to the triggering commit.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -17,16 +23,21 @@ jobs:
     steps:
       - name: Clone the code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_ref || github.sha }}
 
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
-      - name: Install the latest version of kind
+      - name: Install kind
+        env:
+          KIND_VERSION: v0.31.0
         run: |
           KIND_BIN="${RUNNER_TEMP}/kind"
-          curl -Lo "${KIND_BIN}" https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+          curl --fail --location --output "${KIND_BIN}" \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
           chmod +x "${KIND_BIN}"
           sudo mv "${KIND_BIN}" /usr/local/bin/kind
 

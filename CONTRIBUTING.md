@@ -58,16 +58,26 @@ enables the `PodCertificateRequest`, `ClusterTrustBundle` and
 
 Releases are fully label-driven. **Every PR must carry exactly one
 `release/*` label** — a required CI check
-(`.github/workflows/pr-labels.yml`) fails otherwise:
+(`.github/workflows/pr-release-metadata.yml`) fails otherwise:
 
-| Label           | Effect on merge                                                 |
+| Label           | Effect on the next prepared release                              |
 | --------------- | ---------------------------------------------------------------- |
 | `release/major` | Next release bumps the **major** version (breaking change)       |
 | `release/minor` | Next release bumps the **minor** version (feature)               |
 | `release/patch` | Next release bumps the **patch** version (fix)                   |
-| `release/skip`  | No release; the change is collected into the next release draft  |
+| `release/skip`  | No version or changelog impact                                   |
 
-Your PR title ends up in the generated release notes, so make it descriptive.
+For every non-skip PR, add one or more `.changes/unreleased/*.yaml` files:
+
+```yaml
+kind: Fixed
+body: Explain the user-visible change in one sentence.
+```
+
+Allowed kinds are `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`,
+`Security`, and `Dependencies`. A `release/skip` PR must not add a fragment.
+Ordinary merges never publish; maintainers explicitly prepare and approve a
+generated release PR.
 
 ## Reporting issues
 

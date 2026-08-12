@@ -1,15 +1,15 @@
 # Configuration for release-drafter, driven by the release/* PR labels.
 #
 # Every PR merged into main must carry exactly one of the release/* labels
-# (enforced by .github/workflows/pr-labels.yml):
+# (enforced by .github/workflows/pr-release-metadata.yml):
 #
 #   release/major -> next release bumps the major version
 #   release/minor -> next release bumps the minor version
 #   release/patch -> next release bumps the patch version
-#   release/skip  -> no release; the change is collected into the next draft
+#   release/skip  -> no version or changelog impact
 #
-# Publishing the release creates the v* tag, which triggers the image build
-# (.github/workflows/release-image.yml).
+# Prepare Release uses this only to calculate the version and draft notes.
+# Publication is exclusively gated by the generated release/next PR.
 name-template: 'v$RESOLVED_VERSION'
 tag-template: 'v$RESOLVED_VERSION'
 change-template: '- $TITLE (#$NUMBER) @$AUTHOR'
