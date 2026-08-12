@@ -35,6 +35,8 @@ grep -q '^  group: release' .github/workflows/release.yml ||
 	fail "Release must be serialized"
 grep -q 'uses: ./.github/workflows/test-e2e.yml' .github/workflows/release.yml ||
 	fail "Release must run the reusable E2E workflow before publishing"
+grep -q 'target_ref: \${{ needs.verify.outputs.sha }}' .github/workflows/release.yml ||
+	fail "Release E2E must test the resolved release commit"
 grep -q 'git tag -a' .github/workflows/release.yml ||
 	fail "Release must create an annotated tag only after verification"
 

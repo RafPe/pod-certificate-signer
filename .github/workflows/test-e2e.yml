@@ -3,6 +3,11 @@ name: E2E Tests
 on:
   pull_request:
   workflow_call:
+    inputs:
+      target_ref:
+        description: Commit to test; defaults to the triggering commit.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -18,6 +23,8 @@ jobs:
     steps:
       - name: Clone the code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_ref || github.sha }}
 
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

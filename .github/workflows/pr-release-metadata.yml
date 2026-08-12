@@ -6,19 +6,23 @@ on:
     branches:
       - main
 
-permissions: {}
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
   check-release-label:
     name: Require exactly one release label
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check release label and changelog fragments
         env:
           LABELS_JSON: ${{ toJson(github.event.pull_request.labels.*.name) }}
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           CHANGED_FILES_URL: ${{ github.event.pull_request.url }}/files?per_page=100
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ "${HEAD_BRANCH}" = "release/next" ] && \
              [ "${HEAD_REPO}" = "${GITHUB_REPOSITORY}" ] && \
@@ -38,10 +42,19 @@ jobs:
             echo "::error::Exactly one of release/major, release/minor, release/patch or release/skip must be set on the PR (found ${count})."
             exit 1
           fi
-          label=$(echo "${LABELS_JSON}" | jq -r '.[] | select(startswith("release/"))')
-          fragments=$(gh api --paginate "${CHANGED_FILES_URL}" --jq \
-            '[.[] | select(.filename | startswith(".changes/unreleased/") and endswith(".yaml"))] | length' |
-            awk '{ total += $1 } END { print total + 0 }')
+          label=$(echo "${LABELS_JSON}" | jq -r '.[] | select(. == "release/major" or . == "release/minor" or . == "release/patch" or . == "release/skip")')
+          fragment_files=$(gh api --paginate "${CHANGED_FILES_URL}" --jq \
+            '.[] | select(.status != "removed" and (.filename | startswith(".changes/unreleased/") and endswith(".yaml"))) | .filename')
+          fragments=$(printf '%s\n' "${fragment_files}" | sed '/^$/d' | wc -l | tr -d ' ')
+          printf '%s\n' "${fragment_files}" | while IFS= read -r fragment; do
+            [ -n "${fragment}" ] || continue
+            kind=$(yq -r '.kind // ""' "${fragment}")
+            body=$(yq -r '.body // ""' "${fragment}")
+            echo "${kind}" | grep -Eq '^(Added|Changed|Deprecated|Removed|Fixed|Security|Dependencies)$' || {
+              echo "::error::${fragment} has an unsupported changelog kind"; exit 1;
+            }
+            [ -n "${body}" ] || { echo "::error::${fragment} has an empty body"; exit 1; }
+          done
 
           if [ "${label}" = "release/skip" ] && [ "${fragments}" -ne 0 ]; then
             echo "::error::release/skip PRs must not add changelog fragments."

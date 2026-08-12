@@ -79,6 +79,8 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/test-e2e.yml
+    with:
+      target_ref: ${{ needs.verify.outputs.sha }}
 
   tag:
     needs: [verify, check, e2e]
