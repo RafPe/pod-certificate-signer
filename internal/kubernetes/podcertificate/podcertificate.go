@@ -621,6 +621,12 @@ func validateDNSNames(names []string) error {
 	return nil
 }
 
+// ValidateClusterFQDN validates the operator-configured DNS suffix used for
+// generated and interpolated certificate identities.
+func ValidateClusterFQDN(clusterFQDN string) error {
+	return validateDNSNames([]string{clusterFQDN})
+}
+
 // resolveDNSNames applies the san-annotation > CSR-requested > default
 // precedence for DNS SANs, validates the selected names, and, when identity
 // constraints are enforced, verifies each name against the pod's identity.
