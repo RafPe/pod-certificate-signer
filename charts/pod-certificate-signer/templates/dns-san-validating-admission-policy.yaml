@@ -19,11 +19,11 @@ spec:
         resources: ["pods"]
   variables:
     - name: signerName
-      expression: {{ .Values.signer.name | quote }}
+      expression: {{ printf "%q" .Values.signer.name | quote }}
     - name: sanKey
-      expression: {{ $sanKey | quote }}
+      expression: {{ printf "%q" $sanKey | quote }}
     - name: clusterFQDN
-      expression: {{ .Values.signer.cluster_fqdn | quote }}
+      expression: {{ printf "%q" .Values.signer.cluster_fqdn | quote }}
   validations:
     - expression: >-
         !has(object.spec.volumes) || object.spec.volumes.all(volume,
