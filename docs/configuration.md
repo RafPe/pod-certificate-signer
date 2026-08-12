@@ -88,8 +88,11 @@ kubelet embeds in the PKCS#10 CSR of the `PodCertificateRequest` (today kubelet
 generates empty CSRs). The controller is ready for this behind
 `--honor-csr-sans` (Helm: `signer.honor_csr_sans`, disabled by default): when
 enabled, CSR-requested DNS and IP SANs are used unless a `san`/`ip-san`
-annotation overrides them. While disabled, CSR SANs are ignored — which the API
-contract explicitly permits.
+annotation overrides them. CSR SANs stay subject to the [identity
+constraints](#identity-constraints): unless `--allow-unverified-identities` is
+set, a CSR-requested DNS SAN must resolve to a verified pod identity and
+CSR-requested IP SANs are denied (an IP has no verified derivation). While
+disabled, CSR SANs are ignored — which the API contract explicitly permits.
 
 Until then, IP SANs can be requested via the `ip-san` annotation; once kubelet
 gains native SAN support the same values move into the pod spec and the

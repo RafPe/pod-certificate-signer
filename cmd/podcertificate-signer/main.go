@@ -104,7 +104,9 @@ func main() {
 			"resolved from the verified fields of the PodCertificateRequest.")
 	flag.BoolVar(&honorCSRSANs, "honor-csr-sans", false,
 		"Honor DNS and IP SANs embedded in the kubelet-generated PKCS#10 CSR when no SAN annotation overrides them. "+
-			"Kubelet generates empty CSRs today; this prepares for upcoming Kubernetes support for requesting SANs.")
+			"CSR SANs stay subject to the identity constraints unless --allow-unverified-identities is set (CSR DNS SANs "+
+			"must be a verified identity; CSR IP SANs are denied). Kubelet generates empty CSRs today; this prepares for "+
+			"upcoming Kubernetes support for requesting SANs.")
 	flag.BoolVar(&allowUnverifiedIdentities, "allow-unverified-identities", false,
 		"Allow cn/san/ip-san/uris annotation values that are not derived from the verified PodCertificateRequest fields "+
 			"(pod name/namespace/serviceAccountName/uid + cluster FQDN). Off by default: leaving it off prevents a pod from "+

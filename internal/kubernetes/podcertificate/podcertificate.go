@@ -44,6 +44,11 @@ type PodCertificateConfig struct {
 	ExtKeyUsage        []x509.ExtKeyUsage // TODO: Customizable Ext Key Usage via Policies or other aliases i.e. client-server-auth , ssl ,
 	PublicKey          crypto.PublicKey
 	PublicKeyAlgorithm x509.PublicKeyAlgorithm
+	// Warnings are non-fatal notices about how the configuration was resolved
+	// (e.g. default pod DNS SANs omitted for an over-long pod name). The
+	// certificate still issues; the reconciler surfaces each as a Warning event
+	// and a log line so the operator can see why a default was dropped.
+	Warnings []string
 }
 
 // Well-known configuration annotation suffixes understood by the signer.
@@ -163,19 +168,23 @@ type Options struct {
 	EnableInterpolation bool
 	// HonorCSRSANs uses the DNS and IP SANs embedded in the
 	// kubelet-generated PKCS#10 CSR (CSRDNSNames/CSRIPAddresses) when no
-	// san/ip-san annotation overrides them. Kubelet generates empty CSRs today,
-	// so this is inert until Kubernetes starts embedding requested SANs;
-	// when disabled, CSR SANs are ignored, which the API contract
-	// explicitly allows for signers.
+	// san/ip-san annotation overrides them. CSR SANs are still subject to the
+	// identity constraints below: unless AllowUnverifiedIdentities is set, CSR
+	// DNS SANs must clear the same verified-identity allowlist as annotation
+	// values, and CSR IP SANs (which have no verified derivation) are denied.
+	// Kubelet generates empty CSRs today, so this is inert until Kubernetes
+	// starts embedding requested SANs; when disabled, CSR SANs are ignored,
+	// which the API contract explicitly allows for signers.
 	HonorCSRSANs bool
-	// AllowUnverifiedIdentities lifts the requirement that annotation-provided
-	// cn/san/ip-san/uris values resolve to an identity derived from the
-	// apiserver-verified PodCertificateRequest fields (pod name/namespace/
-	// serviceAccountName/uid + cluster FQDN). It is off by default: without it,
-	// values that do not derive from a verified identity are denied, so a pod
-	// cannot request a certificate for an identity it does not own. IP SANs and
-	// arbitrary literals have no verified derivation and are always denied when
-	// this is false.
+	// AllowUnverifiedIdentities lifts the requirement that certificate identities
+	// resolve to one derived from the apiserver-verified PodCertificateRequest
+	// fields (pod name/namespace/serviceAccountName/uid + cluster FQDN). It
+	// governs both annotation-provided cn/san/ip-san/uris values and, when
+	// HonorCSRSANs is set, the SANs requested via the CSR. It is off by default:
+	// without it, values that do not derive from a verified identity are denied,
+	// so a pod cannot request a certificate for an identity it does not own. IP
+	// SANs and arbitrary literals have no verified derivation and are always
+	// denied when this is false.
 	AllowUnverifiedIdentities bool
 	// CSRDNSNames are the DNS SANs requested via the PKCS#10 CSR.
 	CSRDNSNames []string
@@ -253,12 +262,11 @@ func NewPodCertificateConfig(
 		verified = verifiedIdentities(pcr, clusterFQDN)
 	}
 
+	defaultDNSNames, dnsLabelTooLong := defaultPodDNSNames(pod.Name, pod.Namespace, clusterFQDN)
+
 	config := &PodCertificateConfig{
-		CommonName: defaultCommonName(pod.Name),
-		DNSNames: []string{
-			fmt.Sprintf("%s.%s.pod.%s", pod.Name, pod.Namespace, clusterFQDN),
-			fmt.Sprintf("%s.%s.svc.%s", pod.Name, pod.Namespace, clusterFQDN),
-		},
+		CommonName:         defaultCommonName(pod.Name),
+		DNSNames:           defaultDNSNames,
 		Duration:           duration,
 		RefreshBefore:      DefaultRefreshBefore,
 		MaxExpiration:      maxExpiration,
@@ -286,6 +294,16 @@ func NewPodCertificateConfig(
 		return nil, err
 	}
 	config.DNSNames = dnsNames
+
+	// If the default pod DNS SANs were dropped for an over-long label and no
+	// annotation/CSR SAN took their place, the certificate loses its canonical
+	// DNS identity. Surface it so the operator can add an explicit SAN; the
+	// reconciler turns this into a Warning event and a log line.
+	if dnsLabelTooLong && len(config.DNSNames) == 0 {
+		config.Warnings = append(config.Warnings, fmt.Sprintf(
+			"default pod DNS SANs omitted: pod name %q exceeds the %d-character DNS label limit; request an explicit SAN via the san annotation if one is needed",
+			pod.Name, dnsLabelMaxLen))
+	}
 
 	ipAddresses, err := resolveIPAddresses(lookup, expand, signerName, opts.AllowUnverifiedIdentities, opts.HonorCSRSANs, opts.CSRIPAddresses)
 	if err != nil {
@@ -453,6 +471,29 @@ func defaultCommonName(podName string) string {
 	return podName
 }
 
+// dnsLabelMaxLen is the maximum length of a single DNS label (RFC 1035 §2.3.4).
+const dnsLabelMaxLen = 63
+
+// defaultPodDNSNames returns the canonical pod DNS SANs
+// <pod>.<ns>.pod|svc.<fqdn>. The pod name forms the leading DNS label(s), which
+// RFC 1035 caps at 63 characters each. When a label would exceed that limit the
+// SANs are omitted entirely (skipped=true) rather than truncated: truncation
+// would give two pods whose names share their first 63 characters identical
+// pod/svc SANs, letting one impersonate the other. The pod stays identifiable by
+// its common name (see defaultCommonName) or an explicit san annotation; callers
+// surface skipped so the operator can act.
+func defaultPodDNSNames(podName, namespace, clusterFQDN string) (names []string, skipped bool) {
+	for _, label := range strings.Split(podName, ".") {
+		if len(label) > dnsLabelMaxLen {
+			return nil, true
+		}
+	}
+	return []string{
+		fmt.Sprintf("%s.%s.pod.%s", podName, namespace, clusterFQDN),
+		fmt.Sprintf("%s.%s.svc.%s", podName, namespace, clusterFQDN),
+	}, false
+}
+
 // verifiedIdentities returns the set of identity strings (common names, DNS
 // names and URIs) the signer is willing to emit for a request, computed solely
 // from its apiserver-verified fields. Resolved annotation values are accepted
@@ -574,6 +615,15 @@ func resolveDNSNames(
 	san, ok := lookup(AnnotationSuffixSAN)
 	if !ok {
 		if honorCSR && len(csrDNSNames) > 0 {
+			// CSR-requested SANs are attacker-influenced just like annotation
+			// values, so they must clear the same verified-identity allowlist.
+			if !allowUnverified {
+				for _, name := range csrDNSNames {
+					if err := assertVerifiedIdentity("CSR DNS name", name, verified); err != nil {
+						return nil, err
+					}
+				}
+			}
 			return csrDNSNames, nil
 		}
 		return defaults, nil
@@ -609,6 +659,12 @@ func resolveIPAddresses(
 	ipSAN, ok := lookup(AnnotationSuffixIPSAN)
 	if !ok {
 		if honorCSR && len(csrIPAddresses) > 0 {
+			// An IP has no verified derivation from the request fields, so
+			// CSR-requested IP SANs are denied under the same rule as the
+			// ip-san annotation unless unverified identities are allowed.
+			if !allowUnverified {
+				return nil, errors.New("CSR IP SANs are not derived from a verified pod identity and are denied; start the controller with --allow-unverified-identities to allow them")
+			}
 			return csrIPAddresses, nil
 		}
 		return nil, nil

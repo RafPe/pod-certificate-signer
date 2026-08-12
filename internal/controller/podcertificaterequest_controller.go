@@ -61,6 +61,11 @@ const (
 	// which of the two it was.
 	ReasonAssociatedPodGone Reason = "AssociatedPodGone"
 
+	// ReasonDefaultSANSkipped is event-only: the certificate still issues, but a
+	// default that could not be applied (e.g. the pod DNS SANs for an over-long
+	// pod name) is surfaced as a Warning event so the operator can see why.
+	ReasonDefaultSANSkipped Reason = "DefaultSANSkipped"
+
 	// Well-known condition reasons defined by the certificates v1beta1 API.
 	ReasonUnsupportedKeyType     Reason = Reason(capiv1beta1.PodCertificateRequestConditionUnsupportedKeyType)
 	ReasonInvalidUserAnnotations Reason = Reason(capiv1beta1.PodCertificateRequestConditionInvalidUserConfig)
@@ -125,7 +130,9 @@ type PodCertificateRequestReconciler struct {
 	// certificate configuration annotations (feature flag, off by default).
 	EnableAnnotationInterpolation bool
 	// HonorCSRSANs uses DNS/IP SANs embedded in the kubelet-generated CSR
-	// (feature flag, off by default; kubelet generates empty CSRs today).
+	// (feature flag, off by default; kubelet generates empty CSRs today). CSR
+	// SANs remain subject to the identity constraints unless
+	// AllowUnverifiedIdentities is set.
 	HonorCSRSANs bool
 	// AllowUnverifiedIdentities lifts the requirement that annotation-provided
 	// certificate identities derive from the verified request fields (feature
@@ -288,6 +295,13 @@ func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capi
 	pcConfig, err := podcertificate.NewPodCertificateConfig(pcr, crPod, configOpts, publicKey, publicKeyAlgorithm)
 	if err != nil {
 		return nil, denied(ReasonInvalidUserAnnotations, err)
+	}
+	// Non-fatal notices (e.g. default pod DNS SANs dropped for an over-long pod
+	// name): the certificate still issues, but the operator must see why a
+	// default was omitted, so surface each as a Warning event and a log line.
+	for _, warning := range pcConfig.Warnings {
+		log.Info(warning)
+		r.EventRecorder.Eventf(pcr, nil, corev1.EventTypeWarning, string(ReasonDefaultSANSkipped), "SignPodCertificateRequest", "%s", warning)
 	}
 	pcConfig.LogConfiguration(ctx)
 
