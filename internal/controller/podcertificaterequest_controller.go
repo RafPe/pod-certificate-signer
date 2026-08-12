@@ -37,6 +37,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -386,13 +387,90 @@ func (r *PodCertificateRequestReconciler) setCertificateOnPodCertificateRequest(
 
 // ------------------------------------------------ GENERIC FUNCTIONS  ------------------------------------------------
 
-// recordOutcome sets the terminal condition on the PodCertificateRequest,
-// emits the corresponding event and persists the status.
+// recordOutcome sets the condition on the PodCertificateRequest, persists the
+// status and only then emits the corresponding event. The order matters: the
+// event announces an outcome, so it must not be emitted until the write that
+// makes the outcome real has succeeded. Emitting first would advertise a result
+// that a failed or conflicting write never persisted, and re-advertise it on
+// every requeue.
 func (r *PodCertificateRequestReconciler) recordOutcome(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, conditionType string, reason Reason, message, eventType string) error {
 	r.setPodCertificateRequestStatusCondition(pcr, conditionType, string(reason), message)
-	r.EventRecorder.Eventf(pcr, nil, eventType, string(reason), "SignPodCertificateRequest", message)
 
-	return r.Status().Update(ctx, pcr)
+	persisted, err := r.updateStatusWithRetry(ctx, pcr)
+	if err != nil {
+		return err
+	}
+	if !persisted {
+		// Another writer recorded a terminal outcome first and won the race;
+		// this reconcile's outcome was discarded, so there is nothing to
+		// announce. updateStatusWithRetry has already logged the loss.
+		return nil
+	}
+
+	r.EventRecorder.Eventf(pcr, nil, eventType, string(reason), "SignPodCertificateRequest", message)
+	return nil
+}
+
+// updateStatusWithRetry writes the PodCertificateRequest status, retrying on a
+// version conflict within this single reconcile, and reports whether the write
+// was persisted. A 409 means another writer advanced the object between the
+// read and the write; letting it propagate out of Reconcile would re-run the
+// whole signing pipeline next pass, minting a fresh certificate and serial
+// number for a status that was ultimately discarded. Instead re-read the live
+// object, re-apply the outcome and try again, so the signer runs once
+// regardless of a lost race on the write.
+//
+// If the re-read shows a terminal condition another writer already recorded,
+// this reconcile lost the race: the request is now immutable, so its outcome is
+// left in place (persisted is false) rather than overwritten.
+func (r *PodCertificateRequestReconciler) updateStatusWithRetry(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest) (bool, error) {
+	desired := pcr.Status.DeepCopy()
+	key := client.ObjectKeyFromObject(pcr)
+
+	// PodCertificateRequests are served from the manager cache, which lags the
+	// write that caused the conflict; re-read through the API reader so the
+	// retry carries the current resourceVersion, not the stale cached one.
+	reader := r.statusRetryReader()
+
+	persisted := false
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		err := r.Status().Update(ctx, pcr)
+		if err == nil {
+			persisted = true
+			return nil
+		}
+		if !apierrors.IsConflict(err) {
+			return err
+		}
+		if gerr := reader.Get(ctx, key, pcr); gerr != nil {
+			return gerr
+		}
+		if api.IsPodCertificateRequestImmutable(pcr) {
+			// A terminal outcome already won; leave it in place. Stop retrying
+			// (return nil) with persisted still false so the caller announces
+			// nothing.
+			logf.FromContext(ctx).Info("another writer recorded a terminal outcome first; discarding this reconcile's outcome",
+				"winningCondition", api.GetPodCertificateRequestConditionType(&pcr.Status))
+			return nil
+		}
+		// Not terminal, so nothing on the fresh object needs preserving: a
+		// non-terminal request carries no conditions and no certificate block.
+		// Re-apply this reconcile's intended status (onto the fresh
+		// resourceVersion) and retry.
+		desired.DeepCopyInto(&pcr.Status)
+		return err
+	})
+	return persisted, err
+}
+
+// statusRetryReader returns the reader used to re-read a PodCertificateRequest
+// before retrying a conflicted status write: the cache-bypassing APIReader in
+// production, falling back to the cached client when none is wired (unit tests).
+func (r *PodCertificateRequestReconciler) statusRetryReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 func (r *PodCertificateRequestReconciler) setPodCertificateRequestStatusCondition(pcr *capiv1beta1.PodCertificateRequest, conditionType, reason, message string) {
