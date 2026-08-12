@@ -6,6 +6,24 @@ metadata:
   labels:
     {{- include "pod-certificate-signer.labels" . | nindent 4 }}
 rules:
+{{- if not .Values.metrics.insecure }}
+# The secure metrics endpoint authenticates scrapers with a TokenReview and
+# authorizes them with a SubjectAccessReview against the kube-apiserver, so the
+# controller ServiceAccount must be able to create both. Omitted when
+# metrics.insecure is set, since the plaintext endpoint performs no auth.
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+{{- end }}
 - apiGroups:
   - ""
   - events.k8s.io

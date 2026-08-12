@@ -50,6 +50,15 @@ const serviceAccountName = releaseName
 // metricsServiceName is the name of the service exposing the metrics port
 const metricsServiceName = releaseName
 
+// metricsReaderClusterRole is the ClusterRole the chart renders granting GET on
+// the /metrics nonResourceURL; a scraper's ServiceAccount must be bound to it to
+// be authorized by the secured metrics endpoint.
+const metricsReaderClusterRole = releaseName + "-metrics-reader"
+
+// metricsReaderBinding is the ClusterRoleBinding the e2e creates to authorize the
+// controller ServiceAccount (used by the curl pod) to scrape the metrics endpoint.
+const metricsReaderBinding = releaseName + "-e2e-metrics-reader"
+
 // signerName the controller is deployed with (see the chart values signer.name)
 const signerName = "example.org/signer"
 
@@ -104,6 +113,10 @@ var _ = Describe("Manager", Ordered, func() {
 	AfterAll(func() {
 		By("cleaning up the curl pod for metrics")
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
+		_, _ = utils.Run(cmd)
+
+		By("removing the metrics-reader ClusterRoleBinding")
+		cmd = exec.Command("kubectl", "delete", "clusterrolebinding", metricsReaderBinding, "--ignore-not-found=true")
 		_, _ = utils.Run(cmd)
 
 		By("uninstalling the Helm release")
@@ -194,7 +207,7 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(verifyControllerUp).Should(Succeed())
 		})
 
-		It("should ensure the metrics endpoint is serving metrics", func() {
+		It("should reject unauthenticated scrapes and serve metrics to an authorized client", func() {
 			By("validating that the metrics service is available")
 			cmd := exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace)
 			_, err := utils.Run(cmd)
@@ -209,7 +222,7 @@ var _ = Describe("Manager", Ordered, func() {
 			}
 			Eventually(verifyMetricsEndpointReady).Should(Succeed())
 
-			By("verifying that the controller manager is serving the metrics server")
+			By("verifying that the controller manager is serving the metrics server securely")
 			verifyMetricsServerStarted := func(g Gomega) {
 				cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
 				output, err := utils.Run(cmd)
@@ -219,7 +232,47 @@ var _ = Describe("Manager", Ordered, func() {
 			}
 			Eventually(verifyMetricsServerStarted).Should(Succeed())
 
-			By("creating the curl-metrics pod to access the metrics endpoint")
+			By("authorizing the controller ServiceAccount to scrape via the metrics-reader ClusterRole")
+			// The secured endpoint authorizes GET on the /metrics nonResourceURL
+			// via SubjectAccessReview. Bind the chart's metrics-reader ClusterRole
+			// to the controller ServiceAccount, which the curl pod runs as, so the
+			// authenticated scrape is authorized.
+			cmd = exec.Command("kubectl", "create", "clusterrolebinding", metricsReaderBinding,
+				"--clusterrole", metricsReaderClusterRole,
+				"--serviceaccount", fmt.Sprintf("%s:%s", namespace, serviceAccountName))
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create the metrics-reader ClusterRoleBinding")
+			DeferCleanup(func() {
+				cmd := exec.Command("kubectl", "delete", "clusterrolebinding", metricsReaderBinding, "--ignore-not-found=true")
+				_, _ = utils.Run(cmd)
+			})
+
+			By("creating the curl-metrics pod that probes the endpoint unauthenticated and authenticated")
+			// One pod issues both requests so cleanup, the failure-dump and
+			// getMetricsOutput() all key off the single "curl-metrics" pod:
+			//   1. an unauthenticated HTTPS scrape, expected to be rejected 401;
+			//   2. an authenticated HTTPS scrape presenting the pod's projected
+			//      ServiceAccount token, expected 200 with the metrics body.
+			// -k skips verification of the controller's in-memory self-signed
+			// serving certificate; the guarantee under test is authn/authz, not
+			// the serving-cert trust chain. --http1.1 keeps the verbose status
+			// line as "HTTP/1.1 200 OK": the server advertises h2 via ALPN, and
+			// without pinning the version curl would negotiate HTTP/2.
+			// The authorized scrape retries: the SubjectAccessReview can briefly
+			// deny (and cache the deny for 30s) if the ClusterRoleBinding has not
+			// propagated to the apiserver authorizer when the first request fires.
+			metricsURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:9090/metrics", metricsServiceName, namespace)
+			curlScript := fmt.Sprintf(
+				"echo '=== unauthenticated ==='; "+
+					"curl -sk --http1.1 -o /dev/null -w 'unauth_status=%%{http_code}\\n' %s; "+
+					"echo '=== authenticated ==='; "+
+					"for i in 1 2 3 4 5 6; do "+
+					// -f makes curl exit non-zero on an HTTP error (e.g. a 403
+					// from a not-yet-propagated authorization) so the loop retries
+					// rather than breaking on the first non-200.
+					"curl -fsk --http1.1 -H \"Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)\" -v %s "+
+					"&& break; echo 'retrying authorized scrape'; sleep 10; done",
+				metricsURL, metricsURL)
 			cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
 				"--namespace", namespace,
 				"--image=curlimages/curl:latest",
@@ -230,7 +283,7 @@ var _ = Describe("Manager", Ordered, func() {
 							"name": "curl",
 							"image": "curlimages/curl:latest",
 							"command": ["/bin/sh", "-c"],
-							"args": ["curl -v http://%s.%s.svc.cluster.local:9090/metrics"],
+							"args": [%q],
 							"securityContext": {
 								"readOnlyRootFilesystem": true,
 								"allowPrivilegeEscalation": false,
@@ -246,7 +299,7 @@ var _ = Describe("Manager", Ordered, func() {
 						}],
 						"serviceAccountName": "%s"
 					}
-				}`, metricsServiceName, namespace, serviceAccountName))
+				}`, curlScript, serviceAccountName))
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
 
@@ -261,8 +314,12 @@ var _ = Describe("Manager", Ordered, func() {
 			}
 			Eventually(verifyCurlUp, 5*time.Minute).Should(Succeed())
 
-			By("getting the metrics by checking curl-metrics logs")
+			By("verifying the unauthenticated scrape was rejected")
 			metricsOutput := getMetricsOutput()
+			Expect(metricsOutput).To(ContainSubstring("unauth_status=401"),
+				"an unauthenticated scrape of the secured endpoint must be rejected with 401")
+
+			By("verifying the authenticated scrape returned the metrics")
 			Expect(metricsOutput).To(ContainSubstring(
 				"controller_runtime_reconcile_total",
 			))

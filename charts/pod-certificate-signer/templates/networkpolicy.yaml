@@ -1,0 +1,48 @@
+{{- if and .Values.metrics.enable_scraping .Values.metrics.networkPolicy.enabled }}
+---
+# Optional NetworkPolicy restricting ingress to the metrics port. Off by default
+# (see values.yaml) so it cannot silently black-hole scrapers in clusters
+# without a NetworkPolicy controller. When both selectors are empty the policy
+# admits every source on the metrics port; narrow them to your monitoring
+# namespace/pods to lock scraping down.
+#
+# Selecting the pod for Ingress denies everything not explicitly allowed, so the
+# health/readiness probe port (http) is kept open to all sources - otherwise the
+# kubelet probes and the Service's http port would be black-holed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pod-certificate-signer.fullname" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pod-certificate-signer.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "pod-certificate-signer.selectorLabels" . | nindent 6 }}
+  policyTypes:
+  - Ingress
+  ingress:
+  # Always allow the health/readiness probe port from any source (kubelet has no
+  # stable source IP to select on).
+  - ports:
+    - port: http
+      protocol: TCP
+  # Restrict the metrics port to the configured scrapers.
+  - ports:
+    - port: metrics
+      protocol: TCP
+    {{- if or .Values.metrics.networkPolicy.namespaceSelector .Values.metrics.networkPolicy.podSelector }}
+    from:
+    - {{- if .Values.metrics.networkPolicy.namespaceSelector }}
+      namespaceSelector:
+        matchLabels:
+          {{- toYaml .Values.metrics.networkPolicy.namespaceSelector | nindent 10 }}
+      {{- end }}
+      {{- if .Values.metrics.networkPolicy.podSelector }}
+      podSelector:
+        matchLabels:
+          {{- toYaml .Values.metrics.networkPolicy.podSelector | nindent 10 }}
+      {{- end }}
+    {{- end }}
+{{- end }}

@@ -5,6 +5,29 @@ generated automatically from the `release/*` label on each merged pull request
 (see [`.github/release-drafter.yml`](.github/release-drafter.yml)). This file
 curates the highlights and — for breaking releases — the migration steps.
 
+## Unreleased
+
+### ⚠️ Breaking changes & migration
+
+- **The metrics endpoint now requires authentication and authorization** (#49).
+  `/metrics` is served over **HTTPS** and every scrape must present a Kubernetes
+  bearer token (verified via `TokenReview`) that is authorized (via
+  `SubjectAccessReview`) for `get` on the `/metrics` nonResourceURL. Previously
+  the endpoint was plaintext and unauthenticated, so any pod that could reach the
+  Service could scrape it.
+  - _Migration (Prometheus):_ bind the chart's new `<release>-metrics-reader`
+    `ClusterRole` to the ServiceAccount your scraper uses, and configure the
+    scrape (e.g. a `ServiceMonitor`) with `scheme: https`, a `bearerTokenFile`,
+    and either the serving CA or `tlsConfig.insecureSkipVerify: true` (the
+    serving certificate is self-signed, generated in memory). Annotation-based
+    scraping cannot authenticate and no longer works against this endpoint.
+  - _Escape hatch:_ set `metrics.insecure: true` (renders `--metrics-secure=false`)
+    to restore the legacy unauthenticated plaintext endpoint — do this only when
+    the port is protected by other means. An optional `metrics.networkPolicy`
+    (off by default) can restrict ingress to the metrics port.
+  - The controller `ClusterRole` gains `create` on `tokenreviews` and
+    `subjectaccessreviews` so the auth filter can call the apiserver.
+
 ## v2.0.0
 
 The first release under the constrained-identity security model, with a hardened

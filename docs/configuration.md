@@ -209,6 +209,10 @@ The chart renders these from Helm values; you rarely set them directly.
   -max-concurrent-reconciles int      Max concurrent reconciles (default 5).
   -max-previous-ca-certs int  Previous CAs retained across rotation (default 2).
   -metrics-bind-address string        Metrics server address (default ":9090").
+  -metrics-secure
+        Serve /metrics over HTTPS and require authn (TokenReview) + authz
+        (SubjectAccessReview) for every scrape. On by default; set false for the
+        legacy unauthenticated plaintext endpoint.
   -reconcile-timeout duration Per-reconcile timeout (default 5m0s).
   -signer-name string         Only sign requests with this .spec.signerName. Required.
   -zap-* ...                  Standard zap logging flags (encoder, level, time encoding).
@@ -244,6 +248,66 @@ signer:
       keyKey: tls.key
       mountPath: /app/signer/ca
 ```
+
+### Metrics authentication
+
+The metrics endpoint (`:9090/metrics`) is **secured by default**
+(`metrics.insecure: false`): it is served over **HTTPS** and every scrape must
+be **authenticated** with a Kubernetes bearer token (verified via a
+`TokenReview`) and **authorized** with a `SubjectAccessReview` for `get` on the
+`/metrics` nonResourceURL. This closes the previous exposure where any pod that
+could reach the Service could scrape the controller's metrics.
+
+> [!WARNING]
+> **Breaking change.** Unauthenticated plaintext scrapes that worked before now
+> fail. A scraper must present a `ServiceAccount` token and trust (or skip
+> verifying) the controller's self-signed serving certificate.
+
+To let Prometheus scrape the secured endpoint:
+
+1. Bind the chart's `*-metrics-reader` `ClusterRole` (grants `get` on the
+   `/metrics` nonResourceURL) to the ServiceAccount Prometheus scrapes with:
+
+   ```yaml
+   apiVersion: rbac.authorization.k8s.io/v1
+   kind: ClusterRoleBinding
+   metadata:
+     name: pod-certificate-signer-metrics-reader
+   roleRef:
+     apiGroup: rbac.authorization.k8s.io
+     kind: ClusterRole
+     name: pod-certificate-signer-metrics-reader
+   subjects:
+   - kind: ServiceAccount
+     name: prometheus
+     namespace: monitoring
+   ```
+
+2. Configure the scrape (e.g. a Prometheus Operator `ServiceMonitor`) to use the
+   `https` scheme, the pod's bearer token, and either the serving CA or
+   `insecureSkipVerify: true` (the serving cert is self-signed, generated in
+   memory by controller-runtime):
+
+   ```yaml
+   endpoints:
+   - port: metrics
+     scheme: https
+     bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+     tlsConfig:
+       insecureSkipVerify: true
+   ```
+
+The controller ServiceAccount is granted `create` on `tokenreviews` and
+`subjectaccessreviews` by the chart so the auth filter can call the apiserver.
+Annotation-based Prometheus scraping (the `prometheus.io/*` pod annotations)
+cannot supply a token and will not authenticate against the secured endpoint —
+use a `ServiceMonitor` (or equivalent) instead.
+
+**Escape hatch.** To restore the legacy unauthenticated plaintext endpoint, set
+`metrics.insecure: true` (renders `--metrics-secure=false`). Only do this when
+the metrics port is protected by other means (e.g. a NetworkPolicy and a trusted
+network). The chart also ships an optional `metrics.networkPolicy` (off by
+default) to restrict ingress to the metrics port.
 
 ### Recommended production posture
 
