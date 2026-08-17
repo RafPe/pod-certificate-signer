@@ -534,9 +534,21 @@ func verifiedIdentities(pcr *capiv1beta1.PodCertificateRequest, clusterFQDN stri
 	// The workload's service-account identity - the pod runs as this service
 	// account, so it may identify by it (short DNS form and SPIFFE ID).
 	//
-	// Deliberately excluded: node.name (belongs to the kubelet, not the
-	// workload) and pod.uid (an opaque, non-identifying token). Both remain
-	// available for ${...} interpolation but are not claimable as a subject.
+	// Deliberately excluded:
+	//   - node.name (belongs to the kubelet, not the workload) and pod.uid (an
+	//     opaque, non-identifying token). Both remain available for ${...}
+	//     interpolation but are not claimable as a subject.
+	//   - the service-account Service/pod DNS forms <sa>.<ns>.svc[.<fqdn>] and
+	//     <sa>.<ns>.pod[.<fqdn>]. <name>.<ns>.svc.<fqdn> is the Kubernetes
+	//     *Service* record shape, and ServiceAccount and Service names are
+	//     independent within a namespace - granting the form would let a pod
+	//     running as ServiceAccount "kubernetes" in "default" present a valid
+	//     certificate for kubernetes.default.svc, the canonical example of what
+	//     this constraint exists to deny. The names also resolve to nothing in
+	//     Kubernetes DNS, so they buy no interoperability. The signer emits no
+	//     service-account-derived DNS name of its own; per-pod service-account
+	//     identity is carried by the SPIFFE ID below. See
+	//     docs/adr/0001-verified-identity-allowlist-boundary.md.
 	if sa != "" {
 		add(
 			sa+"."+ns,

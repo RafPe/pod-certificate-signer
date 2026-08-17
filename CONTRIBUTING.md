@@ -79,6 +79,58 @@ Allowed kinds are `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`,
 Ordinary merges never publish; maintainers explicitly prepare and approve a
 generated release PR.
 
+## Architecture Decision Records
+
+Decisions that shape how the signer is built or operated are recorded in
+[`docs/adr/`](docs/adr/README.md). The record exists so the reasoning survives
+the pull request that carried it: a code comment explains what the code does, an
+ADR explains why the alternative was turned down.
+
+### When an ADR is required
+
+Open one alongside the PR (or before it) when the change touches:
+
+- **a default that affects issuance or security posture** — flipping
+  `enable_annotation_interpolation`, `allow_unverified_identities`,
+  `honor_csr_sans`, `metrics_secure`, or the default EKU set;
+- **the identity model** — anything that widens or narrows
+  `verifiedIdentities`, changes how a resolved value is compared against it, or
+  adds an interpolation variable;
+- **the trust boundary** — new RBAC, a new API the controller reads or writes,
+  new inputs it treats as trusted, or a change to what reaches the CA key;
+- **a flag that gates what ends up in a certificate** — subject, SANs, URIs,
+  EKU, validity;
+- **cluster-wide chart resources** — ClusterRoles, ValidatingAdmissionPolicies,
+  ClusterTrustBundles, or anything else installed outside the release namespace;
+- **anything carrying `release/major`.** A breaking change always warrants a
+  record of what was broken and why.
+
+Routine work inside an established pattern does not need one. Neither do bug
+fixes, dependency bumps, or docs. If you find yourself writing a long code
+comment that argues rather than describes, that argument belongs in an ADR.
+
+### Lifecycle
+
+An ADR is created as `proposed`, discussed on the PR, and then either `accepted`
+or `rejected`. **A rejected ADR is kept, not deleted** — the record that an
+option was considered and turned down is exactly what stops it being
+re-proposed. A decision that is later replaced becomes
+`superseded by [ADR-NNNN](NNNN-slug.md)`, with the new ADR linking back; one
+that no longer applies but has no replacement becomes `deprecated` with the
+reason stated. Status lives in the YAML front matter. Do not rewrite an accepted
+ADR's history — append to `## More Information` instead.
+
+### Review
+
+**An ADR needs at least one approving maintainer review before it is merged as
+`accepted`.** This is the one place in the project where a second pair of eyes
+is not optional: ordinary PRs merge on green CI, but a decision that governs
+future code should not be self-approved. An ADR may merge as `proposed` without
+that review — it just does not bind anything until accepted.
+
+Reference the ADR from the code it governs with a short `ADR-NNNN` comment at
+the relevant entry point, and from the PR description.
+
 ## Reporting issues
 
 Use the issue forms in this repository for bugs and feature requests. For

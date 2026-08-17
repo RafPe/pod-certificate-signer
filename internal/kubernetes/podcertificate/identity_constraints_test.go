@@ -86,6 +86,81 @@ func TestNodeAndUIDNotClaimable(t *testing.T) {
 	}
 }
 
+// The service-account identity is claimable in its short DNS form and as a
+// SPIFFE ID, never as a Kubernetes Service DNS name: <sa>.<ns>.svc is the shape
+// of a Service record, and ServiceAccount and Service names are independent
+// within a namespace. Allowing it would let a pod running as ServiceAccount
+// "kubernetes" in "default" present a certificate for kubernetes.default.svc -
+// the exact case the identity constraint exists to deny. The signer emits no
+// service-account-derived DNS name of its own, so none is claimable. See
+// docs/adr/0001-verified-identity-allowlist-boundary.md.
+//
+// This is a characterization test: it passes today and exists to lock the
+// decision, so a future "just add .svc" patch turns red with a pointer to the
+// reasoning rather than merging quietly.
+func TestServiceAccountServiceDNSFormsDenied(t *testing.T) {
+	for _, san := range []string{
+		"${pod.serviceAccountName}.${pod.namespace}.svc",
+		"${pod.serviceAccountName}.${pod.namespace}.svc.${cluster.fqdn}",
+		"${pod.serviceAccountName}.${pod.namespace}.pod",
+		"${pod.serviceAccountName}.${pod.namespace}.pod.${cluster.fqdn}",
+	} {
+		t.Run(san, func(t *testing.T) {
+			pcr := verifiedPCR(map[string]string{testSignerName + "-san": san})
+			if _, err := NewPodCertificateConfig(pcr, testPod(nil), Options{EnableInterpolation: true}, nil, 0); err == nil {
+				t.Fatalf("want denial for san=%q, got nil", san)
+			}
+		})
+	}
+}
+
+// The SPIFFE ID of the pod's service account is the supported way to carry
+// per-pod workload identity (issue #87), and must be accepted under the default
+// identity constraints - it is the form the ADR points operators at once the
+// service-account Service DNS forms above are ruled out. See
+// docs/adr/0001-verified-identity-allowlist-boundary.md.
+func TestServiceAccountSPIFFEIDAccepted(t *testing.T) {
+	pcr := verifiedPCR(map[string]string{
+		testSignerName + "-uris": "spiffe://${cluster.fqdn}/ns/${pod.namespace}/sa/${pod.serviceAccountName}",
+	})
+
+	config, err := NewPodCertificateConfig(pcr, testPod(nil), Options{EnableInterpolation: true}, nil, 0)
+	if err != nil {
+		t.Fatalf("NewPodCertificateConfig: %v", err)
+	}
+	if len(config.URIs) != 1 || config.URIs[0].String() != "spiffe://cluster.local/ns/myns/sa/mysa" {
+		t.Errorf("URIs = %v, want the service-account SPIFFE ID", config.URIs)
+	}
+}
+
+// The pod's own canonical Kubernetes DNS forms are claimable because the signer
+// emits them itself by default (defaultPodDNSNames) - the allowlist must contain
+// everything the default path already puts into a certificate, or the annotation
+// path would be stricter than doing nothing. This is the counterpart to
+// TestServiceAccountServiceDNSFormsDenied: it pins rule (a) of
+// docs/adr/0001-verified-identity-allowlist-boundary.md, and is what makes the
+// asymmetry between the pod and service-account forms principled rather than an
+// oversight.
+func TestPodServiceDNSFormsAccepted(t *testing.T) {
+	for san, want := range map[string]string{
+		"${pod.name}.${pod.namespace}.svc":                 "mypod.myns.svc",
+		"${pod.name}.${pod.namespace}.svc.${cluster.fqdn}": "mypod.myns.svc.cluster.local",
+		"${pod.name}.${pod.namespace}.pod":                 "mypod.myns.pod",
+		"${pod.name}.${pod.namespace}.pod.${cluster.fqdn}": "mypod.myns.pod.cluster.local",
+	} {
+		t.Run(san, func(t *testing.T) {
+			pcr := verifiedPCR(map[string]string{testSignerName + "-san": san})
+			config, err := NewPodCertificateConfig(pcr, testPod(nil), Options{EnableInterpolation: true}, nil, 0)
+			if err != nil {
+				t.Fatalf("NewPodCertificateConfig(san=%q): %v", san, err)
+			}
+			if len(config.DNSNames) != 1 || config.DNSNames[0] != want {
+				t.Errorf("DNSNames = %v, want [%s]", config.DNSNames, want)
+			}
+		})
+	}
+}
+
 // (3): The default extended key usage must be ServerAuth only; ClientAuth is an
 // explicit opt-in via the eku annotation.
 func TestDefaultEKUServerAuthOnly(t *testing.T) {

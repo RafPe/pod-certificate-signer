@@ -16,3 +16,4 @@
 - [ ] `make test` and `make lint` pass locally.
 - [ ] Tests were added/updated for new behavior.
 - [ ] Docs (README, chart docs, examples) were updated for user-facing changes.
+- [ ] An ADR in `docs/adr/` accompanies this change if it needs one — see [when an ADR is required](/CONTRIBUTING.md#when-an-adr-is-required). Not CI-enforced; use your judgement.
