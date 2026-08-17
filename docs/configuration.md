@@ -83,6 +83,47 @@ including the 64-character common-name limit and DNS-1123 SAN limits. DNS SAN
 labels may contain at most 63 characters and the complete name at most 253;
 wildcard SANs are not supported.
 
+#### What bounds interpolation
+
+Interpolation is a **naming** mechanism, not an authorization one. Two properties
+bound it, and it is worth being precise about which does what, because the second
+is the one people mistake this feature flag for.
+
+1. **Where values come from.** The variable table above is the whole table.
+   Every entry resolves from a `PodCertificateRequest` spec field that kubelet
+   populates and kube-apiserver verifies, except `${cluster.fqdn}`, which comes
+   from the operator's own `--cluster-fqdn`. No user-controlled input reaches it.
+   Expansion is a single non-recursive pass — a resolved value cannot itself
+   contain `${...}`, because Kubernetes object names and UIDs cannot.
+2. **What the resolved value is then checked against.** Every expanded `cn`,
+   `san` and `uris` value must be an exact string member of the
+   [verified-identity allowlist](#identity-constraints-security). The comparison
+   is **exact string equality**, never a prefix or pattern match — which is why
+   `${pod.name}.evil.example.com` is denied even though it begins with a name the
+   pod owns.
+
+Together these mean an interpolated value is subject to **exactly the same
+identity check as a literal one**. The check is membership-based and does not
+care how the string was produced, so interpolation grants no identity a pod does
+not already own. What it buys is portability — the same pod template across
+namespaces and clusters — plus per-pod values like `${pod.name}` that cannot be
+written literally in a shared Deployment at all.
+
+> [!IMPORTANT]
+> **The security gate is `--allow-unverified-identities`, not this flag.** That
+> is the setting that decides whether a pod may claim an identity it does not
+> own. `--enable-annotation-interpolation` decides only whether `${...}` is
+> resolved or rejected as a value; it is not a substitute for the identity
+> constraints and does not weaken them.
+
+**Claimable** via interpolation: the pod's name, its canonical Kubernetes DNS
+forms, its SPIFFE ID, and its service account's short DNS form `<sa>.<ns>` and
+SPIFFE ID. `${node.name}` and `${pod.uid}` resolve but are **not** claimable as a
+subject — a node identity belongs to the kubelet, and a UID is an opaque token.
+The boundary of that set, including which forms are deliberately excluded and
+why, is recorded in
+[ADR-0001](adr/0001-verified-identity-allowlist-boundary.md).
+
 ### CSR-requested SANs (forward compatibility)
 
 Upstream Kubernetes plans to let pod authors request DNS and IP SANs that
