@@ -208,13 +208,30 @@ func expectDenied(ref podRef, wantReason string) deniedRequest {
 // expectFailed is the counterpart of expectDenied for requests the signer
 // accepts but cannot fulfil.
 //
-// It has no caller yet: the only path that records a Failed condition is a
-// signing failure (ReasonSigningFailed), which needs a broken or unusable CA
-// and is therefore reachable only once the CA-lifecycle specs land. It is
-// defined here so that stage does not have to re-derive the assertion set, and
-// so the Failed shape is documented alongside the Denied one it must match.
+// It has no caller, and the CA-lifecycle specs established that it cannot have
+// one. The expectation was that a broken CA would reach it; it does not. Every
+// route to a Failed condition was walked:
 //
-//nolint:unused // wired up by the CA-lifecycle stage; see the comment above.
+//   - Unloadable CA material (mismatched pair, unparseable PEM, non-CA
+//     certificate) never becomes the signing CA at all. authority.load fails
+//     and leaves the last-good CA in place, so requests keep issuing and no
+//     request ever sees the bad material. ca_lifecycle_test.go proves this.
+//   - A CA that loads but cannot cover the requested lifetime returns
+//     ErrCASignerUnusable, which Reconcile routes to a requeue rather than a
+//     terminal outcome, deliberately: a rotation can make the same request
+//     succeed. ca_lifecycle_test.go proves the request stays pending and
+//     issues later.
+//   - The one remaining branch, a notAfter already in the past, needs a
+//     requested duration below the signer's one-minute backdate; requests
+//     under podcertificate.MinDuration (one hour) are denied long before
+//     signing.
+//
+// That leaves only an x509.CreateCertificate failure, which no pod manifest can
+// provoke. Keep the helper: it documents the Failed shape next to the Denied one
+// it must match, and it is the assertion set to reach for if a future signer
+// change makes SigningFailed reachable. Do not manufacture a caller for it.
+//
+//nolint:unused // deliberately uncalled; see the comment above.
 func expectFailed(ref podRef, wantReason string) deniedRequest {
 	GinkgoHelper()
 	return expectTerminalDenialOrFailure(ref, capiv1beta1.PodCertificateRequestConditionTypeFailed, wantReason)
