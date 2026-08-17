@@ -23,6 +23,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -295,21 +296,33 @@ func defineCustomClusterFQDNProfileTests() {
 	})
 }
 
+// refusedIdentityPattern extracts the value the allowlist refused from a
+// denial message, which quotes it:
+//
+//	common name "x.example.org" is not derived from a verified pod identity; ...
+//
+// The value has to be read out rather than searched for in the whole message:
+// the message continues with advice that itself mentions ${...} interpolation,
+// so "the message contains no placeholder" is not a statement anything can
+// satisfy. What matters is that the *refused value* carries none.
+var refusedIdentityPattern = regexp.MustCompile(`"([^"]*)" is not derived from a verified pod identity`)
+
 // expectOwnershipDenial asserts that a denial was the identity allowlist
-// refusing a value, and not one of the layers in front of it.
+// refusing a resolved value, and not one of the layers in front of it.
 //
 // The reason string cannot make this distinction: a malformed DNS name, an
 // unresolvable placeholder and an unowned identity all record
-// InvalidUserConfig. Only the message can, so the check is positive on the
-// ownership wording and negative on the two failures most likely to be mistaken
-// for it - an unresolved placeholder, and an unknown variable name.
+// InvalidUserConfig. Only the message can.
 func expectOwnershipDenial(denial deniedRequest) {
 	GinkgoHelper()
 
-	Expect(denial.Message).To(ContainSubstring("is not derived from a verified pod identity"),
-		"the denial must come from the identity allowlist")
-	Expect(denial.Message).NotTo(ContainSubstring("${"),
-		"the requested value must have been resolved before ownership refused it")
+	refused := refusedIdentityPattern.FindStringSubmatch(denial.Message)
+	Expect(refused).To(HaveLen(2),
+		"the denial must come from the identity allowlist, and name the value it refused; message was: %s",
+		denial.Message)
+	Expect(refused[1]).NotTo(ContainSubstring("${"),
+		"the requested value must have been resolved before ownership refused it, but %q still carries a placeholder",
+		refused[1])
 	Expect(denial.Message).NotTo(ContainSubstring("unknown interpolation variable"),
 		"an unresolvable placeholder is a different denial and must not be mistaken for this one")
 }
