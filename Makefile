@@ -77,8 +77,14 @@ fmt: ## Run go fmt against code.
 	$(GOCMD) fmt ./...
 
 .PHONY: vet
-vet: ## Run go vet against code.
+vet: vet-e2e ## Run go vet against code, including the build-tagged e2e package.
 	$(GOCMD) vet ./...
+
+.PHONY: vet-e2e
+vet-e2e: ## Run go vet against the e2e package, which is behind //go:build e2e.
+	# Without -tags=e2e the e2e package has no files to vet, so `go vet ./...`
+	# matches nothing there and reports success on code it never looked at.
+	$(GOCMD) vet -tags=e2e ./test/e2e/...
 
 .PHONY: test
 test: generate vet  ## Run tests. Formatting is enforced separately (make fmt / CI gofmt gate), not auto-applied here.
@@ -96,17 +102,28 @@ test-e2e: generate fmt vet ## Run the e2e tests. Expected an isolated environmen
 		echo "Creating e2e Kind cluster '$(KIND_CLUSTER_E2E)' ..."; \
 		$(GO_TOOL) kind create cluster --name $(KIND_CLUSTER_E2E) --config $(SRC_ROOT)/kind/kind-config.yaml; \
 	fi
+	# The cluster teardown runs from an EXIT trap, not as a following recipe
+	# line: a failing `go test` aborts the recipe, and without the trap the Kind
+	# cluster survived every red run and leaked into the next one. The trap
+	# re-raises the test's exit code so a failure still fails the target.
+	@set -e; \
+	trap 'code=$$?; $(GO_TOOL) kind delete cluster --name $(KIND_CLUSTER_E2E); exit $$code' EXIT; \
 	env \
 		IMAGE=$(IMAGE) \
 		KIND=$(shell $(GOCMD) tool -modfile $(TOOLS_MOD_FILE) -n kind) \
 		KIND_CLUSTER=$(KIND_CLUSTER_E2E) \
 		CERT_MANAGER_INSTALL_SKIP=true \
 		$(GOCMD) test -tags=e2e ./test/e2e/ -v -ginkgo.v
-	@$(GO_TOOL) kind delete cluster --name $(KIND_CLUSTER_E2E)
 
 .PHONY: lint
-lint:  ## Run golangci-lint linter
+lint: lint-e2e ## Run golangci-lint linter, including the build-tagged e2e package.
 	$(GO_TOOL) golangci-lint run
+
+.PHONY: lint-e2e
+lint-e2e: ## Run golangci-lint against the e2e package, which is behind //go:build e2e.
+	# golangci-lint skips files whose build tags are not satisfied, so without
+	# --build-tags=e2e the e2e suite is never linted at all.
+	$(GO_TOOL) golangci-lint run --build-tags=e2e ./test/e2e/...
 
 .PHONY: lint-fix
 lint-fix:  ## Run golangci-lint linter and perform fixes

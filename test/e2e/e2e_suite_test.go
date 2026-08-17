@@ -56,6 +56,26 @@ func TestE2E(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
+	By("verifying the suite is running in a single process")
+	// The suite mutates cluster-wide state mid-run: installProfile re-installs
+	// the Helm release in place with different signer flags, and the
+	// ClusterTrustBundle context rotates the CA secret. Neither is scoped to a
+	// spec, so a second process would silently run its specs against another
+	// process's install and produce results that describe a configuration that
+	// was never under test.
+	//
+	// The top-level container is decorated Serial, which is the correct
+	// declaration but not a sufficient guarantee - it orders specs, it does not
+	// stop the suite being launched with `--procs`. This guard does, and it runs
+	// in every process so a parallel invocation fails immediately and loudly
+	// rather than after the first profile switch corrupts the run.
+	suiteConfig, _ := GinkgoConfiguration()
+	Expect(suiteConfig.ParallelTotal).To(Equal(1),
+		"the e2e suite mutates cluster-wide state (Helm install profiles, CA rotation) and must run "+
+			"in a single process; it was started with %d. Run it via `make test-e2e`.", suiteConfig.ParallelTotal)
+	Expect(GinkgoParallelProcess()).To(Equal(1),
+		"the e2e suite must run as parallel process 1, got %d", GinkgoParallelProcess())
+
 	By("building the manager(Operator) image")
 	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMAGE=%s", projectImage))
 	_, err := utils.Run(cmd)

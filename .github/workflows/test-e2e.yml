@@ -44,5 +44,18 @@ jobs:
       - name: Verify kind installation
         run: kind version
 
+      # The e2e package is behind //go:build e2e, so the repo-wide `go vet ./...`
+      # and `golangci-lint run` never look at it. Gate it here, before the
+      # 10-minute cluster run, so a compile-level mistake fails in seconds.
+      - name: Vet and lint the tagged e2e package
+        run: make vet-e2e lint-e2e
+
       - name: Running Test e2e
         run: make test-e2e
+
+      # make test-e2e tears the cluster down from an EXIT trap, so this is a
+      # backstop for the cases the trap cannot cover: a cancelled job, or a
+      # runner-level timeout that kills make outright.
+      - name: Tear down the kind cluster
+        if: always()
+        run: kind delete cluster --name pcs-e2e || true
