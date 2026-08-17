@@ -84,7 +84,25 @@ type certTestPod struct {
 	// alongside the podCertificate one so the pod also mounts the signer's
 	// published trust anchors at ca.crt.
 	clusterTrustBundleName string
+
+	// image and args replace the default sleeper container. The
+	// credential-conformance specs point them at the in-cluster probe
+	// (test/credprobe), which is the only workload in the suite that does
+	// anything with the credential it is given; every other spec only needs a
+	// container that stays up long enough for kubelet to project one.
+	image string
+	args  []string
 }
+
+// sleeperImage is the workload container for the specs that only need a pod to
+// exist. It is not the probe: a spec that asserts on the mounted credential
+// must set image explicitly, so "the pod is up" can never be mistaken for
+// "the credential works".
+const sleeperImage = "busybox:1.37"
+
+// e2eWorkloadLabel marks the pods this suite creates, so the failure dump can
+// collect their logs without knowing which spec made them.
+const e2eWorkloadLabel = "e2e.pod-certificate-signer/workload"
 
 // withDefaults returns the fixture with every unset field filled in. The
 // defaults reproduce the pod the string-built helper created, so switching to
@@ -103,7 +121,38 @@ func (p certTestPod) withDefaults() certTestPod {
 	if p.credentialBundlePath == "" {
 		p.credentialBundlePath = defaultCredentialBundlePath
 	}
+	if p.image == "" {
+		p.image = sleeperImage
+		p.args = nil
+	}
 	return p
+}
+
+// container renders the workload container. The sleeper keeps the command it
+// has always had; anything else runs its image's entrypoint with the fixture's
+// arguments, which is how the credential probe is configured.
+func (p certTestPod) container() corev1.Container {
+	container := corev1.Container{
+		Name:  "workload",
+		Image: p.image,
+		Args:  p.args,
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: ptr(false),
+			RunAsNonRoot:             ptr(true),
+			RunAsUser:                ptr(int64(65532)),
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+			SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+		},
+		VolumeMounts: []corev1.VolumeMount{{
+			Name:      "x509",
+			MountPath: certTestPodMountPath,
+			ReadOnly:  true,
+		}},
+	}
+	if p.image == sleeperImage {
+		container.Command = []string{"sleep", "600"}
+	}
+	return container
 }
 
 // build renders the fixture as a typed corev1.Pod.
@@ -134,27 +183,12 @@ func (p certTestPod) build() *corev1.Pod {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      p.name,
 			Namespace: p.namespace,
+			Labels:    map[string]string{e2eWorkloadLabel: "true"},
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy:      corev1.RestartPolicyNever,
 			ServiceAccountName: p.serviceAccountName,
-			Containers: []corev1.Container{{
-				Name:    "sleeper",
-				Image:   "busybox:1.37",
-				Command: []string{"sleep", "600"},
-				SecurityContext: &corev1.SecurityContext{
-					AllowPrivilegeEscalation: ptr(false),
-					RunAsNonRoot:             ptr(true),
-					RunAsUser:                ptr(int64(65532)),
-					Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-					SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
-				},
-				VolumeMounts: []corev1.VolumeMount{{
-					Name:      "x509",
-					MountPath: certTestPodMountPath,
-					ReadOnly:  true,
-				}},
-			}},
+			Containers:         []corev1.Container{p.container()},
 			Volumes: []corev1.Volume{{
 				Name: "x509",
 				VolumeSource: corev1.VolumeSource{

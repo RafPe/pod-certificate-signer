@@ -251,6 +251,13 @@ func dumpDiagnostics() {
 
 	By("collecting the workload pods and their certificate requests")
 	dumpKubectl("workload pods", "get", "pods", "-n", workloadNamespace, "-o", "yaml")
+	// The credential probe reports what it saw inside the pod; for a spec that
+	// failed before parsing that report, the raw log is the only place it
+	// exists. Selecting on the suite's own label keeps this to pods these specs
+	// created. The probe publishes fingerprints and block types, never key
+	// material, and the output passes through redactSensitive regardless.
+	dumpKubectl("workload pod logs", "logs", "-l", e2eWorkloadLabel+"=true",
+		"-n", workloadNamespace, "--all-containers=true", "--prefix=true", "--tail=-1")
 	dumpKubectl("pod certificate requests", "get", "podcertificaterequests", "-n", workloadNamespace, "-o", "yaml")
 	dumpKubectl("workload namespace events", "get", "events", "-n", workloadNamespace, "--sort-by=.lastTimestamp")
 

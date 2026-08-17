@@ -308,11 +308,18 @@ func defineVerifiedInterpolationProfileTests() {
 // defineChartDefaultsProfileTests covers the chart exactly as it ships, with no
 // feature flag turned on.
 //
-// It exists for one assertion that no other profile can make: with
-// --enable-annotation-interpolation off, a value containing ${...} is denied
-// outright rather than resolved or issued verbatim. Running that assertion under
-// the verified-interpolation profile would pass for the wrong reason - the value would
-// be rejected by the allowlist rather than by the disabled interpolation gate.
+// It carries both halves of the shipped configuration. The negative is the
+// assertion no other profile can make: with --enable-annotation-interpolation
+// off, a value containing ${...} is denied outright rather than resolved or
+// issued verbatim. Running that assertion under the verified-interpolation
+// profile would pass for the wrong reason - the value would be rejected by the
+// allowlist rather than by the disabled interpolation gate.
+//
+// The positive is defineCredentialConformanceTests
+// (credential_conformance_test.go), which proves an unmodified install hands a
+// workload a credential it can actually use. It belongs here, inside this
+// container, so it runs against the chart defaults without a further Helm
+// upgrade.
 func defineChartDefaultsProfileTests() {
 	Context("Install profile: chart-defaults", func() {
 		BeforeAll(func() {
@@ -334,5 +341,7 @@ func defineChartDefaultsProfileTests() {
 			Expect(denial.Message).To(ContainSubstring("interpolation, which is disabled on this signer"),
 				"the denial must name the disabled flag, not the identity constraint")
 		})
+
+		defineCredentialConformanceTests()
 	})
 }

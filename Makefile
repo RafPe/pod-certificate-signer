@@ -177,6 +177,16 @@ run: generate fmt vet ## Run a controller from your host.
 docker-build: ## Build docker image with the manager.
 	$(CONTAINER_TOOL) build -t ${IMAGE} .
 
+## Image of the in-cluster credential probe the e2e suite runs as its workload
+## (see test/credprobe). It is built from this repository and loaded into the
+## Kind cluster, never pulled, so the specs work on a runner with no access to
+## a registry holding a third-party workload image.
+E2E_WORKLOAD_IMAGE ?= example.com/pcs-credprobe:v0.0.1
+
+.PHONY: e2e-workload-image
+e2e-workload-image: ## Build the e2e credential-probe workload image.
+	$(CONTAINER_TOOL) build -t $(E2E_WORKLOAD_IMAGE) -f $(SRC_ROOT)/test/credprobe/Dockerfile $(SRC_ROOT)
+
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMAGE}

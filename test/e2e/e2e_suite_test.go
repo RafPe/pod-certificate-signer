@@ -43,6 +43,15 @@ var (
 	// projectImage is the name of the image which will be build and loaded
 	// with the code source changes to be tested.
 	projectImage = "example.com/pcs:v0.0.1"
+
+	// workloadProbeImage is the in-cluster credential probe the
+	// credential-conformance specs run as their workload (test/credprobe).
+	//
+	// It is built from this repository and loaded into Kind for the same reason
+	// the manager image is: a third-party workload image would have to exist,
+	// and be reachable, on whatever runner executes `make test-e2e`. The value
+	// must match the Makefile's E2E_WORKLOAD_IMAGE default.
+	workloadProbeImage = "example.com/pcs-credprobe:v0.0.1"
 )
 
 // TestE2E runs the end-to-end (e2e) test suite for the project. These tests execute in an isolated,
@@ -86,6 +95,15 @@ var _ = BeforeSuite(func() {
 	By("loading the manager(Operator) image on Kind")
 	err = utils.LoadImageToKindClusterWithName(projectImage)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager(Operator) image into Kind")
+
+	By("building the credential probe workload image")
+	cmd = exec.Command("make", "e2e-workload-image", fmt.Sprintf("E2E_WORKLOAD_IMAGE=%s", workloadProbeImage))
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the credential probe image")
+
+	By("loading the credential probe workload image on Kind")
+	err = utils.LoadImageToKindClusterWithName(workloadProbeImage)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the credential probe image into Kind")
 
 	// The tests-e2e are intended to run on a temporary cluster that is created and destroyed for testing.
 	// To prevent errors when tests run in environments with CertManager already installed,
