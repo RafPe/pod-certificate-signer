@@ -1,3 +1,15 @@
 # More info: https://docs.docker.com/engine/reference/builder/#dockerignore-file
 # Ignore build and test binaries.
 bin/
+
+# Local agent and tooling scratch, plus VCS metadata. None of this is ever
+# COPYed - every Dockerfile here copies explicit source paths - but the whole
+# repo root is still uploaded to the daemon as build context on every build.
+# .claude/worktrees alone is ~650M of throwaway checkouts of this repository,
+# which made the context ~894M for a build that needs a couple of megabytes of
+# Go source. Excluding .git is safe for the same reason: the builder stage
+# copies go.mod/go.sum and the source trees, never the repository metadata.
+.claude/
+.codegraph/
+.ecc/
+.git/
