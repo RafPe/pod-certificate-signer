@@ -96,6 +96,16 @@ test: generate vet  ## Run tests. Formatting is enforced separately (make fmt / 
 			-covermode=atomic \
 			$(shell $(GOCMD) list ./...  | grep -v /e2e)
 
+## E2E_LABEL_FILTER selects which specs the e2e suite runs, as a Ginkgo label
+## filter expression. The default excludes the `nightly` label, which marks the
+## specs that are correct but too slow for a per-PR gate - today the CA-lifecycle
+## specs whose cost is dominated by kubelet's mounted-secret refresh: invalid-CA
+## recovery, repeated rotations and retention, restart bootstrap and
+## ClusterTrustBundle drift (see test/e2e/ca_lifecycle_test.go). Everything else,
+## including one CA rotation and the issuance that follows it, runs on every PR.
+## Use `make test-e2e-nightly` to run the lot.
+E2E_LABEL_FILTER ?= !nightly
+
 .PHONY: test-e2e
 test-e2e: generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
 	# grep -qx, not a bare grep: `kind get clusters` prints one name per line and
@@ -120,7 +130,15 @@ test-e2e: generate fmt vet ## Run the e2e tests. Expected an isolated environmen
 		KIND=$(shell $(GOCMD) tool -modfile $(TOOLS_MOD_FILE) -n kind) \
 		KIND_CLUSTER=$(KIND_CLUSTER_E2E) \
 		CERT_MANAGER_INSTALL_SKIP=true \
-		$(GOCMD) test -tags=e2e ./test/e2e/ -v -ginkgo.v
+		$(GOCMD) test -tags=e2e ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter='$(E2E_LABEL_FILTER)'
+
+.PHONY: test-e2e-nightly
+test-e2e-nightly: ## Run the whole e2e suite, including the nightly-labelled specs. Expect it to take considerably longer than test-e2e.
+	# An empty label filter selects everything. This is a separate target rather
+	# than a documented variable override so that whatever runs it - a schedule,
+	# a release job, a human - names the thing it wants rather than an
+	# expression whose default it has to know.
+	@$(MAKE) test-e2e E2E_LABEL_FILTER=
 
 .PHONY: lint
 lint: lint-e2e ## Run golangci-lint linter, including the build-tagged e2e package.

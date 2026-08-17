@@ -116,6 +116,21 @@ func installProfile(extraArgs string) {
 	Expect(err).NotTo(HaveOccurred(), "Controller rollout did not complete: %s", output)
 
 	By("re-resolving the controller pod for this profile")
+	resolveControllerPod()
+}
+
+// resolveControllerPod points controllerPodName at the single live controller
+// pod.
+//
+// Anything that rolls the Deployment - a profile switch, a restart - leaves the
+// previously resolved name pointing at a terminated pod, and every pod-targeted
+// assertion (logs, readiness, the failure dump) would then describe the pod that
+// is on its way out. Pods with a deletionTimestamp are filtered out for the same
+// reason: mid-rollout there are briefly two, and only one of them is the pod the
+// following specs are about.
+func resolveControllerPod() {
+	GinkgoHelper()
+
 	Eventually(func(g Gomega) {
 		cmd := exec.Command("kubectl", "get", "pods",
 			"-l", fmt.Sprintf("app.kubernetes.io/instance=%s", releaseName),
@@ -126,7 +141,7 @@ func installProfile(extraArgs string) {
 		podOutput, err := utils.Run(cmd)
 		g.Expect(err).NotTo(HaveOccurred())
 		podNames := utils.GetNonEmptyLines(podOutput)
-		g.Expect(podNames).To(HaveLen(1), "expected exactly 1 controller pod after the upgrade")
+		g.Expect(podNames).To(HaveLen(1), "expected exactly 1 controller pod")
 		controllerPodName = podNames[0]
 	}).Should(Succeed())
 }

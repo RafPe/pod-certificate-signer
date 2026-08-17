@@ -499,6 +499,14 @@ var _ = Describe("Manager", Ordered, Serial, func() {
 		})
 	})
 
+	// The CA lifecycle specs go last of the CA-mutating containers: they
+	// deliberately rotate, break and restore the CA, so nothing that assumes a
+	// stable signer may follow them. See ca_lifecycle_test.go.
+	defineCALifecycleTests()
+
+	// The admission specs are dry-run creates judged by a
+	// ValidatingAdmissionPolicy, so they neither reach the signer nor care what
+	// state the CA was left in.
 	defineAdmissionPolicyTests()
 })
 

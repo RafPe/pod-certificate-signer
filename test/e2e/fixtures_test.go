@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os/exec"
+	"strconv"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -99,7 +100,21 @@ type certTestPod struct {
 	// container that stays up long enough for kubelet to project one.
 	image string
 	args  []string
+
+	// holdSeconds is how long the sleeper container stays up. Defaults to
+	// defaultHoldSeconds, which is ample for a spec that only needs a pod to
+	// exist while its request is issued.
+	//
+	// The CA-lifecycle specs need more: their observer pod is created before a
+	// CA rotation and read after it, and a rotation costs a kubelet secret
+	// propagation plus a controller reload. Ignored when image is not the
+	// sleeper, since only the sleeper's command is the suite's to choose.
+	holdSeconds int
 }
+
+// defaultHoldSeconds is how long the sleeper container stays up when a fixture
+// does not ask for longer.
+const defaultHoldSeconds = 600
 
 // sleeperImage is the workload container for the specs that only need a pod to
 // exist. It is not the probe: a spec that asserts on the mounted credential
@@ -132,6 +147,9 @@ func (p certTestPod) withDefaults() certTestPod {
 		p.image = sleeperImage
 		p.args = nil
 	}
+	if p.holdSeconds == 0 {
+		p.holdSeconds = defaultHoldSeconds
+	}
 	return p
 }
 
@@ -157,7 +175,7 @@ func (p certTestPod) container() corev1.Container {
 		}},
 	}
 	if p.image == sleeperImage {
-		container.Command = []string{"sleep", "600"}
+		container.Command = []string{"sleep", strconv.Itoa(p.holdSeconds)}
 	}
 	return container
 }
