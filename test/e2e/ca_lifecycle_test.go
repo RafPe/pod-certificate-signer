@@ -93,6 +93,21 @@ const mountedTrustUpdateTimeout = 5 * time.Minute
 // three.
 const caLifecycleObserverHold = 1200
 
+// caLifecycleValidity is how long the CAs these specs rotate to are valid for.
+//
+// It has to exceed the default certificate lifetime by a clear margin, and the
+// margin is not cosmetic. The signer backdates notBefore by a minute and then
+// adds the requested duration, so a certificate issued from a CA at time T for
+// the default 24 hours ends at T + 24h - 1m; a CA generated moments earlier and
+// valid for exactly 24 hours expires before that and cannot sign it at all. The
+// request does not fail - authority returns ErrCASignerUnusable, which the
+// reconciler treats as transient - it simply never issues, and the workload
+// hangs in ContainerCreating with nothing on the request to say why.
+//
+// Three days leaves no doubt. The spec that wants an unsuitable CA asks for one
+// explicitly; see shortCAValidity.
+const caLifecycleValidity = 72 * time.Hour
+
 // maxPreviousCACerts mirrors the chart's signer.max_previous_ca_certs default.
 // The retention spec asserts against it rather than against a literal, so the
 // spec says which setting it is describing.
@@ -658,7 +673,7 @@ func currentCA() *testutil.KeyPair {
 func newLifecycleCA(commonName string) *testutil.KeyPair {
 	GinkgoHelper()
 
-	kp, err := testutil.NewCA(commonName, 24*time.Hour)
+	kp, err := testutil.NewCA(commonName, caLifecycleValidity)
 	Expect(err).NotTo(HaveOccurred(), "Failed to generate CA %q", commonName)
 	return kp
 }
@@ -667,7 +682,7 @@ func newLifecycleCA(commonName string) *testutil.KeyPair {
 func newLifecycleNonCA(commonName string) *testutil.KeyPair {
 	GinkgoHelper()
 
-	kp, err := testutil.NewNonCA(commonName, 24*time.Hour)
+	kp, err := testutil.NewNonCA(commonName, caLifecycleValidity)
 	Expect(err).NotTo(HaveOccurred(), "Failed to generate non-CA certificate %q", commonName)
 	return kp
 }
