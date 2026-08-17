@@ -197,12 +197,35 @@ func defineCALifecycleTests() {
 			})
 			expectPodRunning(observer)
 
+			By("waiting for the observer's mounted anchors to agree with the published bundle")
+			// The baseline is observed, not assumed. Asserting "CA A is mounted"
+			// here looked equivalent and was not: the preceding context's
+			// AfterAll deletes the ClusterTrustBundle and this container's
+			// BeforeAll re-creates it by rotating, and a pod that mounts moments
+			// after an object is deleted and re-created under the same name can
+			// be given content from before the gap. That is a fact about the
+			// projection's timing, not about rotation, and pinning CA A here made
+			// the spec fail for it.
+			//
+			// What this spec actually needs is a "before" set it has seen with
+			// its own eyes and that matches what the signer publishes. Waiting
+			// for the mount and the bundle to agree gives exactly that, and the
+			// claim below - the file changes in place when the CA rotates - is
+			// unchanged and now rests on a baseline that was true.
 			var anchorsBefore []string
 			Eventually(func(g Gomega) {
-				anchorsBefore = certificateFingerprints(mountedTrustAnchors(g, observer))
-				g.Expect(anchorsBefore).To(ContainElement(fingerprint(caA.Cert)),
-					"the observer must mount the pre-rotation CA before the rotation happens")
-			}).Should(Succeed())
+				published := certificateFingerprints(getTrustBundleCertificates(g))
+				g.Expect(published).NotTo(BeEmpty(), "the signer must publish a bundle to mount")
+				mounted := certificateFingerprints(mountedTrustAnchors(g, observer))
+				g.Expect(mounted).To(ConsistOf(published),
+					"the observer's projected ca.crt must converge on the published bundle before the rotation")
+				anchorsBefore = mounted
+			}, mountedTrustUpdateTimeout).Should(Succeed())
+
+			// Stated separately from the convergence above so a failure here says
+			// "the bundle lost the current CA", not "the mount is behind".
+			Expect(anchorsBefore).To(ContainElement(fingerprint(caA.Cert)),
+				"the converged anchors must include the CA that is currently signing")
 
 			By("rotating the CA")
 			caB = newLifecycleCA("ca-lifecycle-b")
