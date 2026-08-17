@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 
@@ -108,6 +109,114 @@ func controllerPodNames() []string {
 	return strings.Fields(output)
 }
 
+// metricsDumpBinding and metricsDumpPod name the throwaway RBAC binding and
+// scraper the metrics dump creates.
+const (
+	metricsDumpBinding = releaseName + "-e2e-metrics-dump"
+	metricsDumpPod     = "e2e-metrics-dump"
+)
+
+// dumpMetrics scrapes the controller's metrics endpoint.
+//
+// The endpoint is secured (SecureServing plus a SubjectAccessReview on the
+// /metrics nonResourceURL) and only listens on a ClusterIP, which rules out the
+// two cheap options: an unauthenticated scrape is refused, and the apiserver's
+// service proxy reaches the port but presents its own identity, which the
+// authorizer rejects with a 401. So the dump does what a real scraper does -
+// runs in the cluster, presents a projected ServiceAccount token, and is bound
+// to the chart's metrics-reader ClusterRole for the duration.
+//
+// Everything here is best-effort and time-bounded: curl by --max-time and its
+// retry count, the wait for the scraper by its own deadline, so a broken cluster
+// makes the dump print less rather than hang.
+func dumpMetrics() {
+	binding := exec.Command("kubectl", "create", "clusterrolebinding", metricsDumpBinding,
+		"--clusterrole", metricsReaderClusterRole,
+		"--serviceaccount", fmt.Sprintf("%s:%s", namespace, serviceAccountName))
+	if _, err := utils.Run(binding); err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "\n--- metrics: unavailable, could not authorize the scraper (%v)\n", err)
+		return
+	}
+	defer func() {
+		cleanup := exec.Command("kubectl", "delete", "clusterrolebinding", metricsDumpBinding, "--ignore-not-found=true")
+		_, _ = utils.Run(cleanup)
+	}()
+
+	// -k skips verification of the controller's self-signed serving
+	// certificate: this is a diagnostic scrape, not an assertion about the
+	// serving chain. -f plus the retry loop covers the SubjectAccessReview
+	// deny that the authorizer caches for 30s when the binding above has not
+	// propagated yet, and --show-error keeps a failed scrape visible instead of
+	// dumping an empty section.
+	scrape := fmt.Sprintf(
+		"for i in 1 2 3 4 5; do "+
+			"curl -fsSk --max-time 20 "+
+			"-H \"Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)\" "+
+			"https://%s.%s.svc.cluster.local:9090/metrics && exit 0; "+
+			"echo 'scrape failed, retrying'; sleep 5; done; exit 0",
+		metricsServiceName, namespace)
+	overrides := fmt.Sprintf(`{
+		"spec": {
+			"containers": [{
+				"name": "curl",
+				"image": "curlimages/curl:latest",
+				"command": ["/bin/sh", "-c"],
+				"args": [%q],
+				"securityContext": {
+					"readOnlyRootFilesystem": true,
+					"allowPrivilegeEscalation": false,
+					"capabilities": {"drop": ["ALL"]},
+					"runAsNonRoot": true,
+					"runAsUser": 1000,
+					"seccompProfile": {"type": "RuntimeDefault"}
+				}
+			}],
+			"serviceAccountName": %q
+		}
+	}`, scrape, serviceAccountName)
+
+	// The scraper is created and then read back from its logs rather than run
+	// with --attach: curl finishes in milliseconds and an attach that has not
+	// been established by then silently yields nothing.
+	run := exec.Command("kubectl", "run", metricsDumpPod,
+		"--restart=Never",
+		"--namespace", namespace,
+		"--image=curlimages/curl:latest",
+		"--overrides", overrides)
+	if _, err := utils.Run(run); err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "\n--- metrics: unavailable, scraper pod not created (%v)\n", err)
+		return
+	}
+	defer func() {
+		cleanup := exec.Command("kubectl", "delete", "pod", metricsDumpPod,
+			"-n", namespace, "--ignore-not-found=true", "--wait=false")
+		_, _ = utils.Run(cleanup)
+	}()
+
+	if !waitForScraperToFinish() {
+		_, _ = fmt.Fprintf(GinkgoWriter, "\n--- metrics: unavailable, scraper pod did not finish\n")
+		return
+	}
+	dumpKubectl("metrics", "logs", metricsDumpPod, "-n", namespace)
+}
+
+// waitForScraperToFinish polls the metrics scraper until it terminates,
+// reporting whether it got there. It polls rather than asserting: this runs
+// while a spec is already failing and must not raise a second failure.
+func waitForScraperToFinish() bool {
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		cmd := exec.Command("kubectl", "get", "pod", metricsDumpPod,
+			"-n", namespace, "-o", "jsonpath={.status.phase}")
+		phase, err := utils.Run(cmd)
+		if err == nil && (phase == "Succeeded" || phase == "Failed") {
+			return true
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return false
+}
+
 // dumpDiagnostics collects everything needed to debug a failed spec after the
 // fact. It is called from the suite's AfterEach on failure only.
 func dumpDiagnostics() {
@@ -161,11 +270,7 @@ func dumpDiagnostics() {
 	dumpKubectl("versions", "version")
 
 	By("collecting the controller metrics")
-	// Reached through the apiserver's service proxy so the dump needs no token
-	// and no scraper pod; the secured endpoint may still refuse, in which case
-	// dump records the refusal.
-	dumpKubectl("metrics", "get", "--raw",
-		fmt.Sprintf("/api/v1/namespaces/%s/services/https:%s:9090/proxy/metrics", namespace, metricsServiceName))
+	dumpMetrics()
 
 	_, _ = fmt.Fprintf(GinkgoWriter, "\n===== end e2e failure diagnostics =====\n")
 }

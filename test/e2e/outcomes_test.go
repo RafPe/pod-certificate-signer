@@ -97,7 +97,7 @@ func findPodCertificateRequest(g Gomega, ref podRef) *capiv1beta1.PodCertificate
 	g.Expect(err).NotTo(HaveOccurred(), "Failed to list PodCertificateRequests")
 
 	var list capiv1beta1.PodCertificateRequestList
-	g.Expect(json.Unmarshal([]byte(output), &list)).To(Succeed(),
+	g.Expect(json.Unmarshal([]byte(trimToJSON(output)), &list)).To(Succeed(),
 		"Failed to decode the PodCertificateRequest list")
 
 	var matches []*capiv1beta1.PodCertificateRequest
@@ -325,7 +325,7 @@ func expectEvent(namespace, involvedName, eventType, reason string) {
 		g.Expect(err).NotTo(HaveOccurred(), "Failed to list events for %s", involvedName)
 
 		var list corev1.EventList
-		g.Expect(json.Unmarshal([]byte(output), &list)).To(Succeed(), "Failed to decode the event list")
+		g.Expect(json.Unmarshal([]byte(trimToJSON(output)), &list)).To(Succeed(), "Failed to decode the event list")
 
 		observed := make([]string, 0, len(list.Items))
 		for _, event := range list.Items {
@@ -364,6 +364,25 @@ func controllerLogLineCount(needles ...string) int {
 		}
 	}
 	return count
+}
+
+// trimToJSON strips anything kubectl wrote before the JSON document.
+//
+// utils.Run reports CombinedOutput, so an apiserver warning - a PodSecurity
+// notice, a deprecation, an admission webhook's advice - lands on stderr and
+// arrives interleaved ahead of the `-o json` payload. Decoding the raw output
+// then fails on the warning's first character rather than on anything about the
+// object. Taking the document from the first line that opens an object is
+// enough: kubectl prints warnings as whole lines and the payload is a single
+// top-level object.
+func trimToJSON(output string) string {
+	lines := strings.Split(output, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "{") {
+			return strings.Join(lines[i:], "\n")
+		}
+	}
+	return output
 }
 
 // parseCertificateChain decodes every PEM block of an issued chain.

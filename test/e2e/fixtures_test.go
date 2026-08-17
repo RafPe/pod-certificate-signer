@@ -214,8 +214,8 @@ func decodePodRef(createdPodJSON string) podRef {
 	GinkgoHelper()
 
 	var created corev1.Pod
-	Expect(json.Unmarshal([]byte(createdPodJSON), &created)).To(Succeed(),
-		"Failed to decode the created pod")
+	Expect(json.Unmarshal([]byte(trimToJSON(createdPodJSON)), &created)).To(Succeed(),
+		"Failed to decode the created pod: %s", createdPodJSON)
 	Expect(created.UID).NotTo(BeEmpty(), "the created pod must carry a UID")
 
 	return podRef{
