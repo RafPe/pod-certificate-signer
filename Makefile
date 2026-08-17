@@ -98,7 +98,14 @@ test: generate vet  ## Run tests. Formatting is enforced separately (make fmt / 
 
 .PHONY: test-e2e
 test-e2e: generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	@if ! $(GO_TOOL) kind get clusters | grep $(KIND_CLUSTER_E2E); then \
+	# grep -qx, not a bare grep: `kind get clusters` prints one name per line and
+	# an unanchored match is satisfied by any cluster whose name merely contains
+	# this one. A leftover `pcs-e2e-stage3` would make the guard skip creating
+	# `pcs-e2e`, the suite would run against a cluster that does not exist, and
+	# the teardown would then delete the wrong thing. Anchoring is also what
+	# makes KIND_CLUSTER_E2E safe to override for an isolated run. -q keeps the
+	# matched name out of the target's output, matching kind-start below.
+	@if ! $(GO_TOOL) kind get clusters | grep -qx "$(KIND_CLUSTER_E2E)"; then \
 		echo "Creating e2e Kind cluster '$(KIND_CLUSTER_E2E)' ..."; \
 		$(GO_TOOL) kind create cluster --name $(KIND_CLUSTER_E2E) --config $(SRC_ROOT)/kind/kind-config.yaml; \
 	fi
@@ -135,7 +142,9 @@ lint-config:  ## Verify golangci-lint linter configuration
 
 .PHONY: kind-start
 kind-start:  ## Start a local development Kind cluster.
-	@if ! $(GO_TOOL) kind get clusters | grep $(KIND_CLUSTER_DEV) >& /dev/null; then \
+	# Anchored for the same reason as test-e2e above: an unanchored match is
+	# satisfied by any cluster whose name contains this one.
+	@if ! $(GO_TOOL) kind get clusters | grep -qx "$(KIND_CLUSTER_DEV)"; then \
 		echo "Creating dev Kind cluster '$(KIND_CLUSTER_DEV)' ..."; \
 		$(GO_TOOL) kind create cluster --name $(KIND_CLUSTER_DEV) --config $(SRC_ROOT)/kind/kind-config.yaml; \
 	fi
