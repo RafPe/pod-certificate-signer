@@ -191,6 +191,15 @@ func expectIssued(ref podRef) []*x509.Certificate {
 // with the expected reason; no certificate and no timestamps; a matching
 // Warning event; and no further change once the controller has had another
 // chance to reconcile the request.
+//
+// The reason stays a parameter although every caller passes
+// InvalidUserConfig today. It is the field that says *why* a request was
+// refused, and the API defines others the signer records - UnsupportedKeyType
+// for a key it cannot parse, which no pod manifest can provoke while kubelet
+// generates the keypair. A spec that stated the outcome without stating the
+// reason would pass for a denial that fired for the wrong cause.
+//
+//nolint:unparam // see above; the reason is asserted deliberately, not incidentally.
 func expectDenied(ref podRef, wantReason string) deniedRequest {
 	GinkgoHelper()
 	return expectTerminalDenialOrFailure(ref, capiv1beta1.PodCertificateRequestConditionTypeDenied, wantReason)
