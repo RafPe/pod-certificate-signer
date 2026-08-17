@@ -106,6 +106,28 @@ test: generate vet  ## Run tests. Formatting is enforced separately (make fmt / 
 ## Use `make test-e2e-nightly` to run the lot.
 E2E_LABEL_FILTER ?= !nightly
 
+## Timeouts for the e2e suite. Both exist because `go test` defaults to a
+## 10-minute timeout and enforces it by killing the test binary with a bare
+## `panic: test timed out after 10m0s` and a goroutine dump - no Ginkgo report,
+## no spec named, nothing that looks like a budget problem. The suite crossed
+## that default the moment the CA-lifecycle specs landed, so it is now set
+## explicitly rather than inherited.
+##
+## Two timeouts, not one, and the ordering matters: Ginkgo's fires first and
+## produces a report naming the spec that hung, which is the diagnosis you
+## actually want. The Go timeout is the backstop for a hang Ginkgo cannot
+## interrupt. **E2E_GO_TEST_TIMEOUT must stay strictly larger than
+## E2E_GINKGO_TIMEOUT**, or the panic wins and the report is lost.
+##
+## The defaults size the per-PR tier, which runs in roughly ten minutes - close
+## enough to the old default to have been at risk itself. The nightly tier adds
+## a kubelet mounted-secret refresh (about a minute) per CA change across some
+## sixteen of them, so it gets its own, much larger pair below.
+E2E_GINKGO_TIMEOUT ?= 20m
+E2E_GO_TEST_TIMEOUT ?= 25m
+E2E_NIGHTLY_GINKGO_TIMEOUT ?= 60m
+E2E_NIGHTLY_GO_TEST_TIMEOUT ?= 65m
+
 .PHONY: test-e2e
 test-e2e: generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
 	# grep -qx, not a bare grep: `kind get clusters` prints one name per line and
@@ -130,8 +152,9 @@ test-e2e: generate fmt vet ## Run the e2e tests. Expected an isolated environmen
 		KIND=$(shell $(GOCMD) tool -modfile $(TOOLS_MOD_FILE) -n kind) \
 		KIND_CLUSTER=$(KIND_CLUSTER_E2E) \
 		CERT_MANAGER_INSTALL_SKIP=true \
-		$(GOCMD) test -tags=e2e ./test/e2e/ -v -ginkgo.v \
-			-ginkgo.label-filter='$(E2E_LABEL_FILTER)' -ginkgo.fail-on-empty
+		$(GOCMD) test -tags=e2e ./test/e2e/ -v -timeout $(E2E_GO_TEST_TIMEOUT) -ginkgo.v \
+			-ginkgo.label-filter='$(E2E_LABEL_FILTER)' -ginkgo.fail-on-empty \
+			-ginkgo.timeout=$(E2E_GINKGO_TIMEOUT)
 
 .PHONY: test-e2e-nightly
 test-e2e-nightly: check-e2e-partition ## Run the whole e2e suite, including the nightly-labelled specs. Expect it to take considerably longer than test-e2e.
@@ -139,7 +162,14 @@ test-e2e-nightly: check-e2e-partition ## Run the whole e2e suite, including the 
 	# than a documented variable override so that whatever runs it - a schedule,
 	# a release job, a human - names the thing it wants rather than an
 	# expression whose default it has to know.
-	@$(MAKE) test-e2e E2E_LABEL_FILTER=
+	#
+	# The timeouts are raised with it, and that pairing is the point of doing it
+	# here: selecting the slow tier without extending the budget is how this
+	# target died on Go's default, and anyone overriding E2E_LABEL_FILTER by hand
+	# would hit the same wall.
+	@$(MAKE) test-e2e E2E_LABEL_FILTER= \
+		E2E_GINKGO_TIMEOUT=$(E2E_NIGHTLY_GINKGO_TIMEOUT) \
+		E2E_GO_TEST_TIMEOUT=$(E2E_NIGHTLY_GO_TEST_TIMEOUT)
 
 .PHONY: check-e2e-partition
 check-e2e-partition: ## Assert the e2e label partition still selects specs in both tiers.
