@@ -309,13 +309,32 @@ func expectTerminalConditionStable(ref podRef, want metav1.Condition) {
 	}, 5*time.Second, time.Second).Should(Succeed())
 }
 
+// expectRequestEvent waits for an event on the request belonging to the given
+// pod.
+//
+// It exists so a spec can assert on an event without reaching for a
+// namespace-wide `--field-selector reason=...`, which selects every request in
+// the namespace including ones a previous run against a reused cluster left
+// behind. Resolving the request first scopes the search to this pod's own
+// request, the same way findPodCertificateRequest scopes a status assertion.
+func expectRequestEvent(ref podRef, eventType, reason string, messageContains ...string) {
+	GinkgoHelper()
+
+	var requestName string
+	Eventually(func(g Gomega) {
+		requestName = findPodCertificateRequest(g, ref).Name
+	}).Should(Succeed())
+
+	expectEvent(ref.namespace, requestName, eventType, reason, messageContains...)
+}
+
 // expectEvent waits for an event of the given type and reason naming the given
-// object.
+// object, optionally requiring substrings in its message.
 //
 // The event is the operator-visible half of the outcome: a status condition is
 // only reachable by someone who already knows to look at the request, while the
 // event is what surfaces in `kubectl get events` and in whatever collects them.
-func expectEvent(namespace, involvedName, eventType, reason string) {
+func expectEvent(namespace, involvedName, eventType, reason string, messageContains ...string) {
 	GinkgoHelper()
 
 	Eventually(func(g Gomega) {
@@ -327,15 +346,17 @@ func expectEvent(namespace, involvedName, eventType, reason string) {
 		var list corev1.EventList
 		g.Expect(json.Unmarshal([]byte(trimToJSON(output)), &list)).To(Succeed(), "Failed to decode the event list")
 
+		matched := false
 		observed := make([]string, 0, len(list.Items))
 		for _, event := range list.Items {
-			if event.Type == eventType && event.Reason == reason {
-				return
+			if event.Type == eventType && event.Reason == reason && containsAll(event.Message, messageContains) {
+				matched = true
 			}
-			observed = append(observed, fmt.Sprintf("%s/%s", event.Type, event.Reason))
+			observed = append(observed, fmt.Sprintf("%s/%s: %s", event.Type, event.Reason, event.Message))
 		}
-		g.Expect(observed).To(ContainElement(eventType+"/"+reason),
-			"no %s event with reason %q was recorded for %s", eventType, reason, involvedName)
+		g.Expect(matched).To(BeTrue(),
+			"no %s event with reason %q and message containing %v was recorded for %s; observed: %v",
+			eventType, reason, messageContains, involvedName, observed)
 	}, time.Minute).Should(Succeed())
 }
 
@@ -364,6 +385,16 @@ func controllerLogLineCount(needles ...string) int {
 		}
 	}
 	return count
+}
+
+// containsAll reports whether s contains every one of the given substrings.
+func containsAll(s string, substrings []string) bool {
+	for _, want := range substrings {
+		if !strings.Contains(s, want) {
+			return false
+		}
+	}
+	return true
 }
 
 // trimToJSON strips anything kubectl wrote before the JSON document.

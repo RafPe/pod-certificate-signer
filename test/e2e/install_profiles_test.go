@@ -28,6 +28,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/test/utils"
 )
@@ -196,8 +197,8 @@ func defineVerifiedInterpolationProfileTests() {
 		// hand. The default EKU in particular has no annotation of its own to
 		// exercise - it is what you get when you ask for nothing - so it is only
 		// ever observable on a certificate issued for some other reason. The
-		// eku=client opt-in is covered separately under the escape-hatch profile
-		// in e2e_test.go.
+		// eku=client opt-in is covered separately under the
+		// unverified-identities profile in e2e_test.go.
 		It("issues an interpolated identity and SPIFFE ID, with no IP SANs and a serverAuth-only EKU", func() {
 			const podName = "pcs-secure-interpolated"
 			By("creating a workload pod requesting only identities it owns")
@@ -294,16 +295,12 @@ func defineVerifiedInterpolationProfileTests() {
 				"a >63-character DNS label must yield no default SANs rather than a truncated one")
 
 			By("verifying the operator was warned that a default was dropped")
-			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "events", "-n", workloadNamespace,
-					"--field-selector", "reason=DefaultSANSkipped",
-					"-o", "jsonpath={.items[*].message}")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring(podName),
-					"a DefaultSANSkipped warning event must name the pod whose SANs were dropped")
-				g.Expect(output).To(ContainSubstring("DNS label limit"))
-			}).Should(Succeed())
+			// Scoped to this pod's own request rather than filtered on
+			// reason across the namespace: the pod name is deterministic, so
+			// a namespace-wide match would also be satisfied by a stale event
+			// from an earlier run against a reused cluster.
+			expectRequestEvent(pod, corev1.EventTypeWarning, "DefaultSANSkipped",
+				podName, "DNS label limit")
 		})
 	})
 }
@@ -314,7 +311,7 @@ func defineVerifiedInterpolationProfileTests() {
 // It exists for one assertion that no other profile can make: with
 // --enable-annotation-interpolation off, a value containing ${...} is denied
 // outright rather than resolved or issued verbatim. Running that assertion under
-// the secure-defaults profile would pass for the wrong reason - the value would
+// the verified-interpolation profile would pass for the wrong reason - the value would
 // be rejected by the allowlist rather than by the disabled interpolation gate.
 func defineChartDefaultsProfileTests() {
 	Context("Install profile: chart-defaults", func() {
