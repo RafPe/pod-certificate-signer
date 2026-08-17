@@ -293,13 +293,12 @@ func expectStatusFieldsCleared(g Gomega, pcr *capiv1beta1.PodCertificateRequest)
 // controller another chance to reconcile the request and asserting nothing
 // moved.
 //
-// The nudge is a metadata annotation on the request. The reconciler's event
-// filter only overrides CreateFunc (see SetupWithManager), and predicate.Funcs
-// returns true for an unset UpdateFunc, so writing an annotation enqueues a
-// real reconcile - which Reconcile then drops on its immutability check. To keep
-// this from degrading into a sleep in assertion's clothing if that ever changes,
-// the helper counts the controller's "immutable" log lines for this request
-// before and after the nudge and requires the count to rise.
+// The nudge is a metadata annotation on the request (see
+// annotateReconcileNudge), which enqueues a real reconcile - one Reconcile then
+// drops on its immutability check. To keep this from degrading into a sleep in
+// assertion's clothing if that ever changes, the helper counts the controller's
+// "immutable" log lines for this request before and after the nudge and requires
+// the count to rise.
 func expectTerminalConditionStable(ref podRef, want metav1.Condition) {
 	GinkgoHelper()
 
@@ -310,11 +309,7 @@ func expectTerminalConditionStable(ref podRef, want metav1.Condition) {
 
 	By("nudging the controller to reconcile the terminal request once more")
 	before := controllerLogLineCount(requestName, "PodCertificateRequest is immutable")
-	cmd := exec.Command("kubectl", "annotate", "podcertificaterequest", requestName,
-		"-n", ref.namespace, "--overwrite",
-		fmt.Sprintf("%s=%d", reconcileNudgeAnnotation, time.Now().UnixNano()))
-	output, err := utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to annotate request %s: %s", requestName, output)
+	annotateReconcileNudge(ref.namespace, requestName)
 
 	By("waiting for the controller to observe the nudged request")
 	Eventually(func() int {
@@ -333,6 +328,41 @@ func expectTerminalConditionStable(ref podRef, want metav1.Condition) {
 			"a re-recorded condition would move lastTransitionTime")
 		expectStatusFieldsCleared(g, pcr)
 	}, 5*time.Second, time.Second).Should(Succeed())
+}
+
+// nudgeRequest forces the controller to reconcile the request belonging to the
+// given pod once more.
+//
+// It is the podRef-shaped spelling of annotateReconcileNudge, for a spec that
+// has a pod rather than a request name in hand.
+func nudgeRequest(ref podRef) {
+	GinkgoHelper()
+
+	var requestName string
+	Eventually(func(g Gomega) {
+		requestName = findPodCertificateRequest(g, ref).Name
+	}).Should(Succeed())
+
+	annotateReconcileNudge(ref.namespace, requestName)
+}
+
+// annotateReconcileNudge writes a fresh value of reconcileNudgeAnnotation onto a
+// request, which enqueues a further reconcile of it.
+//
+// The reconciler's event filter only overrides CreateFunc (see
+// SetupWithManager), and predicate.Funcs returns true for an unset UpdateFunc,
+// so a metadata write is enough to get the request looked at again. What the
+// caller does with that reconcile differs: expectTerminalConditionStable wants
+// it dropped on the immutability check, the CA-lifecycle specs want a request
+// that is still pending retried without waiting out the workqueue's backoff.
+func annotateReconcileNudge(namespace, requestName string) {
+	GinkgoHelper()
+
+	cmd := exec.Command("kubectl", "annotate", "podcertificaterequest", requestName,
+		"-n", namespace, "--overwrite",
+		fmt.Sprintf("%s=%d", reconcileNudgeAnnotation, time.Now().UnixNano()))
+	output, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to annotate request %s: %s", requestName, output)
 }
 
 // expectRequestEvent waits for an event on the request belonging to the given

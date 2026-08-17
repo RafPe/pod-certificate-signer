@@ -352,6 +352,14 @@ func defineCALifecycleTests() {
 				Eventually(expectRetainedHistory).Should(Succeed())
 
 				By("restarting the controller and verifying the bound and the ordering survive")
+				// Re-asserting the same set after a restart is not redundant with
+				// the check above, and the length assertion least of all. A
+				// starting process seeds its history from whatever the published
+				// bundle says, and that path applies no bound of its own -
+				// maxPreviousCerts is enforced in authority.load's rotate branch
+				// and nowhere else. The bound surviving a restart is therefore a
+				// property of the bundle having been correct, not of the bootstrap
+				// enforcing anything. Do not delete this as a duplicate.
 				restartController()
 				Eventually(expectRetainedHistory).Should(Succeed())
 
@@ -519,6 +527,18 @@ func defineCALifecycleTests() {
 				// then-drop-current sequence, and this spec is not about that.
 				recovered := newLifecycleCA("ca-lifecycle-recovered")
 				rotateCA(recovered)
+
+				// Nothing re-enqueues a pending request when the CA reloads: the
+				// reload notification goes to the ClusterTrustBundle publisher and
+				// nowhere else, so the request comes back only on the workqueue's
+				// exponential backoff, whose attempts fall at roughly 82s, 164s,
+				// 328s and 655s. A restore that lands late would push the next
+				// attempt past any timeout this spec could reasonably set, and the
+				// spec would go red for arithmetic rather than for behavior. The
+				// nudge takes the backoff out of the measurement; it does not
+				// stand in for the recovery claim, which is still that *this*
+				// request - not a replacement - issues under the restored CA.
+				nudgeRequest(pod)
 
 				By("verifying the request that was pending now issues, without being recreated")
 				chain := expectIssued(pod)
