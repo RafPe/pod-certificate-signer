@@ -36,3 +36,14 @@ profile.cov
 *-key.pem
 tls.key
 ca-key*
+
+# Local agent and tooling scratch. None of it is project source, and all of it
+# is large enough or personal enough that a stray `git add -A` would produce an
+# unreviewable commit: .claude/worktrees holds throwaway checkouts of this repo
+# (hundreds of megabytes), .codegraph is a local code index, and .ecc is an
+# agent memory vault. Deliberately scoped rather than ignoring .claude wholesale,
+# so a shared .claude/settings.json can still be committed if we ever want one.
+.claude/settings.local.json
+.claude/worktrees/
+.codegraph/
+.ecc/
