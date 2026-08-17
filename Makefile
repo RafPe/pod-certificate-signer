@@ -130,15 +130,32 @@ test-e2e: generate fmt vet ## Run the e2e tests. Expected an isolated environmen
 		KIND=$(shell $(GOCMD) tool -modfile $(TOOLS_MOD_FILE) -n kind) \
 		KIND_CLUSTER=$(KIND_CLUSTER_E2E) \
 		CERT_MANAGER_INSTALL_SKIP=true \
-		$(GOCMD) test -tags=e2e ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter='$(E2E_LABEL_FILTER)'
+		$(GOCMD) test -tags=e2e ./test/e2e/ -v -ginkgo.v \
+			-ginkgo.label-filter='$(E2E_LABEL_FILTER)' -ginkgo.fail-on-empty
 
 .PHONY: test-e2e-nightly
-test-e2e-nightly: ## Run the whole e2e suite, including the nightly-labelled specs. Expect it to take considerably longer than test-e2e.
+test-e2e-nightly: check-e2e-partition ## Run the whole e2e suite, including the nightly-labelled specs. Expect it to take considerably longer than test-e2e.
 	# An empty label filter selects everything. This is a separate target rather
 	# than a documented variable override so that whatever runs it - a schedule,
 	# a release job, a human - names the thing it wants rather than an
 	# expression whose default it has to know.
 	@$(MAKE) test-e2e E2E_LABEL_FILTER=
+
+.PHONY: check-e2e-partition
+check-e2e-partition: ## Assert the e2e label partition still selects specs in both tiers.
+	# A partition can fail silently in a way a green run does not reveal. Rename
+	# the label, mistype E2E_LABEL_FILTER, or drop the last spec carrying a
+	# label, and the tier that should have run is simply empty - and an empty
+	# tier passes, so the job goes green having tested nothing.
+	#
+	# -ginkgo.fail-on-empty turns "no specs ran" into a failure, and the two dry
+	# runs below check both halves: the tier the default filter selects, and the
+	# nightly set itself. It is a dry run, so it costs a second and no cluster,
+	# which is why the nightly target runs it before spending half an hour.
+	@$(GOCMD) test -tags=e2e ./test/e2e/ -ginkgo.dry-run -ginkgo.fail-on-empty \
+		-ginkgo.label-filter='$(E2E_LABEL_FILTER)'
+	@$(GOCMD) test -tags=e2e ./test/e2e/ -ginkgo.dry-run -ginkgo.fail-on-empty \
+		-ginkgo.label-filter='nightly'
 
 .PHONY: lint
 lint: lint-e2e ## Run golangci-lint linter, including the build-tagged e2e package.
