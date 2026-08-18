@@ -62,12 +62,18 @@ import (
 // secret deliberately. `make helm-install` re-applies the CA secret from
 // bin/dev-ca, so a profile switch after that rotation would rotate the CA back
 // and race the controller's volume reload against the profile's issuance specs.
+//
+// No profile below sets signer.enable_annotation_interpolation=true. That is
+// deliberate and load-bearing: since #87 it is the chart default, and a
+// redundant --set would mean the suite could no longer tell the difference
+// between "the default is on" and "we turned it on" - a regression of the
+// default would pass every spec here. The one profile that does name the value
+// sets it to false, because the opt-out is the thing it is testing.
 const (
-	// unverifiedIdentitiesInstallArgs is the historical install: both escape
-	// hatches open. Every spec that requests an identity the pod does not own
+	// unverifiedIdentitiesInstallArgs is the historical install: the escape
+	// hatch open. Every spec that requests an identity the pod does not own
 	// (custom-cn.example.org, literal IP SANs) depends on it.
 	unverifiedIdentitiesInstallArgs = "--set replicaCount=1 " +
-		"--set signer.enable_annotation_interpolation=true " +
 		"--set signer.allow_unverified_identities=true " +
 		"--set admissionPolicies.dnsSANValidation.enabled=true"
 
@@ -75,22 +81,33 @@ const (
 	// unverified-identities profile.
 	honorCSRSANsInstallArgs = unverifiedIdentitiesInstallArgs + " --set signer.honor_csr_sans=true"
 
-	// verifiedInterpolationInstallArgs is the configuration issue #87 proposes
-	// and the one the suite never exercised: interpolation on, identity
-	// constraints enforced, no escape hatch. Resolved ${...} values must still
-	// clear the verified-identity allowlist. It is deliberately not called
-	// "secure defaults": it is not what the chart ships, which is
-	// chartDefaultsInstallArgs below.
-	verifiedInterpolationInstallArgs = "--set replicaCount=1 " +
-		"--set signer.enable_annotation_interpolation=true " +
-		"--set admissionPolicies.dnsSANValidation.enabled=true"
-
 	// chartDefaultsInstallArgs is the chart's shipped configuration, with
-	// nothing turned on: interpolation off, identity constraints enforced,
-	// CSR SANs ignored. Only replicaCount and the admission policy are set, and
-	// neither touches issuance semantics.
+	// nothing overridden: interpolation on (the default since #87), identity
+	// constraints enforced, CSR SANs ignored, no escape hatch. Only
+	// replicaCount and the admission policy are set, and neither touches
+	// issuance semantics.
 	chartDefaultsInstallArgs = "--set replicaCount=1 " +
 		"--set admissionPolicies.dnsSANValidation.enabled=true"
+
+	// verifiedInterpolationInstallArgs is the configuration issue #87 asked
+	// for: interpolation on, identity constraints enforced, no escape hatch.
+	// Since the flip it *is* the chart default, so the two are one install.
+	//
+	// The alias stays, and so do both containers, because they assert different
+	// things about the same configuration: the verified-interpolation container
+	// is about ${...} resolving and the allowlist refusing, the chart-defaults
+	// container is about an unmodified install handing a workload a usable
+	// credential. Collapsing them would lose that distinction, and it would not
+	// even save a rollout: the custom-cluster-fqdn profile runs between the two
+	// and its install has to be undone, which is what the chart-defaults
+	// BeforeAll does.
+	verifiedInterpolationInstallArgs = chartDefaultsInstallArgs
+
+	// interpolationDisabledInstallArgs is the opt-out: the chart defaults with
+	// interpolation explicitly turned off. It is the only profile that names
+	// the value, and it names it false - see the note above the const block.
+	interpolationDisabledInstallArgs = chartDefaultsInstallArgs +
+		" --set signer.enable_annotation_interpolation=false"
 )
 
 // installProfile re-installs the release with the given HELM_EXTRA_ARGS and
@@ -186,20 +203,19 @@ func defineHonorCSRSANsProfileTests() {
 	})
 }
 
-// defineVerifiedInterpolationProfileTests covers the configuration issue #87 proposes:
-// ${...} interpolation on, identity constraints enforced, no escape hatch.
+// defineVerifiedInterpolationProfileTests covers the configuration issue #87
+// asked for and, since the flip, the one the chart ships: ${...} interpolation
+// on, identity constraints enforced, no escape hatch.
 //
 // Before this container existed the suite only ever ran interpolation with
 // --allow-unverified-identities set, so nothing proved that an interpolated
 // value clears the allowlist on its own merits - the escape hatch would have
 // admitted it either way.
 //
-// The denials asserted here are current behavior and some of them are expected
-// to change: <sa>.<ns>.svc is denied by
-// docs/adr/0001-verified-identity-allowlist-boundary.md, and the example
-// manifest's IP SAN is denied without the escape hatch. Pinning them now is
-// deliberate - a later change to either surfaces as a visible diff in this file
-// rather than as silence.
+// The denials asserted here are the settled behavior: <sa>.<ns>.svc is denied
+// by docs/adr/0001-verified-identity-allowlist-boundary.md, and an IP SAN has
+// no verified derivation at all. Both are what examples/workload-pod.yaml used
+// to request, which is why it could not issue until #87.
 func defineVerifiedInterpolationProfileTests() {
 	Context("Install profile: verified-interpolation", func() {
 		BeforeAll(func() {
@@ -320,36 +336,66 @@ func defineVerifiedInterpolationProfileTests() {
 
 		// The exhaustive identity matrix - every form the pod owns, and the
 		// near-misses it does not - lives in identity_boundary_test.go. It
-		// belongs here, inside this container, because this is the only profile
-		// where interpolation resolving and ownership refusing are
-		// distinguishable outcomes.
+		// belongs here, inside this container, because interpolation resolving
+		// and ownership refusing are only distinguishable outcomes when the
+		// escape hatch is shut and the gate is open. This is that profile; it
+		// is also, since #87, the chart's shipped configuration.
 		defineVerifiedIdentityBoundaryTests()
 	})
 }
 
 // defineChartDefaultsProfileTests covers the chart exactly as it ships, with no
-// feature flag turned on.
+// value overridden that touches issuance.
 //
-// It carries both halves of the shipped configuration. The negative is the
-// assertion no other profile can make: with --enable-annotation-interpolation
-// off, a value containing ${...} is denied outright rather than resolved or
-// issued verbatim. Running that assertion under the verified-interpolation
-// profile would pass for the wrong reason - the value would be rejected by the
-// allowlist rather than by the disabled interpolation gate.
-//
-// The positive is defineCredentialConformanceTests
+// It carries defineCredentialConformanceTests
 // (credential_conformance_test.go), which proves an unmodified install hands a
 // workload a credential it can actually use. It belongs here, inside this
 // container, so it runs against the chart defaults without a further Helm
 // upgrade.
+//
+// The interpolation opt-out used to be asserted here, back when off was what
+// the chart shipped. It moved to its own profile below, which sets the value
+// explicitly: keeping it here would have forced this container to name
+// enable_annotation_interpolation, and a profile called "chart-defaults" that
+// overrides a default is a profile that cannot detect one regressing.
 func defineChartDefaultsProfileTests() {
 	Context("Install profile: chart-defaults", func() {
 		BeforeAll(func() {
 			installProfile(chartDefaultsInstallArgs)
 		})
 
+		defineCredentialConformanceTests()
+
+		// The key-type matrix and the lifetime matrix (key_semantics_test.go)
+		// also belong to the shipped configuration: neither asks for an
+		// identity, so running them here keeps them about the key and the clock
+		// and costs no further Helm upgrade.
+		defineKeyTypeAndLifetimeTests()
+	})
+}
+
+// defineInterpolationDisabledProfileTests covers the
+// --enable-annotation-interpolation opt-out.
+//
+// Since #87 interpolation is the chart default, so this is the only profile
+// that turns it off, and the assertion it makes is one no other profile can:
+// with the gate closed a value containing ${...} is denied outright rather than
+// resolved or issued verbatim. Running it under the verified-interpolation
+// profile would pass for the wrong reason - the value would be rejected by the
+// identity allowlist rather than by the interpolation gate, and the spec would
+// stay green if the gate disappeared entirely.
+//
+// EnableInterpolation: false remains a supported configuration
+// (docs/adr/0002-annotation-interpolation-on-by-default.md), which is why this
+// container exists rather than the spec being deleted with the old default.
+func defineInterpolationDisabledProfileTests() {
+	Context("Install profile: interpolation-disabled", func() {
+		BeforeAll(func() {
+			installProfile(interpolationDisabledInstallArgs)
+		})
+
 		It("denies ${...} values while interpolation is disabled", func() {
-			const podName = "pcs-defaults-interp-off"
+			const podName = "pcs-interp-off"
 			By("creating a workload pod requesting an interpolated identity it does own")
 			// The pod's own name is inside the verified-identity allowlist, so
 			// the only thing that can deny this request is the interpolation
@@ -363,13 +409,5 @@ func defineChartDefaultsProfileTests() {
 			Expect(denial.Message).To(ContainSubstring("interpolation, which is disabled on this signer"),
 				"the denial must name the disabled flag, not the identity constraint")
 		})
-
-		defineCredentialConformanceTests()
-
-		// The key-type matrix and the lifetime matrix (key_semantics_test.go)
-		// also belong to the shipped configuration: neither asks for an
-		// identity, so running them here keeps them about the key and the clock
-		// and costs no further Helm upgrade.
-		defineKeyTypeAndLifetimeTests()
 	})
 }

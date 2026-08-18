@@ -3,8 +3,16 @@
 # The certificate is customized via userAnnotations on the podCertificate
 # projected volume source (kubelet copies these verbatim into the
 # spec.unverifiedUserAnnotations of the PodCertificateRequest). The ${...}
-# placeholders require the controller to run with
-# --enable-annotation-interpolation.
+# placeholders are resolved by default; a controller started with
+# --enable-annotation-interpolation=false (Helm:
+# signer.enable_annotation_interpolation: false) denies them instead.
+#
+# Every value below resolves to an identity this pod owns - one the signer
+# derives from the apiserver-verified fields of the PodCertificateRequest - so
+# the manifest issues under the controller's identity constraints as they ship,
+# with no --allow-unverified-identities. Anything the pod cannot prove (a
+# literal name, an IP address) needs that escape hatch; the commented ip-san
+# below is the example of one.
 #
 # Every value below resolves to an identity this pod owns - one the signer
 # derives from the apiserver-verified fields of the PodCertificateRequest - so

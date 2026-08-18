@@ -194,3 +194,22 @@ func TestDNSSANAdmissionPolicyRejectsInvalidActions(t *testing.T) {
 		})
 	}
 }
+
+// TestDeploymentRendersInterpolationEnabledByDefault guards both directions of
+// the chart's interpolation default (issue #87): an unmodified install must
+// render the flag on, and setting the value to false must still render the
+// opt-out rather than dropping the flag - the template writes it
+// unconditionally, and a switch to a `{{- if }}` guard would silently restore
+// the binary default instead of disabling interpolation.
+func TestDeploymentRendersInterpolationEnabledByDefault(t *testing.T) {
+	if got := renderChart(t); !strings.Contains(got, "--enable-annotation-interpolation=true") {
+		t.Errorf("rendered Deployment does not carry --enable-annotation-interpolation=true; "+
+			"the chart default must match the binary default:\n%s", got)
+	}
+
+	got := renderChart(t, "--set", "signer.enable_annotation_interpolation=false")
+	if !strings.Contains(got, "--enable-annotation-interpolation=false") {
+		t.Errorf("rendered Deployment does not carry --enable-annotation-interpolation=false when the "+
+			"value is set to false; the opt-out does not reach the controller:\n%s", got)
+	}
+}

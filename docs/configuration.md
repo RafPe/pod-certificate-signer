@@ -47,15 +47,9 @@ own name as a prefix, then the configuration item:
 
 ### Interpolating pod identity into values
 
-> [!IMPORTANT]
-> This is a feature flag, **disabled by default**. Enable it with
-> `--enable-annotation-interpolation` (Helm:
-> `signer.enable_annotation_interpolation: true`). While disabled, values
-> containing `${...}` are denied rather than issued verbatim.
-
 A value authored on a pod template is identical for every replica, so a static
-`cn` can never carry the pod's own name. With interpolation enabled, the `cn`,
-`san` and `uris` values may contain `${...}` placeholders resolved per request:
+`cn` can never carry the pod's own name. The `cn`, `san` and `uris` values may
+contain `${...}` placeholders resolved per request:
 
 ```yaml
                   userAnnotations:
@@ -82,6 +76,20 @@ Unknown variables and unterminated placeholders deny the request with reason
 including the 64-character common-name limit and DNS-1123 SAN limits. DNS SAN
 labels may contain at most 63 characters and the complete name at most 253;
 wildcard SANs are not supported.
+
+> [!NOTE]
+> **Default change.** `${...}` interpolation is now **enabled by default**
+> (`--enable-annotation-interpolation=true`, Helm
+> `signer.enable_annotation_interpolation: true`); earlier releases shipped it
+> off. Nothing that worked before stops working: the flag only ever decided
+> whether a value containing `${...}` was resolved or rejected. Resolved values
+> are still checked against the pod's verified identity by exact string equality,
+> so **no identity becomes issuable that was not issuable before** — see
+> [What bounds interpolation](#what-bounds-interpolation) below and
+> [ADR-0002](adr/0002-annotation-interpolation-on-by-default.md). To restore the
+> previous behaviour — `${...}` values denied outright rather than resolved — set
+> `signer.enable_annotation_interpolation: false`
+> (`--enable-annotation-interpolation=false`).
 
 #### What bounds interpolation
 
@@ -285,7 +293,9 @@ The chart renders these from Helm values; you rarely set them directly.
   -ca-key-path string         CA private key file.
   -cluster-fqdn string        FQDN of the cluster (default "cluster.local").
   -enable-annotation-interpolation
-        Allow ${...} placeholders in certificate configuration annotations.
+        Allow ${...} placeholders in certificate configuration annotations,
+        resolved from the verified request fields. On by default; set false to
+        deny values containing ${...} instead of resolving them.
   -health-probe-bind-address string   Probe endpoint address (default ":8081").
   -honor-csr-sans             Honor DNS/IP SANs from the kubelet PKCS#10 CSR.
   -kubeconfig string          Kubeconfig path; only for out-of-cluster runs.
