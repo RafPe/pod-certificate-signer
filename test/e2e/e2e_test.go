@@ -416,6 +416,11 @@ var _ = Describe("Manager", Ordered, Serial, func() {
 		})
 	})
 
+	// The escape hatch is open on this install, so this is where the specs that
+	// bound it belong: what --allow-unverified-identities admits, and what it
+	// still refuses. See escape_hatch_test.go.
+	defineEscapeHatchInvariantTests()
+
 	// Install profiles that re-install the release in place. They run after the
 	// unverified-identities specs above and must stay inside this Describe: its
 	// AfterAll uninstalls the release, so a sibling top-level container would run
@@ -429,6 +434,11 @@ var _ = Describe("Manager", Ordered, Serial, func() {
 	// volume reload against the profile's own issuance specs.
 	defineHonorCSRSANsProfileTests()
 	defineVerifiedInterpolationProfileTests()
+	// Declared between the two profiles it sits between in configuration: it is
+	// verified-interpolation with a different signer.cluster_fqdn, and the
+	// chart-defaults install that follows resets the suffix. See
+	// identity_boundary_test.go for why it is worth its own rollout.
+	defineCustomClusterFQDNProfileTests()
 	defineChartDefaultsProfileTests()
 
 	Context("ClusterTrustBundle", func() {

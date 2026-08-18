@@ -50,10 +50,7 @@ const certTestPodMountPath = "/var/run/x509"
 // instead of a request the apiserver silently admits with the setting ignored.
 //
 // Zero values are filled in by withDefaults, so a spec sets only what it cares
-// about. serviceAccountName, keyType, maxExpirationSeconds and
-// clusterTrustBundleName have no caller in this stage's specs; they exist
-// because the projection exposes them and the credential-conformance and
-// key-type specs that follow need them addressable without another refactor.
+// about.
 type certTestPod struct {
 	// name and namespace identify the pod. namespace defaults to
 	// workloadNamespace.
@@ -79,6 +76,16 @@ type certTestPod struct {
 	// userAnnotations are the signer-scoped annotations the projection carries
 	// into the PodCertificateRequest.
 	userAnnotations map[string]string
+
+	// podAnnotations are annotations on the pod object itself. The signer reads
+	// configuration from the request's unverifiedUserAnnotations first and falls
+	// back to these (a deprecated path, see NewPodCertificateConfig).
+	//
+	// One spec needs that fallback rather than the projection: the DNS SAN
+	// ValidatingAdmissionPolicy inspects only the projection's userAnnotations,
+	// so a malformed SAN requested there never reaches the signer to be judged
+	// by it. See defineEscapeHatchInvariantTests.
+	podAnnotations map[string]string
 
 	// clusterTrustBundleName, when set, adds a clusterTrustBundle projection
 	// alongside the podCertificate one so the pod also mounts the signer's
@@ -181,9 +188,10 @@ func (p certTestPod) build() *corev1.Pod {
 	return &corev1.Pod{
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      p.name,
-			Namespace: p.namespace,
-			Labels:    map[string]string{e2eWorkloadLabel: "true"},
+			Name:        p.name,
+			Namespace:   p.namespace,
+			Labels:      map[string]string{e2eWorkloadLabel: "true"},
+			Annotations: p.podAnnotations,
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy:      corev1.RestartPolicyNever,
@@ -240,6 +248,27 @@ func createCertTestPod(fixture certTestPod) podRef {
 	})
 
 	return decodePodRef(output)
+}
+
+// dryRunCertTestPod submits the fixture to the apiserver with
+// --dry-run=server and returns kubectl's combined output.
+//
+// Nothing is created: the request is validated, admitted and discarded. That is
+// how a spec asserts on what kube-apiserver itself accepts - which projection
+// key types exist, for instance - without paying for a pod, a
+// PodCertificateRequest and an issuance. It returns the error rather than
+// asserting on it because the interesting cases are the ones the apiserver
+// refuses.
+func dryRunCertTestPod(fixture certTestPod) (string, error) {
+	pod := fixture.build()
+	manifest, err := json.Marshal(pod)
+	if err != nil {
+		return "", err
+	}
+
+	cmd := exec.Command("kubectl", "create", "--dry-run=server", "-f", "-")
+	cmd.Stdin = bytes.NewReader(manifest)
+	return utils.Run(cmd)
 }
 
 // decodePodRef reads the pod the apiserver returned and pins its identity:

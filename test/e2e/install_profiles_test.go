@@ -302,6 +302,13 @@ func defineVerifiedInterpolationProfileTests() {
 			expectRequestEvent(pod, corev1.EventTypeWarning, "DefaultSANSkipped",
 				podName, "DNS label limit")
 		})
+
+		// The exhaustive identity matrix - every form the pod owns, and the
+		// near-misses it does not - lives in identity_boundary_test.go. It
+		// belongs here, inside this container, because this is the only profile
+		// where interpolation resolving and ownership refusing are
+		// distinguishable outcomes.
+		defineVerifiedIdentityBoundaryTests()
 	})
 }
 
@@ -343,5 +350,11 @@ func defineChartDefaultsProfileTests() {
 		})
 
 		defineCredentialConformanceTests()
+
+		// The key-type matrix and the lifetime matrix (key_semantics_test.go)
+		// also belong to the shipped configuration: neither asks for an
+		// identity, so running them here keeps them about the key and the clock
+		// and costs no further Helm upgrade.
+		defineKeyTypeAndLifetimeTests()
 	})
 }
