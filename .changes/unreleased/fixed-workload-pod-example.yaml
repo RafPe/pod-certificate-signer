@@ -1,0 +1,2 @@
+kind: Fixed
+body: "The example workload manifest (`examples/workload-pod.yaml`) now issues under the identity constraints as they ship. It requested `<sa>.<ns>.svc` and a literal IP SAN, neither of which the signer grants, so copying it verbatim produced a denial unless `--allow-unverified-identities` was set. It now requests the service-account short DNS form and the service-account SPIFFE ID, uses `${cluster.fqdn}` instead of a hardcoded `cluster.local`, and carries the IP SAN as a commented escape-hatch block."

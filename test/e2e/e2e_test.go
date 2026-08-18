@@ -337,11 +337,18 @@ var _ = Describe("Manager", Ordered, Serial, func() {
 				"common name must be interpolated from the pod identity")
 			Expect(leaf.DNSNames).To(ConsistOf(
 				fmt.Sprintf("%s.%s.svc", workloadPodName, workloadNamespace),
-				fmt.Sprintf("default.%s.svc", workloadNamespace), // ${pod.serviceAccountName} = default
+				// The short service-account form. ${pod.serviceAccountName} is
+				// "default", and <sa>.<ns> - not <sa>.<ns>.svc - is what the
+				// verified-identity allowlist grants (ADR-0001).
+				fmt.Sprintf("default.%s", workloadNamespace),
 			), "SANs must be interpolated from the pod identity")
-			Expect(leaf.IPAddresses).To(HaveLen(1), "the ip-san annotation must yield one IP SAN")
-			Expect(leaf.IPAddresses[0].Equal(net.ParseIP("10.96.0.99"))).To(BeTrue(),
-				"IP SAN must match the ip-san annotation in examples/workload-pod.yaml")
+			Expect(leaf.URIs).To(HaveLen(1), "the uris annotation must yield the service-account SPIFFE ID")
+			Expect(leaf.URIs[0].String()).To(Equal(
+				fmt.Sprintf("spiffe://cluster.local/ns/%s/sa/default", workloadNamespace)),
+				"SPIFFE ID must match the uris annotation in examples/workload-pod.yaml")
+			Expect(leaf.IPAddresses).To(BeEmpty(),
+				"the example's ip-san is commented out: an IP SAN has no verified derivation and "+
+					"would need --allow-unverified-identities")
 
 			By("waiting for the pod to run with the projected certificate")
 			Eventually(func(g Gomega) {
