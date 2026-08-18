@@ -21,14 +21,14 @@ package e2e
 
 import (
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
-	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/test/utils"
 )
@@ -43,10 +43,14 @@ import (
 // This is safe only because the suite is single-threaded: `make test-e2e` runs
 // `go test -tags=e2e ./test/e2e/ -v -ginkgo.v`, which is plain `go test` with no
 // ginkgo CLI and therefore no `-p`/`--procs`. Ginkgo runs every spec serially in
-// one process, in declaration order. Two profiles can never be live at once. If
-// the suite is ever moved to the `ginkgo` CLI with parallel procs, these
-// containers must be reworked - a mid-suite upgrade would race the other
-// profile's specs.
+// one process, in declaration order. Two profiles can never be live at once.
+//
+// That invariant is now stated rather than assumed. The top-level container
+// carries the Serial decorator, and BeforeSuite (e2e_suite_test.go) fails the
+// run outright if it is started with more than one process. If the suite is ever
+// moved to the `ginkgo` CLI with parallel procs, these containers must be
+// reworked before that guard can be relaxed - a mid-suite upgrade would race the
+// other profile's specs.
 //
 // Each profile container lives inside the top-level Describe("Manager",
 // Ordered), which is what makes BeforeAll legal here without a further Ordered
@@ -59,22 +63,25 @@ import (
 // bin/dev-ca, so a profile switch after that rotation would rotate the CA back
 // and race the controller's volume reload against the profile's issuance specs.
 const (
-	// escapeHatchInstallArgs is the historical install: both escape hatches
-	// open. Every spec that requests an identity the pod does not own
+	// unverifiedIdentitiesInstallArgs is the historical install: both escape
+	// hatches open. Every spec that requests an identity the pod does not own
 	// (custom-cn.example.org, literal IP SANs) depends on it.
-	escapeHatchInstallArgs = "--set replicaCount=1 " +
+	unverifiedIdentitiesInstallArgs = "--set replicaCount=1 " +
 		"--set signer.enable_annotation_interpolation=true " +
 		"--set signer.allow_unverified_identities=true " +
 		"--set admissionPolicies.dnsSANValidation.enabled=true"
 
-	// csrSANsInstallArgs adds the CSR-SAN opt-in to the escape-hatch profile.
-	csrSANsInstallArgs = escapeHatchInstallArgs + " --set signer.honor_csr_sans=true"
+	// honorCSRSANsInstallArgs adds the CSR-SAN opt-in to the
+	// unverified-identities profile.
+	honorCSRSANsInstallArgs = unverifiedIdentitiesInstallArgs + " --set signer.honor_csr_sans=true"
 
-	// secureDefaultsInstallArgs is the configuration issue #87 proposes and the
-	// one the suite never exercised: interpolation on, identity constraints
-	// enforced, no escape hatch. Resolved ${...} values must still clear the
-	// verified-identity allowlist.
-	secureDefaultsInstallArgs = "--set replicaCount=1 " +
+	// verifiedInterpolationInstallArgs is the configuration issue #87 proposes
+	// and the one the suite never exercised: interpolation on, identity
+	// constraints enforced, no escape hatch. Resolved ${...} values must still
+	// clear the verified-identity allowlist. It is deliberately not called
+	// "secure defaults": it is not what the chart ships, which is
+	// chartDefaultsInstallArgs below.
+	verifiedInterpolationInstallArgs = "--set replicaCount=1 " +
 		"--set signer.enable_annotation_interpolation=true " +
 		"--set admissionPolicies.dnsSANValidation.enabled=true"
 
@@ -124,69 +131,7 @@ func installProfile(extraArgs string) {
 	}).Should(Succeed())
 }
 
-// deniedRequest is the terminal outcome recorded on a PodCertificateRequest the
-// signer refuses.
-type deniedRequest struct {
-	Reason  string
-	Message string
-}
-
-// waitForDeniedRequest waits until the PodCertificateRequest belonging to the
-// given pod carries a Denied condition and returns its reason and message.
-//
-// This is the counterpart to waitForIssuedChain, which fails on any condition
-// that is not Issued and so cannot be used to assert a denial. Asserting on the
-// reason and message - not merely on the absence of a certificate - is what
-// distinguishes "denied by the identity constraint" from "denied because the
-// value was malformed" or "never reconciled at all".
-func waitForDeniedRequest(podName string) deniedRequest {
-	GinkgoHelper()
-
-	var denial deniedRequest
-	Eventually(func(g Gomega) {
-		cmd := exec.Command("kubectl", "get", "podcertificaterequests",
-			"-n", workloadNamespace, "-o", "json")
-		output, err := utils.Run(cmd)
-		g.Expect(err).NotTo(HaveOccurred(), "Failed to list PodCertificateRequests")
-
-		var list struct {
-			Items []struct {
-				Spec struct {
-					PodName string `json:"podName"`
-				} `json:"spec"`
-				Status struct {
-					CertificateChain string `json:"certificateChain"`
-					Conditions       []struct {
-						Type    string `json:"type"`
-						Reason  string `json:"reason"`
-						Message string `json:"message"`
-					} `json:"conditions"`
-				} `json:"status"`
-			} `json:"items"`
-		}
-		g.Expect(json.Unmarshal([]byte(output), &list)).To(Succeed())
-
-		found := false
-		for _, item := range list.Items {
-			if item.Spec.PodName != podName {
-				continue
-			}
-			g.Expect(item.Status.CertificateChain).To(BeEmpty(),
-				"a denied request must never carry a certificate chain")
-			for _, cond := range item.Status.Conditions {
-				if cond.Type == "Denied" {
-					denial = deniedRequest{Reason: cond.Reason, Message: cond.Message}
-					found = true
-				}
-			}
-		}
-		g.Expect(found).To(BeTrue(), "no PodCertificateRequest for pod %q carries a Denied condition yet", podName)
-	}, 3*time.Minute).Should(Succeed())
-
-	return denial
-}
-
-// defineCSRSANProfileTests covers the --honor-csr-sans opt-in.
+// defineHonorCSRSANsProfileTests covers the --honor-csr-sans opt-in.
 //
 // Scope note, and the reason this container is thin: kubelet generates an empty
 // PKCS#10 CSR today (see Options.HonorCSRSANs), so there is no way from a Pod
@@ -198,21 +143,21 @@ func waitForDeniedRequest(podName string) deniedRequest {
 // issuance: with an inert CSR the certificate is built from the annotations and
 // the controller defaults exactly as with the flag off. Convert these specs into
 // real CSR-SAN assertions once Kubernetes starts embedding requested SANs.
-func defineCSRSANProfileTests() {
-	Context("Install profile: escape hatches with --honor-csr-sans", func() {
+func defineHonorCSRSANsProfileTests() {
+	Context("Install profile: honor-csr-sans", func() {
 		BeforeAll(func() {
-			installProfile(csrSANsInstallArgs)
+			installProfile(honorCSRSANsInstallArgs)
 		})
 
 		It("issues from annotations and defaults while kubelet CSRs stay empty", func() {
 			const podName = "pcs-csr-sans"
 			By("creating a workload pod with no san annotation, so any CSR SAN would show")
-			applyCertTestPod(podName, map[string]string{
+			pod := applyCertTestPod(podName, map[string]string{
 				signerName + "-cn": "csr-demo.example.org",
 			})
 
 			By("waiting for the PodCertificateRequest to be issued")
-			leaf := waitForIssuedChain(podName)[0]
+			leaf := expectIssued(pod)[0]
 
 			By("verifying the certificate carries the annotation CN and the controller default SANs")
 			Expect(leaf.Subject.CommonName).To(Equal("csr-demo.example.org"))
@@ -226,7 +171,7 @@ func defineCSRSANProfileTests() {
 	})
 }
 
-// defineSecureDefaultProfileTests covers the configuration issue #87 proposes:
+// defineVerifiedInterpolationProfileTests covers the configuration issue #87 proposes:
 // ${...} interpolation on, identity constraints enforced, no escape hatch.
 //
 // Before this container existed the suite only ever ran interpolation with
@@ -240,10 +185,10 @@ func defineCSRSANProfileTests() {
 // manifest's IP SAN is denied without the escape hatch. Pinning them now is
 // deliberate - a later change to either surfaces as a visible diff in this file
 // rather than as silence.
-func defineSecureDefaultProfileTests() {
-	Context("Install profile: secure defaults with interpolation", func() {
+func defineVerifiedInterpolationProfileTests() {
+	Context("Install profile: verified-interpolation", func() {
 		BeforeAll(func() {
-			installProfile(secureDefaultsInstallArgs)
+			installProfile(verifiedInterpolationInstallArgs)
 		})
 
 		// Asserts four properties of one issued certificate rather than splitting
@@ -252,19 +197,19 @@ func defineSecureDefaultProfileTests() {
 		// hand. The default EKU in particular has no annotation of its own to
 		// exercise - it is what you get when you ask for nothing - so it is only
 		// ever observable on a certificate issued for some other reason. The
-		// eku=client opt-in is covered separately under the escape-hatch profile
-		// in e2e_test.go.
+		// eku=client opt-in is covered separately under the
+		// unverified-identities profile in e2e_test.go.
 		It("issues an interpolated identity and SPIFFE ID, with no IP SANs and a serverAuth-only EKU", func() {
 			const podName = "pcs-secure-interpolated"
 			By("creating a workload pod requesting only identities it owns")
-			applyCertTestPod(podName, map[string]string{
+			pod := applyCertTestPod(podName, map[string]string{
 				signerName + "-cn":   "${pod.name}.${pod.namespace}.svc.${cluster.fqdn}",
 				signerName + "-san":  "${pod.name}.${pod.namespace}.svc,${pod.serviceAccountName}.${pod.namespace}",
 				signerName + "-uris": "spiffe://${cluster.fqdn}/ns/${pod.namespace}/sa/${pod.serviceAccountName}",
 			})
 
 			By("waiting for the PodCertificateRequest to be issued")
-			leaf := waitForIssuedChain(podName)[0]
+			leaf := expectIssued(pod)[0]
 
 			By("verifying every interpolated value cleared the verified-identity allowlist")
 			Expect(leaf.Subject.CommonName).To(Equal(
@@ -294,11 +239,10 @@ func defineSecureDefaultProfileTests() {
 		DescribeTable("denies identities the pod does not own",
 			func(podName string, annotations map[string]string, wantMessage string) {
 				By("creating a workload pod requesting an identity it cannot prove")
-				applyCertTestPod(podName, annotations)
+				pod := applyCertTestPod(podName, annotations)
 
 				By("waiting for the PodCertificateRequest to be denied")
-				denial := waitForDeniedRequest(podName)
-				Expect(denial.Reason).To(Equal("InvalidUnverifiedUserAnnotations"))
+				denial := expectDenied(pod, capiv1beta1.PodCertificateRequestConditionInvalidUserConfig)
 				Expect(denial.Message).To(ContainSubstring(wantMessage))
 			},
 			// The example manifest requests exactly this, which is why it
@@ -338,12 +282,12 @@ func defineSecureDefaultProfileTests() {
 			Expect(podName).To(HaveLen(64))
 
 			By("creating a workload pod whose name exceeds the 63-character DNS label limit")
-			applyCertTestPod(podName, map[string]string{
+			pod := applyCertTestPod(podName, map[string]string{
 				signerName + "-duration": "2h",
 			})
 
 			By("waiting for the PodCertificateRequest to be issued")
-			leaf := waitForIssuedChain(podName)[0]
+			leaf := expectIssued(pod)[0]
 
 			By("verifying the common name carries the identity and no default SANs were emitted")
 			Expect(leaf.Subject.CommonName).To(Equal(podName))
@@ -351,30 +295,26 @@ func defineSecureDefaultProfileTests() {
 				"a >63-character DNS label must yield no default SANs rather than a truncated one")
 
 			By("verifying the operator was warned that a default was dropped")
-			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "events", "-n", workloadNamespace,
-					"--field-selector", "reason=DefaultSANSkipped",
-					"-o", "jsonpath={.items[*].message}")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring(podName),
-					"a DefaultSANSkipped warning event must name the pod whose SANs were dropped")
-				g.Expect(output).To(ContainSubstring("DNS label limit"))
-			}).Should(Succeed())
+			// Scoped to this pod's own request rather than filtered on
+			// reason across the namespace: the pod name is deterministic, so
+			// a namespace-wide match would also be satisfied by a stale event
+			// from an earlier run against a reused cluster.
+			expectRequestEvent(pod, corev1.EventTypeWarning, "DefaultSANSkipped",
+				podName, "DNS label limit")
 		})
 	})
 }
 
-// defineChartDefaultProfileTests covers the chart exactly as it ships, with no
+// defineChartDefaultsProfileTests covers the chart exactly as it ships, with no
 // feature flag turned on.
 //
 // It exists for one assertion that no other profile can make: with
 // --enable-annotation-interpolation off, a value containing ${...} is denied
 // outright rather than resolved or issued verbatim. Running that assertion under
-// the secure-defaults profile would pass for the wrong reason - the value would
+// the verified-interpolation profile would pass for the wrong reason - the value would
 // be rejected by the allowlist rather than by the disabled interpolation gate.
-func defineChartDefaultProfileTests() {
-	Context("Install profile: chart defaults", func() {
+func defineChartDefaultsProfileTests() {
+	Context("Install profile: chart-defaults", func() {
 		BeforeAll(func() {
 			installProfile(chartDefaultsInstallArgs)
 		})
@@ -385,13 +325,12 @@ func defineChartDefaultProfileTests() {
 			// The pod's own name is inside the verified-identity allowlist, so
 			// the only thing that can deny this request is the interpolation
 			// gate itself. That is the point of the spec.
-			applyCertTestPod(podName, map[string]string{
+			pod := applyCertTestPod(podName, map[string]string{
 				signerName + "-cn": "${pod.name}",
 			})
 
 			By("waiting for the PodCertificateRequest to be denied")
-			denial := waitForDeniedRequest(podName)
-			Expect(denial.Reason).To(Equal("InvalidUnverifiedUserAnnotations"))
+			denial := expectDenied(pod, capiv1beta1.PodCertificateRequestConditionInvalidUserConfig)
 			Expect(denial.Message).To(ContainSubstring("interpolation, which is disabled on this signer"),
 				"the denial must name the disabled flag, not the identity constraint")
 		})

@@ -21,14 +21,12 @@ package e2e
 
 import (
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -82,7 +80,14 @@ const workloadNamespace = "default"
 // pod; installProfile re-resolves it.
 var controllerPodName string
 
-var _ = Describe("Manager", Ordered, func() {
+// The suite is Serial as well as Ordered. Ordered fixes the declaration order
+// the install profiles depend on; Serial states the other half of the
+// contract - no other spec may run alongside these, because installProfile
+// re-installs the release in place and a profile switch is cluster-wide. The
+// belt-and-braces single-process guard lives in BeforeSuite (e2e_suite_test.go),
+// which fails the whole run rather than letting a parallel invocation corrupt
+// state one spec at a time.
+var _ = Describe("Manager", Ordered, Serial, func() {
 	// Before running the tests, set up the environment by creating the namespace,
 	// enforce the restricted security policy to the namespace, installing CRDs,
 	// and deploying the controller.
@@ -102,16 +107,17 @@ var _ = Describe("Manager", Ordered, func() {
 		// A single replica keeps the pod-targeted assertions (logs, pod phase)
 		// deterministic; the chart default is 2 for leader election.
 		//
-		// This is the escape-hatch profile: interpolation on and unverified
-		// identities allowed, so the specs below can request literal values
-		// (custom-cn.example.org, literal IP SANs) that a pod does not own. It
-		// is deliberately not the whole suite - the chart's shipped defaults and
-		// the secure-default path are exercised by their own install profiles,
-		// see install_profiles_test.go. Keeping this profile first means the
-		// pre-existing specs are unaffected by the profile split.
+		// This is the unverified-identities profile: interpolation on and the
+		// identity allowlist disabled, so the specs below can request literal
+		// values (custom-cn.example.org, literal IP SANs) that a pod does not
+		// own. It is deliberately not the whole suite - the chart's shipped
+		// defaults and the verified-interpolation path are exercised by their
+		// own install profiles, see install_profiles_test.go. Keeping this
+		// profile first means the pre-existing specs are unaffected by the
+		// profile split.
 		cmd = exec.Command("make", "helm-install",
 			fmt.Sprintf("IMAGE=%s", projectImage),
-			"HELM_EXTRA_ARGS="+escapeHatchInstallArgs)
+			"HELM_EXTRA_ARGS="+unverifiedIdentitiesInstallArgs)
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 	})
@@ -136,46 +142,12 @@ var _ = Describe("Manager", Ordered, func() {
 		_, _ = utils.Run(cmd)
 	})
 
-	// After each test, check for failures and collect logs, events,
-	// and pod descriptions for debugging.
+	// After each test, check for failures and collect the full diagnostic set
+	// (see diagnostics_test.go) so a CI failure is debuggable from the run's
+	// output alone.
 	AfterEach(func() {
-		specReport := CurrentSpecReport()
-		if specReport.Failed() {
-			By("Fetching controller manager pod logs")
-			cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
-			controllerLogs, err := utils.Run(cmd)
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Controller logs:\n %s", controllerLogs)
-			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Controller logs: %s", err)
-			}
-
-			By("Fetching Kubernetes events")
-			cmd = exec.Command("kubectl", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp")
-			eventsOutput, err := utils.Run(cmd)
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Kubernetes events:\n%s", eventsOutput)
-			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Kubernetes events: %s", err)
-			}
-
-			By("Fetching curl-metrics logs")
-			cmd = exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
-			metricsOutput, err := utils.Run(cmd)
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Metrics logs:\n %s", metricsOutput)
-			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get curl-metrics logs: %s", err)
-			}
-
-			By("Fetching controller manager pod description")
-			cmd = exec.Command("kubectl", "describe", "pod", controllerPodName, "-n", namespace)
-			podDescription, err := utils.Run(cmd)
-			if err == nil {
-				fmt.Println("Pod description:\n", podDescription)
-			} else {
-				fmt.Println("Failed to describe controller pod")
-			}
+		if CurrentSpecReport().Failed() {
+			dumpDiagnostics()
 		}
 	})
 
@@ -348,7 +320,7 @@ var _ = Describe("Manager", Ordered, func() {
 	Context("Certificate issuance", func() {
 		It("should issue a certificate with interpolated pod identity", func() {
 			By("creating a workload pod requesting an interpolated certificate")
-			applyWorkloadPod()
+			pod := applyWorkloadPod()
 			DeferCleanup(func() {
 				cmd := exec.Command("kubectl", "delete", "pod", workloadPodName,
 					"-n", workloadNamespace, "--ignore-not-found=true", "--wait=false")
@@ -356,7 +328,7 @@ var _ = Describe("Manager", Ordered, func() {
 			})
 
 			By("waiting for the PodCertificateRequest to be issued")
-			chain := waitForIssuedChain(workloadPodName)
+			chain := expectIssued(pod)
 
 			By("verifying the leaf certificate carries the interpolated values")
 			leaf := chain[0]
@@ -385,13 +357,13 @@ var _ = Describe("Manager", Ordered, func() {
 		It("should deliver a custom common name and DNS SANs in the issued certificate", func() {
 			const podName = "pcs-custom-san"
 			By("creating a workload pod with static cn and san annotations")
-			applyCertTestPod(podName, map[string]string{
+			pod := applyCertTestPod(podName, map[string]string{
 				signerName + "-cn":  "custom-cn.example.org",
 				signerName + "-san": "api.example.org,web.example.org",
 			})
 
 			By("waiting for the PodCertificateRequest to be issued")
-			leaf := waitForIssuedChain(podName)[0]
+			leaf := expectIssued(pod)[0]
 
 			By("verifying the configured values are delivered in the leaf certificate")
 			Expect(leaf.Subject.CommonName).To(Equal("custom-cn.example.org"),
@@ -405,13 +377,13 @@ var _ = Describe("Manager", Ordered, func() {
 		It("should deliver the requested IP SANs in the issued certificate", func() {
 			const podName = "pcs-ip-san"
 			By("creating a workload pod with an ip-san annotation")
-			applyCertTestPod(podName, map[string]string{
+			pod := applyCertTestPod(podName, map[string]string{
 				signerName + "-cn":     "ip-demo.example.org",
 				signerName + "-ip-san": "10.96.0.42,2001:db8::42",
 			})
 
 			By("waiting for the PodCertificateRequest to be issued")
-			leaf := waitForIssuedChain(podName)[0]
+			leaf := expectIssued(pod)[0]
 
 			By("verifying the IP SANs are delivered in the leaf certificate")
 			Expect(leaf.IPAddresses).To(HaveLen(2), "both requested IP SANs must be present")
@@ -430,13 +402,13 @@ var _ = Describe("Manager", Ordered, func() {
 		It("should deliver a client-only certificate when eku restricts it", func() {
 			const podName = "pcs-eku-client"
 			By("creating a workload pod with an eku annotation")
-			applyCertTestPod(podName, map[string]string{
+			pod := applyCertTestPod(podName, map[string]string{
 				signerName + "-cn":  "eku-demo.example.org",
 				signerName + "-eku": "client",
 			})
 
 			By("waiting for the PodCertificateRequest to be issued")
-			leaf := waitForIssuedChain(podName)[0]
+			leaf := expectIssued(pod)[0]
 
 			By("verifying the certificate is restricted to client auth")
 			Expect(leaf.ExtKeyUsage).To(ConsistOf(x509.ExtKeyUsageClientAuth),
@@ -445,19 +417,19 @@ var _ = Describe("Manager", Ordered, func() {
 	})
 
 	// Install profiles that re-install the release in place. They run after the
-	// escape-hatch specs above and must stay inside this Describe: its AfterAll
-	// uninstalls the release, so a sibling top-level container would run against
-	// a torn-down deployment. See install_profiles_test.go for why a mid-suite
-	// upgrade is safe here.
+	// unverified-identities specs above and must stay inside this Describe: its
+	// AfterAll uninstalls the release, so a sibling top-level container would run
+	// against a torn-down deployment. See install_profiles_test.go for why a
+	// mid-suite upgrade is safe here.
 	//
 	// They also run *before* the ClusterTrustBundle context, which deliberately
 	// rotates the CA secret out from under the controller. `make helm-install`
 	// re-applies the CA secret from bin/dev-ca, so a profile switch after that
 	// rotation would rotate the CA back mid-suite and race the controller's
 	// volume reload against the profile's own issuance specs.
-	defineCSRSANProfileTests()
-	defineSecureDefaultProfileTests()
-	defineChartDefaultProfileTests()
+	defineHonorCSRSANsProfileTests()
+	defineVerifiedInterpolationProfileTests()
+	defineChartDefaultsProfileTests()
 
 	Context("ClusterTrustBundle", func() {
 		AfterAll(func() {
@@ -528,144 +500,6 @@ func getMetricsOutput() string {
 	Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
 	Expect(metricsOutput).To(ContainSubstring("< HTTP/1.1 200 OK"))
 	return metricsOutput
-}
-
-// applyWorkloadPod creates the example workload pod, whose podCertificate
-// projected volume requests a certificate customized via ${...}
-// interpolation (see examples/workload-pod.yaml).
-func applyWorkloadPod() {
-	cmd := exec.Command("kubectl", "apply", "-f", "examples/workload-pod.yaml")
-	_, err := utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to create the workload pod")
-}
-
-// applyCertTestPod creates a minimal workload pod whose podCertificate
-// projected volume carries the given userAnnotations, and registers its
-// cleanup.
-func applyCertTestPod(podName string, userAnnotations map[string]string) {
-	var annotations strings.Builder
-	for key, value := range userAnnotations {
-		fmt.Fprintf(&annotations, "            %s: %q\n", key, value)
-	}
-
-	manifest := fmt.Sprintf(`apiVersion: v1
-kind: Pod
-metadata:
-  name: %s
-  namespace: %s
-spec:
-  restartPolicy: Never
-  containers:
-  - name: sleeper
-    image: busybox:1.37
-    command: ["sleep", "600"]
-    securityContext:
-      allowPrivilegeEscalation: false
-      runAsNonRoot: true
-      runAsUser: 65532
-      capabilities:
-        drop: ["ALL"]
-      seccompProfile:
-        type: RuntimeDefault
-    volumeMounts:
-    - name: x509
-      mountPath: /var/run/x509
-      readOnly: true
-  volumes:
-  - name: x509
-    projected:
-      sources:
-      - podCertificate:
-          keyType: ED25519
-          signerName: %s
-          credentialBundlePath: credentialbundle.pem
-          userAnnotations:
-%s`, podName, workloadNamespace, signerName, annotations.String())
-
-	dir, err := os.MkdirTemp("", "pcs-e2e-pod")
-	Expect(err).NotTo(HaveOccurred(), "Failed to create temp dir for the pod manifest")
-	DeferCleanup(func() { _ = os.RemoveAll(dir) })
-
-	manifestFile := filepath.Join(dir, "pod.yaml")
-	Expect(os.WriteFile(manifestFile, []byte(manifest), os.FileMode(0o600))).To(Succeed())
-
-	cmd := exec.Command("kubectl", "apply", "-f", manifestFile)
-	_, err = utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to create pod %s", podName)
-
-	DeferCleanup(func() {
-		cmd := exec.Command("kubectl", "delete", "pod", podName,
-			"-n", workloadNamespace, "--ignore-not-found=true", "--wait=false")
-		_, _ = utils.Run(cmd)
-	})
-}
-
-// waitForIssuedChain waits until the PodCertificateRequest of the given pod
-// is issued and returns the parsed certificate chain.
-func waitForIssuedChain(podName string) []*x509.Certificate {
-	GinkgoHelper()
-	var chain []*x509.Certificate
-	Eventually(func(g Gomega) {
-		chain = getIssuedCertificateChain(g, podName, workloadNamespace)
-		g.Expect(chain).NotTo(BeEmpty())
-	}, 3*time.Minute).Should(Succeed())
-	return chain
-}
-
-// getIssuedCertificateChain finds the PodCertificateRequest belonging to the
-// given pod and, once it carries an Issued condition, parses its certificate
-// chain.
-func getIssuedCertificateChain(g Gomega, podName, namespace string) []*x509.Certificate {
-	cmd := exec.Command("kubectl", "get", "podcertificaterequests",
-		"-n", namespace, "-o", "json")
-	output, err := utils.Run(cmd)
-	g.Expect(err).NotTo(HaveOccurred(), "Failed to list PodCertificateRequests")
-
-	var list struct {
-		Items []struct {
-			Spec struct {
-				PodName string `json:"podName"`
-			} `json:"spec"`
-			Status struct {
-				CertificateChain string `json:"certificateChain"`
-				Conditions       []struct {
-					Type    string `json:"type"`
-					Reason  string `json:"reason"`
-					Message string `json:"message"`
-				} `json:"conditions"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	g.Expect(json.Unmarshal([]byte(output), &list)).To(Succeed())
-
-	for _, item := range list.Items {
-		if item.Spec.PodName != podName {
-			continue
-		}
-		for _, cond := range item.Status.Conditions {
-			g.Expect(cond.Type).To(Equal("Issued"),
-				"request must not be %s: %s: %s", cond.Type, cond.Reason, cond.Message)
-		}
-		if item.Status.CertificateChain == "" {
-			continue
-		}
-
-		var certs []*x509.Certificate
-		data := []byte(item.Status.CertificateChain)
-		for {
-			var block *pem.Block
-			block, data = pem.Decode(data)
-			if block == nil {
-				break
-			}
-			cert, err := x509.ParseCertificate(block.Bytes)
-			g.Expect(err).NotTo(HaveOccurred(), "chain entry must be a valid certificate")
-			certs = append(certs, cert)
-		}
-		return certs
-	}
-
-	return nil
 }
 
 // getTrustBundleCertificates reads the ClusterTrustBundle of the signer and
