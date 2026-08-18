@@ -18,22 +18,49 @@ on:
   # workflow_dispatch is what makes it runnable on demand rather than only by
   # waiting a day.
   workflow_dispatch:
+  # Opt-in per pull request, by labelling it `run-nightly`.
+  #
+  # Without this the nightly specs are only ever exercised after they merge: the
+  # per-PR gate excludes them by label and the cron only runs from the default
+  # branch. A pull request could therefore break a nightly spec and nobody would
+  # find out until it was already on main - and in a deep stack that is a lot of
+  # blast radius to unwind.
+  #
+  # `labeled` only, deliberately, and not `synchronize`: the full tier is 20+
+  # minutes, so re-running it on every push to a labelled pull request is not
+  # affordable. To re-run after a push, use workflow_dispatch, or remove the
+  # label and add it back. That is a choice, not an oversight.
+  pull_request:
+    types: [labeled]
 
 # Least privilege: the suite only needs to read the checked-out source. It
 # builds and loads images into a local kind cluster and publishes nothing.
 permissions:
   contents: read
 
-# One nightly run at a time, and never cancelled: a half-finished run of the
+# One run at a time per ref, and never cancelled: a half-finished run of the
 # only job that covers these specs is worth less than letting it finish.
+#
+# The group is ref-scoped rather than just the workflow name. With only the
+# nightly cron a single global group was right, but now that pull requests can
+# trigger this too, a workflow-wide group would serialise every labelled pull
+# request behind every other one and behind the cron - each waiting out a
+# 20-plus-minute run before starting its own.
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   test-e2e-nightly:
     name: Run the full suite on Ubuntu
     runs-on: ubuntu-latest
+    # Scheduled and manual runs always go ahead. A pull request runs only when
+    # it carries the `run-nightly` label, so labelling a pull request anything
+    # else - a release label, an area label - does not spend half an hour of
+    # runner time.
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'run-nightly')
     # The full set adds a CA rotation's worth of kubelet propagation per
     # nightly spec on top of the per-PR suite. Generous, but bounded: a hung
     # run must not sit on the runner until GitHub's six-hour default.
