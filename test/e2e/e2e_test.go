@@ -75,9 +75,14 @@ const caSecretName = "podcertificate-signer-ca-dev"
 const workloadPodName = "pcs-example-workload"
 const workloadNamespace = "default"
 
-var _ = Describe("Manager", Ordered, func() {
-	var controllerPodName string
+// controllerPodName is the controller pod the pod-targeted assertions and the
+// AfterEach failure dump read from. It is package-level rather than a closure
+// variable because each install profile (install_profiles_test.go) rolls the
+// deployment, after which the previously resolved name points at a terminated
+// pod; installProfile re-resolves it.
+var controllerPodName string
 
+var _ = Describe("Manager", Ordered, func() {
 	// Before running the tests, set up the environment by creating the namespace,
 	// enforce the restricted security policy to the namespace, installing CRDs,
 	// and deploying the controller.
@@ -94,16 +99,19 @@ var _ = Describe("Manager", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
 		By("deploying the controller-manager via Helm")
-		// A single replica keeps the pod-targeted assertions (logs, pod
-		// phase) deterministic; the chart default is 2 for leader election.
-		// Interpolation is enabled so specs can use ${...} placeholders, and
-		// unverified identities are allowed so the issuance specs can exercise
-		// custom cn/san/ip-san/eku values end to end. Denial of unverified
-		// identities under the secure default is covered by the podcertificate
-		// unit tests (identity_constraints_test.go).
+		// A single replica keeps the pod-targeted assertions (logs, pod phase)
+		// deterministic; the chart default is 2 for leader election.
+		//
+		// This is the escape-hatch profile: interpolation on and unverified
+		// identities allowed, so the specs below can request literal values
+		// (custom-cn.example.org, literal IP SANs) that a pod does not own. It
+		// is deliberately not the whole suite - the chart's shipped defaults and
+		// the secure-default path are exercised by their own install profiles,
+		// see install_profiles_test.go. Keeping this profile first means the
+		// pre-existing specs are unaffected by the profile split.
 		cmd = exec.Command("make", "helm-install",
 			fmt.Sprintf("IMAGE=%s", projectImage),
-			"HELM_EXTRA_ARGS=--set replicaCount=1 --set signer.enable_annotation_interpolation=true --set signer.allow_unverified_identities=true --set admissionPolicies.dnsSANValidation.enabled=true")
+			"HELM_EXTRA_ARGS="+escapeHatchInstallArgs)
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 	})
@@ -435,6 +443,21 @@ var _ = Describe("Manager", Ordered, func() {
 				"eku=client must yield a client-auth-only certificate")
 		})
 	})
+
+	// Install profiles that re-install the release in place. They run after the
+	// escape-hatch specs above and must stay inside this Describe: its AfterAll
+	// uninstalls the release, so a sibling top-level container would run against
+	// a torn-down deployment. See install_profiles_test.go for why a mid-suite
+	// upgrade is safe here.
+	//
+	// They also run *before* the ClusterTrustBundle context, which deliberately
+	// rotates the CA secret out from under the controller. `make helm-install`
+	// re-applies the CA secret from bin/dev-ca, so a profile switch after that
+	// rotation would rotate the CA back mid-suite and race the controller's
+	// volume reload against the profile's own issuance specs.
+	defineCSRSANProfileTests()
+	defineSecureDefaultProfileTests()
+	defineChartDefaultProfileTests()
 
 	Context("ClusterTrustBundle", func() {
 		AfterAll(func() {
