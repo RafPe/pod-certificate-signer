@@ -45,14 +45,22 @@ type Option func(ca *CertificateAuthority) error
 
 // CertificateAuthority is a CA which signs Pod Certificate Requests.
 type CertificateAuthority struct {
-	certFile             string
-	privKeyFile          string
-	certificate          *x509.Certificate
-	signer               crypto.Signer
+	certFile    string
+	privKeyFile string
+	certificate *x509.Certificate
+	signer      crypto.Signer
+	// previousCertificates is the retained history of CAs that were current
+	// before the one loaded now. It is ordered by how recently each was
+	// current, least recent first, and keyed by certificate identity: a
+	// certificate appears at most once, and re-observing it moves it rather
+	// than adding a second entry. Eviction therefore drops the CA least likely
+	// to still have certificates in the field, instead of whichever entry
+	// happened to be inserted first.
 	previousCertificates []*x509.Certificate
 	maxPreviousCerts     int
 	nowFunc              func() time.Time
 	backDate             time.Duration
+	logger               logr.Logger
 	// fingerprint is the SHA-256 of the loaded certificate's DER, used by load
 	// to tell a reload that changed the material from one that did not. It is
 	// content-based rather than file metadata, so a rotation that preserves
@@ -127,9 +135,30 @@ func WithBackDate(val time.Duration) Option {
 // with previously known CA certificates. This is useful for bootstrapping the
 // trust bundle from an external source (e.g. an existing ClusterTrustBundle)
 // so that previous CAs are retained across process restarts.
+//
+// The seed is not taken on trust: [New] normalizes it like any other history
+// (see normalizePreviousCertificates), so entries that are not usable CA
+// certificates, entries that have expired, duplicates and anything beyond
+// WithMaxPreviousCertificates are dropped rather than adopted and republished.
+// See docs/adr/0004-bootstrapped-previous-ca-history.md.
 func WithPreviousCABundle(certs []*x509.Certificate) Option {
 	opt := func(ca *CertificateAuthority) error {
 		ca.previousCertificates = certs
+
+		return nil
+	}
+
+	return opt
+}
+
+// WithLogger is an [Option], which gives the [CertificateAuthority] a logger for
+// decisions it takes outside a request or a watch: today, the previous-CA
+// history entries it declines to keep. Without it those drops are silent, which
+// is exactly what makes a rewritten trust bundle hard to notice. Defaults to a
+// discard logger.
+func WithLogger(logger logr.Logger) Option {
+	opt := func(ca *CertificateAuthority) error {
+		ca.logger = logger
 
 		return nil
 	}
@@ -168,6 +197,7 @@ func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error
 		nowFunc:              time.Now,
 		maxPreviousCerts:     1,
 		previousCertificates: make([]*x509.Certificate, 0),
+		logger:               logr.Discard(),
 		drainWindow:          500 * time.Millisecond,
 		reloadAttempts:       5,
 		reloadBackoff:        200 * time.Millisecond,
@@ -212,19 +242,8 @@ func (ca *CertificateAuthority) load() (bool, error) {
 		return false, fmt.Errorf("failed to parse certificate: %w", err)
 	}
 
-	// Validate: CA
-	if !caX509Cert.BasicConstraintsValid || !caX509Cert.IsCA {
-		return false, errors.New("certificate is not a valid CA certificate")
-	}
-
-	// Validate: key usage
-	if (caX509Cert.KeyUsage & x509.KeyUsageCertSign) == 0 {
-		return false, errors.New("CA certificate cannot sign certificates")
-	}
-
-	// Validate: not expired
-	if time.Now().After(caX509Cert.NotAfter) {
-		return false, errors.New("CA certificate has expired")
+	if err := validateCACertificate(caX509Cert, time.Now()); err != nil {
+		return false, err
 	}
 
 	signer, ok := caCert.PrivateKey.(crypto.Signer)
@@ -244,16 +263,13 @@ func (ca *CertificateAuthority) load() (bool, error) {
 		return false, nil
 	}
 
-	// Rotate: push current certificate into the history if it changed
+	// Rotate: the outgoing certificate becomes the most recently active entry
+	// in the history. It is appended unconditionally; normalization below
+	// collapses it onto any earlier occurrence of the same certificate, so a
+	// CA that is rotated back in and out again keeps one slot rather than
+	// accumulating one per flap.
 	if ca.certificate != nil && !ca.certificate.Equal(caX509Cert) {
-		if !slices.ContainsFunc(ca.previousCertificates, func(item *x509.Certificate) bool {
-			return item.Equal(ca.certificate)
-		}) {
-			ca.previousCertificates = append(ca.previousCertificates, ca.certificate)
-		}
-		if len(ca.previousCertificates) > ca.maxPreviousCerts {
-			ca.previousCertificates = ca.previousCertificates[len(ca.previousCertificates)-ca.maxPreviousCerts:]
-		}
+		ca.previousCertificates = append(ca.previousCertificates, ca.certificate)
 	}
 
 	// Set new cert and signer
@@ -261,13 +277,84 @@ func (ca *CertificateAuthority) load() (bool, error) {
 	ca.signer = signer
 	ca.fingerprint = fingerprint
 
-	// Remove the current cert from the previous CA certs, in order to avoid
-	// duplicate entries in the trust bundle.
-	ca.previousCertificates = slices.DeleteFunc(ca.previousCertificates, func(item *x509.Certificate) bool {
-		return item.Equal(ca.certificate)
-	})
+	// Runs on every load that changed the material, including the very first
+	// one: that is what subjects a bootstrapped history to the same rules as
+	// one this process built itself.
+	ca.normalizePreviousCertificates()
 
 	return true, nil
+}
+
+// validateCACertificate reports whether cert can serve as a signing CA at the
+// given time. The same checks decide whether the material on disk may become
+// the current CA and whether a certificate offered as history is worth
+// retaining, so they live in one place.
+func validateCACertificate(cert *x509.Certificate, now time.Time) error {
+	if !cert.BasicConstraintsValid || !cert.IsCA {
+		return errors.New("certificate is not a valid CA certificate")
+	}
+	if (cert.KeyUsage & x509.KeyUsageCertSign) == 0 {
+		return errors.New("CA certificate cannot sign certificates")
+	}
+	if now.After(cert.NotAfter) {
+		return errors.New("CA certificate has expired")
+	}
+
+	return nil
+}
+
+// normalizePreviousCertificates enforces the invariants of the previous-CA
+// history: every entry is a usable CA certificate, no entry is the current CA,
+// no certificate appears twice, the order runs least-recently-active first, and
+// there are never more than maxPreviousCerts of them. Callers must hold ca.mu.
+//
+// The order of the steps is the point. Dropping the current CA and the
+// unusable entries *before* trimming means a rotation back into a certificate
+// the history already holds, or an expired anchor nobody can verify against,
+// cannot evict a previous CA whose certificates are still in the field. Trimming
+// first - which is what the code did while the trim lived in the rotate branch -
+// spends retention slots on certificates that are about to be discarded anyway.
+//
+// Certificates are compared by their DER bytes, the same identity the
+// fingerprint expresses, so "the same CA" means the same certificate rather
+// than the same position in a slice.
+func (ca *CertificateAuthority) normalizePreviousCertificates() {
+	now := ca.now()
+
+	kept := make([]*x509.Certificate, 0, len(ca.previousCertificates))
+	for i, cert := range ca.previousCertificates {
+		switch {
+		case cert == nil:
+			continue
+		case ca.certificate != nil && cert.Equal(ca.certificate):
+			// The current CA is published from ca.certificate; holding it in
+			// the history too would duplicate it in the trust bundle and spend
+			// a retention slot on it.
+			continue
+		case slices.ContainsFunc(ca.previousCertificates[i+1:], cert.Equal):
+			// A later occurrence is the more recent one; keep that instead.
+			continue
+		}
+		if err := validateCACertificate(cert, now); err != nil {
+			ca.logger.Info("dropping a previous CA certificate from the retained history",
+				"reason", err.Error(), "subject", cert.Subject.String(), "notAfter", cert.NotAfter)
+
+			continue
+		}
+		kept = append(kept, cert)
+	}
+
+	if len(kept) > ca.maxPreviousCerts {
+		dropped := kept[:len(kept)-ca.maxPreviousCerts]
+		for _, cert := range dropped {
+			ca.logger.Info("dropping a previous CA certificate from the retained history",
+				"reason", "history exceeds the configured maximum", "max", ca.maxPreviousCerts,
+				"subject", cert.Subject.String(), "notAfter", cert.NotAfter)
+		}
+		kept = kept[len(dropped):]
+	}
+
+	ca.previousCertificates = kept
 }
 
 // Sign is responsible for signing our certificate request configuration.

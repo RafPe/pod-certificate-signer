@@ -92,6 +92,16 @@ signer:
   # Max number of previous CA certificates to keep during a CA cert reload
   max_previous_ca_certs: 2
 
+  # Refuse to start when the signer's ClusterTrustBundle does not exist, rather
+  # than starting with an empty previous-CA history.
+  #
+  # Off by default because a first install has no bundle yet, and the controller
+  # cannot tell that apart from a bundle that was deleted. Once the signer has
+  # published its bundle, turn this on: it is what stops a deleted bundle from
+  # silently resetting the retained CA history, after which every certificate
+  # issued under a retired CA stops verifying.
+  require_ca_history: false
+
   # Allow ${...} placeholders (e.g. ${pod.name}, ${pod.serviceAccountName}) in
   # certificate configuration annotations, resolved from the verified fields of
   # the PodCertificateRequest. On by default: a value authored on a pod template

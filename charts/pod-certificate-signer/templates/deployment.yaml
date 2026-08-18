@@ -63,6 +63,7 @@ spec:
             - --max-concurrent-reconciles={{ .Values.manager.max_concurrent_reconciles }}
             - --reconcile-timeout={{ .Values.manager.reconcile_timeout }}
             - --max-previous-ca-certs={{ .Values.signer.max_previous_ca_certs }}
+            - --require-ca-history={{ .Values.signer.require_ca_history }}
             - --enable-annotation-interpolation={{ .Values.signer.enable_annotation_interpolation }}
             - --honor-csr-sans={{ .Values.signer.honor_csr_sans }}
             - --allow-unverified-identities={{ .Values.signer.allow_unverified_identities }}
