@@ -83,9 +83,32 @@ const nightlyLabel = "nightly"
 const caPropagationTimeout = 5 * time.Minute
 
 // mountedTrustUpdateTimeout bounds the wait for a workload's projected
-// ClusterTrustBundle to catch up with a rotation. It is the same kubelet
-// refresh as above, one hop further along.
-const mountedTrustUpdateTimeout = 5 * time.Minute
+// ClusterTrustBundle to catch up with a rotation.
+//
+// This is NOT the mounted-secret refresh above - projected clusterTrustBundle
+// sources go through a different kubelet cache with a different TTL, and
+// conflating the two is what made this timeout too tight to begin with. The
+// budget has two terms:
+//
+//   - kubelet's ClusterTrustBundle manager serves the projection from a
+//     normalization cache with a hard-coded 5-minute TTL. For the `name` form
+//     of the projection - which this suite uses, and which is the form that
+//     pins trust to one named object - a bundle carrying a spec.signerName is
+//     not invalidated by the informer's update callback, so the entry only
+//     goes away when the TTL expires. There is no flag that shortens it.
+//   - the refreshed content is written on the next pod sync
+//     (--sync-frequency, 1 minute by default).
+//
+// Worst case is therefore ~6 minutes, and the phase of the cache entry when a
+// rotation lands is arbitrary, so a 5-minute bound failed a large fraction of
+// runs rather than all of them. 8 minutes is 6 plus headroom.
+//
+// Do not "fix" a failure here by switching the fixture to the signerName form.
+// That converges in about one sync period because the informer does invalidate
+// those entries, but it also changes what the projection trusts - one named
+// object becomes a cluster-wide union of every bundle for that signer. A test
+// change must not be the vehicle for a trust-model change.
+const mountedTrustUpdateTimeout = 8 * time.Minute
 
 // caLifecycleObserverHold is how long the rotation observer pod stays up. It has
 // to outlive the pod's own issuance, a full rotation and the projected volume
