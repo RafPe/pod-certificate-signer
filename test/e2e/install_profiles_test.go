@@ -62,6 +62,7 @@ import (
 // secret deliberately. `make helm-install` re-applies the CA secret from
 // bin/dev-ca, so a profile switch after that rotation would rotate the CA back
 // and race the controller's volume reload against the profile's issuance specs.
+//
 // No profile below sets signer.enable_annotation_interpolation=true. That is
 // deliberate and load-bearing: since #87 it is the chart default, and a
 // redundant --set would mean the suite could no longer tell the difference
@@ -81,7 +82,7 @@ const (
 	honorCSRSANsInstallArgs = unverifiedIdentitiesInstallArgs + " --set signer.honor_csr_sans=true"
 
 	// chartDefaultsInstallArgs is the chart's shipped configuration, with
-	// nothing turned on: interpolation on (the default since #87), identity
+	// nothing overridden: interpolation on (the default since #87), identity
 	// constraints enforced, CSR SANs ignored, no escape hatch. Only
 	// replicaCount and the admission policy are set, and neither touches
 	// issuance semantics.
