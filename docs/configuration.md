@@ -356,42 +356,40 @@ default) to restrict ingress to the metrics port.
 
 ### Recommended production posture
 
-The chart ships production-safe security defaults (restricted PSS, non-root,
-read-only rootfs) and `replicaCount: 2` with leader election. Two things are
-left as a conscious operator choice and should be set for production:
+The chart ships production-safe defaults and needs no extra manifests: restricted
+PSS (non-root, read-only rootfs, all capabilities dropped), `replicaCount: 2`
+with leader election, resource requests and limits, and a PodDisruptionBudget.
+Review these two for your cluster:
 
-- **Resource requests and limits.** `resources` is `{}` by default. Set modest
-  requests/limits — the controller is a lightweight point-reconciler:
+- **Resource requests and limits.** Set by default for a lightweight, mostly-idle
+  point-reconciler. Tune for your cluster size; `resources: {}` leaves the
+  container unconstrained.
 
   ```yaml
   resources:
     requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 200m
+      cpu: 100m
       memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
   ```
 
-- **A PodDisruptionBudget.** With two leader-elected replicas, a PDB keeps a
-  standby available during voluntary disruptions (node drains, upgrades):
+- **PodDisruptionBudget.** Enabled by default. With two leader-elected replicas,
+  `minAvailable: 1` lets a node be drained one replica at a time while always
+  keeping a pod that can hold the lease. `unhealthyPodEvictionPolicy:
+  AlwaysAllow` lets a drain evict a replica that is not yet Ready, so a bad pod
+  cannot wedge the drain.
 
   ```yaml
-  apiVersion: policy/v1
-  kind: PodDisruptionBudget
-  metadata:
-    name: pod-certificate-signer
-    namespace: pcs-system
-  spec:
+  podDisruptionBudget:
+    enabled: true
     minAvailable: 1
+    maxUnavailable: ""   # mutually exclusive with minAvailable, which wins if both are set
     unhealthyPodEvictionPolicy: AlwaysAllow
-    selector:
-      matchLabels:
-        app.kubernetes.io/name: pod-certificate-signer
   ```
 
-> [!NOTE]
-> Default `resources` values and a first-class `PodDisruptionBudget` chart
-> template are being finalised in the chart (hardening item H8). Until that lands,
-> set `resources` via values and apply the PDB above as a plain manifest — this
-> is the recommended production posture either way.
+> [!IMPORTANT]
+> If you enable the HPA and it scales the Deployment down to a single replica,
+> `minAvailable: 1` blocks node drains for that sole pod. Switch to
+> `maxUnavailable: 1` in that case.

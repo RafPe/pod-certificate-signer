@@ -42,8 +42,8 @@ Only the newest release line receives security fixes. There are no backports.
 
 | Version  | Supported                             |
 | -------- | ------------------------------------- |
-| >= 1.2.0 | ✅                                    |
-| < 1.2.0  | ❌ — upgrade to the latest release    |
+| >= 2.2.0 | ✅                                    |
+| < 2.2.0  | ❌ — upgrade to the latest release    |
 
 Security fixes ship as patch releases of the current line (image
 `ghcr.io/rafpe/pod-certificate-signer`, chart
@@ -101,43 +101,58 @@ The signer reads `<signer-name>-cn/san/ip-san/uris/eku/duration/refresh` from
 annotations). Unrecognized signer-prefixed keys and malformed values deny the
 request rather than falling back to defaults.
 
-**Known limitation — this is the most important thing to understand before
-deploying** ([#26](https://github.com/RafPe/pod-certificate-signer/issues/26),
-fix in progress, follow-ups in
-[#48](https://github.com/RafPe/pod-certificate-signer/issues/48)): literal
-`cn`/`san`/`ip-san`/`uris` values are currently placed into issued
-certificates without being checked against the requesting pod's verified
-identity. Any principal who can create a pod that requests this signer can
-obtain a certificate for an arbitrary DNS name, IP, or URI — including
-identities like `kubernetes.default.svc` — which every workload trusting the
-signer's ClusterTrustBundle will accept. Until constrained issuance lands,
-**do not deploy this signer in a cluster with untrusted pod authors unless
-you enforce an admission policy**:
+**Annotation forgery is closed by default.** Every `cn`, `san` and `uris`
+value — literal or `${...}`-interpolated — must be an exact string member of the
+set of identities the signer derives from the request's apiserver-verified
+fields ([#26](https://github.com/RafPe/pod-certificate-signer/issues/26),
+[#38](https://github.com/RafPe/pod-certificate-signer/issues/38),
+[#48](https://github.com/RafPe/pod-certificate-signer/issues/48)). That set is
+the pod's own name, its canonical Kubernetes DNS forms, its SPIFFE ID, and its
+service account's short DNS form and SPIFFE ID — and nothing else; the boundary
+is recorded in
+[ADR-0001](docs/adr/0001-verified-identity-allowlist-boundary.md). A pod author
+who requests `kubernetes.default.svc`, or another team's service name, is
+**Denied**. `ip-san` values have no verified derivation from the request and are
+denied outright.
 
-- Use a `ValidatingAdmissionPolicy` (or equivalent admission control) to
-  restrict which `userAnnotations` values workloads may request — this is a
-  **required prerequisite** for multi-tenant clusters, not a bonus hardening.
-- Prefer `${...}` interpolation (`--enable-annotation-interpolation`) over
-  literal values where dynamic identities are needed: placeholders resolve
-  exclusively from apiserver-verified request fields (`pod.name`,
-  `pod.namespace`, `pod.uid`, `pod.serviceAccountName`, `node.name`,
-  `cluster.fqdn`), so a requester can only interpolate its own verified
-  identity. The flag is off by default; while off, values containing `${` are
-  denied rather than issued verbatim.
-- Use the `eku` annotation to narrow certificates to `server` where client
-  authentication is not needed; the default EKU set is
-  `serverAuth, clientAuth`.
+The check is exact string equality, which is what closes near-miss forgeries
+like `${pod.name}.attacker.com`.
+
+Residual exposure and how to bound it:
+
+- **`--allow-unverified-identities` (default off) lifts all of the above.** It
+  is the one setting that restores arbitrary-identity issuance. If you turn it
+  on, a `ValidatingAdmissionPolicy` restricting which `userAnnotations` values
+  workloads may request becomes a **required prerequisite** in a multi-tenant
+  cluster, not a bonus hardening. The chart can install one; see
+  `admissionPolicies.dnsSANValidation` in `docs/configuration.md`.
+- **`${...}` interpolation** resolves exclusively from apiserver-verified
+  request fields (`pod.name`, `pod.namespace`, `pod.uid`,
+  `pod.serviceAccountName`, `node.name`) plus the operator-configured
+  `cluster.fqdn`. It is the intended way to express per-pod identity, because a
+  value authored on a pod template is otherwise identical for every replica.
+  `node.name` and `pod.uid` are resolvable but not claimable as a subject. An
+  interpolated value is subject to exactly the same identity check as a literal
+  one; it is gated by `--enable-annotation-interpolation`, documented under
+  "Interpolating pod identity into values" in `docs/configuration.md`.
+- Use the `eku` annotation to narrow certificates to `client` or `server` as
+  needed. The default is `serverAuth` **only** — `clientAuth` is an explicit
+  opt-in.
+- A `ValidatingAdmissionPolicy` remains useful even under the default
+  constraints: it gives the pod author immediate feedback at admission rather
+  than a denial that surfaces later on the PodCertificateRequest.
 
 ### CSR-requested SANs
 
 `--honor-csr-sans` (default **off**) prepares for upcoming Kubernetes support
 for pod authors requesting SANs via the kubelet-generated PKCS#10 CSR. Today
-kubelet emits empty CSRs, so the path is inert. Note that CSR-derived SANs do
-not yet pass through the same identity constraints planned for annotation
-values ([#48](https://github.com/RafPe/pod-certificate-signer/issues/48)) —
-leave the flag off until that work lands. The CSR signature itself is verified
-by kube-apiserver during admission; the signer only extracts the public key
-and any requested SANs.
+kubelet emits empty CSRs, so the path is inert. Since
+[#80](https://github.com/RafPe/pod-certificate-signer/pull/80) CSR-derived SANs
+pass through the **same** identity constraints as annotation values: CSR DNS
+names are checked against the verified-identity allowlist, and CSR IP SANs are
+denied outright, both unless `--allow-unverified-identities` is set. The CSR
+signature itself is verified by kube-apiserver during admission; the signer only
+extracts the public key and any requested SANs.
 
 ### ClusterTrustBundle
 
@@ -172,9 +187,14 @@ widening anything:
 Deployment hardening defaults: the chart complies with the *restricted* Pod
 Security Standard (distroless non-root image, `readOnlyRootFilesystem`,
 `allowPrivilegeEscalation: false`, all capabilities dropped, seccomp
-`RuntimeDefault`). The metrics endpoint (`:9090`) is unauthenticated —
-restrict it with a NetworkPolicy if your cluster's Prometheus scrape isn't
-already network-isolated.
+`RuntimeDefault`). The metrics endpoint (`:9090`) is served over HTTPS and
+authenticated by default since
+[#82](https://github.com/RafPe/pod-certificate-signer/pull/82): every scrape
+must present a bearer token that passes a TokenReview, and be authorized by a
+SubjectAccessReview for `GET` on the `/metrics` nonResourceURL. The chart
+renders a `metrics-reader` ClusterRole for scrapers to bind to.
+`--metrics-secure=false` restores the legacy unauthenticated plaintext
+endpoint; if you set it, restrict the port with a NetworkPolicy.
 
 ## Scope
 
@@ -232,7 +252,7 @@ with rationale:
 
 | Check | Status | Rationale |
 | ----- | ------ | --------- |
-| Code-Review | Accepted | Single-maintainer project; PRs merge after automated checks (tests, lint, e2e, secret scan) without a second human reviewer. |
+| Code-Review | Accepted, narrowing | Single-maintainer project; ordinary PRs merge after automated checks (tests, lint, e2e, secret scan) without a second human reviewer. Two categories no longer do: a release publishes only when a maintainer approves the generated release PR ([#86](https://github.com/RafPe/pod-certificate-signer/pull/86)), and an Architecture Decision Record requires at least one approving maintainer review before it is accepted (see [CONTRIBUTING.md](CONTRIBUTING.md#review)). So the decisions that govern future code, and the artifacts users actually consume, are reviewed; the routine changes between them are not. |
 | Fuzzing | Accepted | No continuous fuzzing. Parsing surfaces (x509, PEM, PKCS#10) are Go standard library; project-specific parsing is covered by unit tests. |
 | CII-Best-Practices | Accepted | No OpenSSF Best Practices badge pursued at this stage. |
 | Vulnerabilities | Accepted (case-by-case) | Scorecard flags OSV entries by *presence* in the dependency graph; this project triages with `govulncheck` *reachability*. Findings without a reachable call path are accepted and documented. |
