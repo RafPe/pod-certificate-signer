@@ -95,6 +95,14 @@ signer:
   # Feature flag: allow ${...} placeholders (e.g. ${pod.name},
   # ${pod.serviceAccountName}) in certificate configuration annotations,
   # resolved from the verified fields of the PodCertificateRequest.
+  #
+  # Placeholders resolve only from apiserver-verified request fields plus
+  # cluster_fqdn above, and every resolved value must clear the identity
+  # constraints below by exact string equality - exactly as a literal value
+  # must. So interpolation grants no identity the pod does not already own; it
+  # changes the syntax you use to name one, not the set you may obtain. The
+  # security gate is allow_unverified_identities, not this flag. See the
+  # "Interpolating pod identity into values" section of docs/configuration.md.
   enable_annotation_interpolation: false
 
   # Feature flag: honor DNS and IP SANs embedded in the kubelet-generated
