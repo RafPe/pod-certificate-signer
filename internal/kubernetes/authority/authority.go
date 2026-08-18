@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -46,12 +47,18 @@ type CertificateAuthority struct {
 	maxPreviousCerts     int
 	nowFunc              func() time.Time
 	backDate             time.Duration
-	mu                   sync.Mutex
+	// fingerprint is the SHA-256 of the loaded certificate's DER, used by load
+	// to tell a reload that changed the material from one that did not. It is
+	// content-based rather than file metadata, so a rotation that preserves
+	// mtime is still seen. Guarded by mu, like the fields it describes.
+	fingerprint [sha256.Size]byte
+	mu          sync.Mutex
 
 	// Watch/reload tuning. Set to sane defaults in New; overridable in tests.
-	drainWindow    time.Duration // coalesce window for a burst of fs events
-	reloadAttempts int           // bounded retries for a single reload
-	reloadBackoff  time.Duration // base delay between reload attempts
+	drainWindow       time.Duration // coalesce window for a burst of fs events
+	reloadAttempts    int           // bounded retries for a single reload
+	reloadBackoff     time.Duration // base delay between reload attempts
+	reconcileInterval time.Duration // periodic reload, independent of events
 
 	// health tracks the recent reload outcomes and whether the watcher has
 	// exited unrecoverably. It is guarded by its own mutex (separate from mu)
@@ -78,6 +85,24 @@ const (
 	// lasted, measured from its first failure, before readiness may fail.
 	reloadFailureGracePeriod = 10 * time.Minute
 )
+
+// caReconcileInterval is how often the watch loop reloads the CA without
+// waiting for a filesystem event. fsnotify is not a durable event log: watches
+// can be dropped, the kernel queue can overflow, and a watched directory that
+// is deleted and recreated leaves the watch on the stale inode, in which case
+// reloads are not failing, they are simply never attempted again. Reloading on
+// a timer is what makes convergence to the material on disk guaranteed rather
+// than best effort.
+//
+// This value has a ceiling, and it is not the obvious one. A tick makes a
+// single reload attempt, so a permanently unloadable CA needs
+// reloadFailureThreshold ticks to become eligible for a readiness failure.
+// Raising the interval past reloadFailureGracePeriod / reloadFailureThreshold
+// (3m20s) would make the threshold rather than the grace period the binding
+// constraint in Healthy, so the signer would report NotReady *later* than it
+// does today - a slower reconcile delaying the alarm rather than only the
+// repair. At 60s there is ~3.3x of margin.
+const caReconcileInterval = 60 * time.Second
 
 // WithBackDate is an [Option], which configures the [CertificateAuthority] to
 // use the given backdate when signing certificate requests.
@@ -139,6 +164,7 @@ func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error
 		drainWindow:          500 * time.Millisecond,
 		reloadAttempts:       5,
 		reloadBackoff:        200 * time.Millisecond,
+		reconcileInterval:    caReconcileInterval,
 	}
 
 	// Additional configuration of the CA with the given options.
@@ -148,47 +174,61 @@ func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error
 		}
 	}
 
-	if err := ca.load(); err != nil {
+	if _, err := ca.load(); err != nil {
 		return nil, err
 	}
 
 	return ca, nil
 }
 
-// load loads the certificate and key for the [CertificateAuthority].
-func (ca *CertificateAuthority) load() error {
+// load loads the certificate and key for the [CertificateAuthority]. It reports
+// whether the material on disk differs from what was already loaded, so callers
+// can gate downstream work - notifying consumers, republishing the trust bundle
+// - on a real rotation rather than on every successful read. An unchanged read
+// still counts as a successful reload: "the CA is readable" is the health
+// signal, "the CA changed" is not.
+func (ca *CertificateAuthority) load() (bool, error) {
 	caCert, err := tls.LoadX509KeyPair(ca.certFile, ca.privKeyFile)
 	if err != nil {
-		return fmt.Errorf("failed to load key pair: %w", err)
+		return false, fmt.Errorf("failed to load key pair: %w", err)
 	}
 
 	caX509Cert, err := x509.ParseCertificate(caCert.Certificate[0])
 	if err != nil {
-		return fmt.Errorf("failed to parse certificate: %w", err)
+		return false, fmt.Errorf("failed to parse certificate: %w", err)
 	}
 
 	// Validate: CA
 	if !caX509Cert.BasicConstraintsValid || !caX509Cert.IsCA {
-		return errors.New("certificate is not a valid CA certificate")
+		return false, errors.New("certificate is not a valid CA certificate")
 	}
 
 	// Validate: key usage
 	if (caX509Cert.KeyUsage & x509.KeyUsageCertSign) == 0 {
-		return errors.New("CA certificate cannot sign certificates")
+		return false, errors.New("CA certificate cannot sign certificates")
 	}
 
 	// Validate: not expired
 	if time.Now().After(caX509Cert.NotAfter) {
-		return errors.New("CA certificate has expired")
+		return false, errors.New("CA certificate has expired")
 	}
 
 	signer, ok := caCert.PrivateKey.(crypto.Signer)
 	if !ok {
-		return errors.New("private key does not implement crypto.Signer interface")
+		return false, errors.New("private key does not implement crypto.Signer interface")
 	}
+
+	fingerprint := sha256.Sum256(caCert.Certificate[0])
 
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
+
+	// Unchanged material: return before touching the certificate, the signer or
+	// the history. The comparison belongs inside the critical section, since
+	// ca.fingerprint is written below under the same lock.
+	if ca.certificate != nil && ca.fingerprint == fingerprint {
+		return false, nil
+	}
 
 	// Rotate: push current certificate into the history if it changed
 	if ca.certificate != nil && !ca.certificate.Equal(caX509Cert) {
@@ -205,6 +245,7 @@ func (ca *CertificateAuthority) load() error {
 	// Set new cert and signer
 	ca.certificate = caX509Cert
 	ca.signer = signer
+	ca.fingerprint = fingerprint
 
 	// Remove the current cert from the previous CA certs, in order to avoid
 	// duplicate entries in the trust bundle.
@@ -212,7 +253,7 @@ func (ca *CertificateAuthority) load() error {
 		return item.Equal(ca.certificate)
 	})
 
-	return nil
+	return true, nil
 }
 
 // Sign is responsible for signing our certificate request configuration.
@@ -356,14 +397,22 @@ func (ca *CertificateAuthority) Watch(ctx context.Context, notify chan<- struct{
 		}
 	}
 
+	// Reconcile once now that the watches are registered: a rotation landing
+	// between New's initial load and this point produces no observable event,
+	// so without this pass it would go unnoticed until the first tick.
+	logger.Info("reloading the CA periodically as well as on events", "interval", ca.reconcileInterval)
+	ca.reconcileOnce(logger, notify, "watch startup")
+
 	return ca.watchLoop(ctx, logger, watcher.Events, watcher.Errors, notify)
 }
 
 // watchLoop consumes filesystem events until ctx is canceled, reloading the CA
-// (with bounded retry) whenever the mounted files change. It returns nil on a
-// clean shutdown (ctx canceled) and a non-nil error if fsnotify closes a
-// channel, so the caller can fail fast and be restarted rather than spinning on
-// zero values read from a closed channel.
+// (with bounded retry) whenever the mounted files change, and reloading it
+// unconditionally every reconcileInterval so a rotation the event path never
+// saw, or failed to load, still converges. It returns nil on a clean shutdown
+// (ctx canceled) and a non-nil error if fsnotify closes a channel, so the caller
+// can fail fast and be restarted rather than spinning on zero values read from a
+// closed channel.
 func (ca *CertificateAuthority) watchLoop(
 	ctx context.Context,
 	logger logr.Logger,
@@ -371,15 +420,28 @@ func (ca *CertificateAuthority) watchLoop(
 	errs <-chan error,
 	notify chan<- struct{},
 ) error {
+	ticker := time.NewTicker(ca.reconcileInterval)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-ticker.C:
+			// Reconcile on every tick, not only while reloads are failing: the
+			// silent routes (dropped events, a stale inode after the watched
+			// directory is recreated) leave the CA in a *successful* state, so
+			// a failure-gated pass would never run in exactly those cases.
+			ca.reconcileOnce(logger, notify, "periodic reconciliation")
 		case event, ok := <-events:
 			if !ok {
 				return ca.failWatcher(errWatchChannelClosed)
 			}
-			if !event.Has(fsnotify.Create) && !event.Has(fsnotify.Write) && !event.Has(fsnotify.Rename) {
+			// Remove is included because a kubelet-style atomic swap replaces
+			// the timestamped directory behind ..data, and a plain deletion of
+			// the material must be observed rather than silently ignored.
+			if !event.Has(fsnotify.Create) && !event.Has(fsnotify.Write) &&
+				!event.Has(fsnotify.Rename) && !event.Has(fsnotify.Remove) {
 				continue
 			}
 
@@ -396,23 +458,25 @@ func (ca *CertificateAuthority) watchLoop(
 			}
 
 			logger.Info("reloading CA certificate")
-			if err := ca.reloadWithRetry(ctx, logger); err != nil {
+			changed, err := ca.reloadWithRetry(ctx, logger)
+			if err != nil {
 				// The last-good CA is retained, so signing keeps working.
-				// Stay watching so a later good write recovers; readiness is
-				// only affected once the failures persist (see Healthy).
+				// Stay watching so a later good write - or the next tick -
+				// recovers; readiness is only affected once the failures
+				// persist (see Healthy).
 				logger.Error(err, "failed to reload CA certificate after retries")
 				continue
 			}
-			logger.Info("CA certificate reloaded successfully")
-
-			// Don't block here, so that reloading the CA can proceed as
-			// usual, even if we have slow consumers.
-			if notify != nil {
-				select {
-				case notify <- struct{}{}:
-				default:
-				}
+			if !changed {
+				// A single rotation can drive more than one reload: two
+				// watched directories, events arriving after the drain window,
+				// or a tick that already picked the material up. Only the one
+				// that actually changed the CA is worth publishing.
+				logger.V(1).Info("CA certificate on disk is unchanged, nothing to publish")
+				continue
 			}
+			logger.Info("CA certificate reloaded successfully")
+			notifyChanged(notify)
 		case err, ok := <-errs:
 			if !ok {
 				return ca.failWatcher(errWatchChannelClosed)
@@ -444,21 +508,64 @@ func (ca *CertificateAuthority) drainEvents(ctx context.Context, logger logr.Log
 	}
 }
 
+// reconcileOnce reloads the CA once, without retrying, and notifies callers
+// when the material actually changed. The retry budget in reloadWithRetry
+// exists to ride out the torn state a rotation briefly leaves on disk, which is
+// event-adjacent; a pass that is not correlated with a write has nothing to ride
+// out, and the next pass is itself the retry. Keeping it to a single attempt
+// also bounds the log stream: a permanently unloadable CA costs one line per
+// interval rather than the whole retry burst, forever.
+func (ca *CertificateAuthority) reconcileOnce(logger logr.Logger, notify chan<- struct{}, cause string) {
+	changed, err := ca.load()
+
+	// Recorded regardless of whether anything changed: a readable CA clears the
+	// failure streak (so a replica recovers readiness without a restart), and an
+	// unreadable one accumulates towards the readiness threshold even though no
+	// filesystem event ever arrived.
+	ca.recordReloadResult(err)
+
+	switch {
+	case err != nil:
+		logger.Error(err, "failed to reload CA certificate; retaining the last-good CA", "cause", cause)
+	case changed:
+		logger.Info("CA certificate reloaded successfully", "cause", cause)
+		notifyChanged(notify)
+	default:
+		logger.V(1).Info("CA certificate on disk is unchanged", "cause", cause)
+	}
+}
+
+// notifyChanged performs a non-blocking send on notify, so reloading the CA can
+// proceed as usual even if we have slow consumers. A nil channel means the
+// caller did not ask for notifications.
+func notifyChanged(notify chan<- struct{}) {
+	if notify == nil {
+		return
+	}
+	select {
+	case notify <- struct{}{}:
+	default:
+	}
+}
+
 // reloadWithRetry attempts to reload the CA, retrying on a bounded linear
 // backoff. A failed attempt leaves the last-good CA in place (see load), so
 // callers keep signing with the previous material until a good reload succeeds.
 // Every attempt is recorded for the readiness probe (see Healthy).
-// It returns nil on the first successful reload, ctx.Err() if ctx is canceled,
-// or the final error once the attempt budget is exhausted.
-func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr.Logger) error {
+// It reports whether the reload changed the CA material, so callers only
+// republish on a real rotation. It returns nil on the first successful reload,
+// ctx.Err() if ctx is canceled, or the final error once the attempt budget is
+// exhausted.
+func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr.Logger) (bool, error) {
 	const maxBackoff = 5 * time.Second
 
 	var err error
 	for attempt := 1; ; attempt++ {
-		if err = ca.load(); err == nil {
+		var changed bool
+		if changed, err = ca.load(); err == nil {
 			ca.recordReloadResult(nil)
 
-			return nil
+			return changed, nil
 		}
 
 		// Record each failed attempt rather than only the exhausted burst:
@@ -467,7 +574,7 @@ func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr
 		// without one.
 		failures := ca.recordReloadResult(err)
 		if attempt >= ca.reloadAttempts {
-			return fmt.Errorf("reload failed after %d attempt(s), %d consecutive failure(s): %w",
+			return false, fmt.Errorf("reload failed after %d attempt(s), %d consecutive failure(s): %w",
 				attempt, failures, err)
 		}
 		logger.Error(err, "failed to reload CA certificate, retrying",
@@ -478,7 +585,7 @@ func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return false, ctx.Err()
 		case <-timer.C:
 		}
 	}
