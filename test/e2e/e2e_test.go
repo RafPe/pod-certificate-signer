@@ -516,6 +516,13 @@ var _ = Describe("Manager", Ordered, Serial, func() {
 	// ValidatingAdmissionPolicy, so they neither reach the signer nor care what
 	// state the CA was left in.
 	defineAdmissionPolicyTests()
+
+	// Interoperability with a real TLS workload goes last of everything. It
+	// installs its own profile and rotates the CA, and the previous-CA retention
+	// spec above asserts an exact rotation history that any rotation before it
+	// would invalidate. Declared here, nothing follows that it can disturb. See
+	// goweb_interop_test.go.
+	defineGowebInteropTests()
 })
 
 // getMetricsOutput retrieves and returns the logs from the curl pod used to access the metrics endpoint.
