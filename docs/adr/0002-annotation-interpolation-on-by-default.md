@@ -147,8 +147,9 @@ configuration with its own tests and its own e2e install profile.
 - [x] The disabled path still denies `${...}`
       (`TestInterpolationDisabledRejectsPlaceholders`, and the e2e
       `interpolation-disabled` install profile).
-- [ ] The e2e suite passes with no `--set signer.enable_annotation_interpolation`
-      in any profile that expects interpolation to work.
+- [ ] The e2e suite passes with `--set signer.enable_annotation_interpolation`
+      appearing in exactly one install profile, `interpolation-disabled`, where
+      it is set to `false`. No profile sets it to `true`.
 
 ## Alternatives Considered
 

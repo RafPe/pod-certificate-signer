@@ -96,8 +96,10 @@ const (
 	// things about the same configuration: the verified-interpolation container
 	// is about ${...} resolving and the allowlist refusing, the chart-defaults
 	// container is about an unmodified install handing a workload a usable
-	// credential. Collapsing them would lose that distinction and the extra
-	// rollout is what proves the profile switch is idempotent.
+	// credential. Collapsing them would lose that distinction, and it would not
+	// even save a rollout: the custom-cluster-fqdn profile runs between the two
+	// and its install has to be undone, which is what the chart-defaults
+	// BeforeAll does.
 	verifiedInterpolationInstallArgs = chartDefaultsInstallArgs
 
 	// interpolationDisabledInstallArgs is the opt-out: the chart defaults with
