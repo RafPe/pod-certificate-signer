@@ -46,6 +46,36 @@ const Prefix = "CREDPROBE-REPORT "
 const (
 	RoleServer = "server"
 	RoleClient = "client"
+
+	// RolePeer drives one request against a real HTTPS peer in another pod,
+	// rather than against a loopback listener the probe configured itself.
+	//
+	// The other two roles prove the projected credential is internally usable:
+	// the probe is both ends of the handshake, so a passing check says the
+	// material is well-formed and the key works. What they cannot say is that a
+	// peer the suite did not write accepts the identity the signer issued. This
+	// role answers that, and it is the only one whose verdict depends on
+	// software outside this repository.
+	RolePeer = "peer"
+)
+
+// Peer modes select what client credential the peer role presents. They are the
+// three cases that produce different outcomes at a server doing
+// tls.VerifyClientCertIfGiven, and naming them keeps the negative cases from
+// collapsing into each other.
+const (
+	// PeerModeProjected presents the pod's own projected credential.
+	PeerModeProjected = "projected"
+
+	// PeerModeNone presents no client certificate at all. The peer's handshake
+	// succeeds and the refusal arrives as an HTTP status.
+	PeerModeNone = "none"
+
+	// PeerModeForeign presents a self-signed certificate the peer's trust
+	// bundle cannot chain. The peer refuses during the handshake, so there is
+	// no HTTP response at all - which is why the two negatives cannot be
+	// asserted the same way.
+	PeerModeForeign = "foreign"
 )
 
 // Check names. The suite asserts on the exact set for a role, so a check that
@@ -97,6 +127,18 @@ const (
 	// CheckTLSServerRoleRejected proves a clientAuth-only certificate is
 	// refused when presented as a server certificate.
 	CheckTLSServerRoleRejected = "tls.server.rejectsClientOnlyCert"
+
+	// CheckPeerRequest covers one request against a real HTTPS peer.
+	//
+	// It passes when the attempt reached a *definite* outcome - an HTTP
+	// response, or a TLS alert raised by the peer - and fails when it did not.
+	// That distinction is the whole value of the check: a refused connection, an
+	// unresolvable name or a timeout are all "the request did not succeed", and
+	// treating them as proof that a peer rejected a credential would turn a
+	// broken fixture into a passing negative. The outcome itself is recorded in
+	// PeerFacts for the suite to judge; this check only asserts that there is an
+	// outcome to judge.
+	CheckPeerRequest = "peer.request"
 )
 
 // ExpectedChecks returns the checks a report for the given role must contain,
@@ -109,6 +151,9 @@ func ExpectedChecks(role string) []string {
 		CheckTrustFile,
 		CheckTrustOnlyCAs,
 		CheckTrustVerifiesLeaf,
+	}
+	if role == RolePeer {
+		return append(common, CheckPeerRequest)
 	}
 	if role == RoleClient {
 		return append(common, CheckTLSClientAuthAccepted, CheckTLSServerRoleRejected)
@@ -170,6 +215,53 @@ type Facts struct {
 	// LeafKeyAlgorithm is the public key algorithm of the projected leaf, e.g.
 	// Ed25519.
 	LeafKeyAlgorithm string `json:"leafKeyAlgorithm"`
+
+	// Peer is what the peer role observed, and is nil for the other roles.
+	Peer *PeerFacts `json:"peer,omitempty"`
+}
+
+// PeerFacts is what one request against a real HTTPS peer observed.
+//
+// The suite is the judge here as everywhere else: the probe records the status
+// code, the response body and the classified failure, and asserts none of them.
+// A spec then states which of the three outcomes it expected.
+type PeerFacts struct {
+	URL  string `json:"url"`
+	Mode string `json:"mode"`
+
+	// Connected reports whether the TCP connection was established. It is what
+	// separates "the peer refused this credential" from "the peer was never
+	// reached", which are the same error to a caller that only checks for nil.
+	Connected bool `json:"connected"`
+
+	// HTTPStatus is the status code, or zero when no response was received.
+	HTTPStatus int `json:"httpStatus"`
+
+	// Body is the response body verbatim. The peer's endpoints publish
+	// certificate metadata only - subjects, fingerprints, SANs - so this carries
+	// nothing that is not already public.
+	Body string `json:"body"`
+
+	// Error is the request error, verbatim, and is empty on success.
+	Error string `json:"error"`
+
+	// TLSAlert reports whether the peer raised a TLS alert - that is, whether it
+	// examined the credential and rejected it at the TLS layer. It is the
+	// load-bearing half of the classification: every other way a request can
+	// fail happened on this side or in between, and says nothing about what the
+	// peer decided.
+	TLSAlert bool `json:"tlsAlert"`
+
+	// TLSAlertText is the alert's description, e.g. "tls: unknown certificate
+	// authority". It says *which* refusal, where TLSAlert says only that there
+	// was one.
+	//
+	// It is the description and not the numeric code deliberately. crypto/tls
+	// delivers a received alert as a net.OpError wrapping its unexported alert
+	// type, so the number is only reachable by reflecting into a type the
+	// standard library does not export - cleverness that would break silently on
+	// a Go release. The description is that type's Error() string and is stable.
+	TLSAlertText string `json:"tlsAlertText"`
 }
 
 // Report is the probe's whole output.

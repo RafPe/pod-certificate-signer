@@ -56,6 +56,12 @@ type config struct {
 	allowedDNS   string
 	unrelatedDNS string
 
+	// peerURL and peerMode configure the peer role: which HTTPS endpoint in
+	// another pod to call, and which client credential to present to it. See
+	// report.RolePeer and the modes beside it.
+	peerURL  string
+	peerMode string
+
 	hold time.Duration
 }
 
@@ -104,11 +110,23 @@ func probe(cfg config) report.Report {
 		return r.report
 	}
 
-	r.checkTLS(cfg, tls.Certificate{
+	projected := tls.Certificate{
 		Certificate: rawChain(chain),
 		PrivateKey:  key,
 		Leaf:        chain[0],
-	}, pool)
+	}
+
+	// The peer role branches here rather than at the top of probe, so it runs
+	// the identical preamble the other roles do: the credential it is about to
+	// present to a real peer has already been proven well-formed, key-matched
+	// and chained to the projected anchors. A peer request that then fails is a
+	// statement about the peer's decision and not about the material.
+	if cfg.role == report.RolePeer {
+		r.checkPeer(cfg, projected, pool)
+		return r.report
+	}
+
+	r.checkTLS(cfg, projected, pool)
 
 	return r.report
 }
