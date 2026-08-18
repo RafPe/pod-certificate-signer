@@ -1,0 +1,2 @@
+kind: Fixed
+body: A CA reload that succeeds after a failure is logged again. Correcting a mismatched certificate/key pair restores the same certificate, so the change-detection added for periodic reconciliation reported "unchanged" and the confirmation was dropped to V(1) - invisible at the default verbosity to an operator who had just fixed the CA.
