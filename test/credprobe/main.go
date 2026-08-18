@@ -51,7 +51,11 @@ func main() {
 	flag.StringVar(&cfg.trustPath, "trust", "/var/run/x509/ca.crt",
 		"path of the projected ClusterTrustBundle")
 	flag.StringVar(&cfg.role, "role", report.RoleServer,
-		"extended key usage the projected certificate was issued with: server or client")
+		"what to prove about the projected credential: server, client, or peer (a request to a real HTTPS peer)")
+	flag.StringVar(&cfg.peerURL, "peer-url", "",
+		"peer role only: the HTTPS URL to request")
+	flag.StringVar(&cfg.peerMode, "peer-mode", report.PeerModeProjected,
+		"peer role only: which client credential to present - projected, none or foreign")
 	flag.IntVar(&cfg.expectChainLen, "expect-chain-len", 2,
 		"number of certificates the bundle must carry after the private key")
 	flag.StringVar(&cfg.allowedDNS, "allowed-dns", "",

@@ -2,9 +2,18 @@ name: PR Release Metadata
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, labeled, unlabeled]
-    branches:
-      - main
+    # `edited` is in this list because a pull request's base branch changing is
+    # an edit, and in a stacked workflow bases change on their own: when the PR
+    # below merges, this one is retargeted onto main automatically. Without
+    # `edited` that retarget fires no event in this list and the gate would
+    # never have run against the base the PR actually merges into.
+    types: [opened, reopened, synchronize, labeled, unlabeled, edited]
+    # Deliberately no `branches` filter. Restricting this to PRs targeting main
+    # checks only the bottom of a stack: every layer above it targets the layer
+    # below and would reach main unchecked, carrying no release label and no
+    # changelog fragment of its own. The job reads changed files from the PR's
+    # own base, so on a stacked PR it sees just that layer's diff - which is
+    # exactly what each layer has to account for.
 
 permissions:
   contents: read

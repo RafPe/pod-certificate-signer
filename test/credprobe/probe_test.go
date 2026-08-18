@@ -167,8 +167,10 @@ func newFixture(t *testing.T, role string) fixture {
 		t.Fatalf("generate CA: %v", err)
 	}
 
+	// The peer role authenticates to a real peer, so its credential is a client
+	// credential like RoleClient's; only what it does with it differs.
 	eku := x509.ExtKeyUsageServerAuth
-	if role == report.RoleClient {
+	if role == report.RoleClient || role == report.RolePeer {
 		eku = x509.ExtKeyUsageClientAuth
 	}
 	key, leaf := issueLeaf(t, ca, []x509.ExtKeyUsage{eku}, []string{testAllowedDNS})

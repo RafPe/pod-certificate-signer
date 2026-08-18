@@ -101,6 +101,35 @@ type certTestPod struct {
 	image string
 	args  []string
 
+	// env are environment variables for the workload container. The goweb
+	// interop specs configure their server entirely this way (see
+	// goweb_interop_test.go); nothing else in the suite needs any.
+	env []corev1.EnvVar
+
+	// labels are added to the pod on top of e2eWorkloadLabel.
+	//
+	// They exist so a Service can select one specific pod. e2eWorkloadLabel is
+	// on every pod the suite creates, so a selector using it would match all of
+	// them. A per-pod label cannot simply be derived from the pod name either:
+	// a label value is capped at 63 characters and one spec deliberately uses a
+	// 64-character name, so deriving one automatically would fail that spec on
+	// admission.
+	labels map[string]string
+
+	// observerSidecar adds a second container that mounts the same projected
+	// volume and does nothing but stay up.
+	//
+	// It is what makes the projected files readable by `kubectl exec` when the
+	// workload image cannot be exec'd into - the goweb server is distroless and
+	// carries no shell and no cat. Reading the file from a sidecar is reading
+	// the same projection: the volume is the pod's, not the container's, so
+	// kubelet updates it once for both.
+	//
+	// It is a bool rather than a general "extra containers" field on purpose. A
+	// list would make this fixture a way to smuggle arbitrary containers into
+	// the suite, and every spec that needed one would invent its own shape.
+	observerSidecar bool
+
 	// holdSeconds is how long the sleeper container stays up. Defaults to
 	// defaultHoldSeconds, which is ample for a spec that only needs a pod to
 	// exist while its request is issued.
@@ -158,9 +187,10 @@ func (p certTestPod) withDefaults() certTestPod {
 // arguments, which is how the credential probe is configured.
 func (p certTestPod) container() corev1.Container {
 	container := corev1.Container{
-		Name:  "workload",
+		Name:  workloadContainerName,
 		Image: p.image,
 		Args:  p.args,
+		Env:   p.env,
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: ptr(false),
 			RunAsNonRoot:             ptr(true),
@@ -178,6 +208,39 @@ func (p certTestPod) container() corev1.Container {
 		container.Command = []string{"sleep", strconv.Itoa(p.holdSeconds)}
 	}
 	return container
+}
+
+// workloadContainerName is the container every fixture's workload runs in, and
+// observerContainerName the optional sidecar beside it. They are named
+// constants because `kubectl exec` and `kubectl logs` have to name a container
+// once a pod has two.
+const (
+	workloadContainerName = "workload"
+	observerContainerName = "observer"
+)
+
+// observer renders the sidecar described on observerSidecar: a shell that mounts
+// the same projected volume and stays up for as long as the workload does.
+func (p certTestPod) observer() corev1.Container {
+	return corev1.Container{
+		Name:    observerContainerName,
+		Image:   sleeperImage,
+		Command: []string{"sleep", strconv.Itoa(p.holdSeconds)},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: ptr(false),
+			RunAsNonRoot:             ptr(true),
+			// The same unprivileged uid the workload runs as, so what this
+			// container can read is what the workload can read.
+			RunAsUser:      ptr(int64(65532)),
+			Capabilities:   &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+		},
+		VolumeMounts: []corev1.VolumeMount{{
+			Name:      "x509",
+			MountPath: certTestPodMountPath,
+			ReadOnly:  true,
+		}},
+	}
 }
 
 // build renders the fixture as a typed corev1.Pod.
@@ -203,18 +266,28 @@ func (p certTestPod) build() *corev1.Pod {
 		})
 	}
 
+	labels := map[string]string{e2eWorkloadLabel: "true"}
+	for key, value := range p.labels {
+		labels[key] = value
+	}
+
+	containers := []corev1.Container{p.container()}
+	if p.observerSidecar {
+		containers = append(containers, p.observer())
+	}
+
 	return &corev1.Pod{
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        p.name,
 			Namespace:   p.namespace,
-			Labels:      map[string]string{e2eWorkloadLabel: "true"},
+			Labels:      labels,
 			Annotations: p.podAnnotations,
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy:      corev1.RestartPolicyNever,
 			ServiceAccountName: p.serviceAccountName,
-			Containers:         []corev1.Container{p.container()},
+			Containers:         containers,
 			Volumes: []corev1.Volume{{
 				Name: "x509",
 				VolumeSource: corev1.VolumeSource{
