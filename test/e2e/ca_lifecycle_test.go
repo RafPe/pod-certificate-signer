@@ -125,7 +125,9 @@ const caLifecycleObserverHold = 1200
 // valid for exactly 24 hours expires before that and cannot sign it at all. The
 // request does not fail - authority returns ErrCASignerUnusable, which the
 // reconciler treats as transient - it simply never issues, and the workload
-// hangs in ContainerCreating with nothing on the request to say why.
+// hangs in ContainerCreating. Nothing is written to the request itself either;
+// the only trace on the object is the rate-limited CASignerUnusable warning
+// event the reconciler emits on that branch.
 //
 // Three days leaves no doubt. The spec that wants an unsuitable CA asks for one
 // explicitly; see shortCAValidity.
