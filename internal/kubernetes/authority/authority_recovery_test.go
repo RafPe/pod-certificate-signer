@@ -33,7 +33,7 @@ func TestReloadRetainsLastGoodCAOnFailure(t *testing.T) {
 		t.Fatalf("write non-CA files: %v", err)
 	}
 
-	if err := ca.load(); err == nil {
+	if _, err := ca.load(); err == nil {
 		t.Fatal("want error reloading a non-CA certificate")
 	}
 	if got := parseChain(t, ca.TrustBundlePEM()); len(got) == 0 || !got[0].Equal(good.Cert) {
@@ -42,7 +42,7 @@ func TestReloadRetainsLastGoodCAOnFailure(t *testing.T) {
 
 	// A subsequent good write must reload.
 	good2 := writeCA(t, dir, "good-ca-2.example.org", 24*time.Hour)
-	if err := ca.load(); err != nil {
+	if _, err := ca.load(); err != nil {
 		t.Fatalf("reload after good write: %v", err)
 	}
 	if got := parseChain(t, ca.TrustBundlePEM()); !got[0].Equal(good2.Cert) {
@@ -79,7 +79,7 @@ func TestReloadWithRetryRecoversFromTransientBadPair(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "tls.key"), b.KeyPEM, 0o600); err != nil {
 		t.Fatalf("write key: %v", err)
 	}
-	if err := ca.load(); err == nil {
+	if _, err := ca.load(); err == nil {
 		t.Fatal("want error for mismatched key pair")
 	}
 
@@ -95,7 +95,7 @@ func TestReloadWithRetryRecoversFromTransientBadPair(t *testing.T) {
 	}()
 
 	ctx := context.Background()
-	if err := ca.reloadWithRetry(ctx, log.FromContext(ctx)); err != nil {
+	if _, err := ca.reloadWithRetry(ctx, log.FromContext(ctx)); err != nil {
 		t.Fatalf("reloadWithRetry did not recover from a transient bad pair: %v", err)
 	}
 	if got := parseChain(t, ca.TrustBundlePEM()); !got[0].Equal(rotated.Cert) {
@@ -128,7 +128,10 @@ func TestReloadWithRetryHonorsContextCancellation(t *testing.T) {
 	defer cancel()
 
 	done := make(chan error, 1)
-	go func() { done <- ca.reloadWithRetry(ctx, log.FromContext(ctx)) }()
+	go func() {
+		_, err := ca.reloadWithRetry(ctx, log.FromContext(ctx))
+		done <- err
+	}()
 	select {
 	case err := <-done:
 		if err == nil {
