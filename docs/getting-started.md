@@ -116,6 +116,9 @@ in [`examples/workload-pod.yaml`](https://github.com/rafpe/pod-certificate-signe
 > With controller defaults the certificate is issued for the pod's own verified
 > identity. To set a custom common name, SANs, duration, EKU or SPIFFE URIs, use
 > the annotation contract in [Configuration](./configuration.md#certificate-configuration-annotations).
+> Every value the example requests resolves to an identity the pod owns, so it
+> issues under the [identity constraints](./configuration.md#identity-constraints)
+> as they ship — no `--allow-unverified-identities` needed.
 
 ## Next steps
 

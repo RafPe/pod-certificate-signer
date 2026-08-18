@@ -6,6 +6,13 @@
 # placeholders require the controller to run with
 # --enable-annotation-interpolation.
 #
+# Every value below resolves to an identity this pod owns - one the signer
+# derives from the apiserver-verified fields of the PodCertificateRequest - so
+# the manifest issues under the controller's identity constraints as they ship,
+# with no --allow-unverified-identities. Anything the pod cannot prove (a
+# literal name, an IP address) needs that escape hatch; the commented ip-san
+# below is the example of one.
+#
 # The signer's ClusterTrustBundle is mounted alongside the credential bundle,
 # so the pod ends up with:
 #   /var/run/x509/credentialbundle.pem - private key + issued certificate chain
@@ -45,9 +52,25 @@ spec:
           signerName: example.org/signer
           credentialBundlePath: credentialbundle.pem
           userAnnotations:
-            example.org/signer-cn: "${pod.name}.${pod.namespace}.svc.cluster.local"
-            example.org/signer-san: "${pod.name}.${pod.namespace}.svc,${pod.serviceAccountName}.${pod.namespace}.svc"
-            example.org/signer-ip-san: "10.96.0.99"
+            # The pod's own canonical Service DNS name. ${cluster.fqdn} rather
+            # than a hardcoded cluster.local, so the example is also correct on
+            # a cluster installed with a different --cluster-fqdn.
+            example.org/signer-cn: "${pod.name}.${pod.namespace}.svc.${cluster.fqdn}"
+            # The pod's canonical service form plus the short service-account
+            # form <sa>.<ns>. The service-account Service DNS form
+            # <sa>.<ns>.svc is deliberately not in the verified-identity
+            # allowlist and would be denied - see
+            # docs/adr/0001-verified-identity-allowlist-boundary.md.
+            example.org/signer-san: "${pod.name}.${pod.namespace}.svc,${pod.serviceAccountName}.${pod.namespace}"
+            # The SPIFFE ID of the service account this pod runs as: the
+            # blessed spelling of the service-account identity (ADR-0001).
+            example.org/signer-uris: "spiffe://${cluster.fqdn}/ns/${pod.namespace}/sa/${pod.serviceAccountName}"
+            # Escape hatch only, left commented on purpose. An IP address has no
+            # verified derivation from the request, so an ip-san is denied
+            # unless the controller runs with --allow-unverified-identities
+            # (Helm: signer.allow_unverified_identities=true). Uncomment only
+            # against a signer deployed with that flag:
+            # example.org/signer-ip-san: "10.96.0.99"
       - clusterTrustBundle:
           signerName: example.org/signer
           labelSelector: {}
