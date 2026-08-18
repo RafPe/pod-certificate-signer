@@ -107,14 +107,16 @@ var _ = Describe("Manager", Ordered, Serial, func() {
 		// A single replica keeps the pod-targeted assertions (logs, pod phase)
 		// deterministic; the chart default is 2 for leader election.
 		//
-		// This is the unverified-identities profile: interpolation on and the
-		// identity allowlist disabled, so the specs below can request literal
-		// values (custom-cn.example.org, literal IP SANs) that a pod does not
-		// own. It is deliberately not the whole suite - the chart's shipped
-		// defaults and the verified-interpolation path are exercised by their
-		// own install profiles, see install_profiles_test.go. Keeping this
-		// profile first means the pre-existing specs are unaffected by the
-		// profile split.
+		// This is the unverified-identities profile: the identity allowlist
+		// disabled, so the specs below can request literal values
+		// (custom-cn.example.org, literal IP SANs) that a pod does not own.
+		// Interpolation is on because it is the chart default, not because this
+		// profile asks for it - see the note above the const block in
+		// install_profiles_test.go. It is deliberately not the whole suite: the
+		// chart's shipped defaults, the verified-interpolation path and the
+		// interpolation opt-out are exercised by their own install profiles.
+		// Keeping this profile first means the pre-existing specs are
+		// unaffected by the profile split.
 		cmd = exec.Command("make", "helm-install",
 			fmt.Sprintf("IMAGE=%s", projectImage),
 			"HELM_EXTRA_ARGS="+unverifiedIdentitiesInstallArgs)
@@ -447,6 +449,10 @@ var _ = Describe("Manager", Ordered, Serial, func() {
 	// identity_boundary_test.go for why it is worth its own rollout.
 	defineCustomClusterFQDNProfileTests()
 	defineChartDefaultsProfileTests()
+	// Last of the profiles, and the only one that overrides a signer default:
+	// it closes the interpolation gate the other four rely on being open. See
+	// install_profiles_test.go.
+	defineInterpolationDisabledProfileTests()
 
 	Context("ClusterTrustBundle", func() {
 		AfterAll(func() {

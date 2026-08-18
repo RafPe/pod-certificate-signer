@@ -133,8 +133,13 @@ Residual exposure and how to bound it:
   value authored on a pod template is otherwise identical for every replica.
   `node.name` and `pod.uid` are resolvable but not claimable as a subject. An
   interpolated value is subject to exactly the same identity check as a literal
-  one; it is gated by `--enable-annotation-interpolation`, documented under
-  "Interpolating pod identity into values" in `docs/configuration.md`.
+  one, which is why it is **on by default**
+  (`--enable-annotation-interpolation`): it is a naming mechanism, not an
+  authorization one, and it reaches only identities the pod already owns. Set it
+  to `false` to deny values containing `${` outright. Documented under
+  "Interpolating pod identity into values" in `docs/configuration.md`; the
+  reasoning is recorded in
+  `docs/adr/0002-annotation-interpolation-on-by-default.md`.
 - Use the `eku` annotation to narrow certificates to `client` or `server` as
   needed. The default is `serverAuth` **only** — `clientAuth` is an explicit
   opt-in.

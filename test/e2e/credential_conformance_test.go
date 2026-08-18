@@ -161,8 +161,8 @@ func defineCredentialConformanceTests() {
 
 			By("creating a workload pod requesting a client-auth certificate")
 			// The eku annotation names a key usage, not an identity, so it is
-			// accepted under the chart defaults: no interpolation, and nothing
-			// for the identity allowlist to judge.
+			// accepted under the chart defaults: no ${...} to resolve, and
+			// nothing for the identity allowlist to judge.
 			pod := createCertTestPod(certTestPod{
 				name:                   podName,
 				image:                  workloadProbeImage,

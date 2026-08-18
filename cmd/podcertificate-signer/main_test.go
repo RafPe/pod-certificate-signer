@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -11,6 +13,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
@@ -189,5 +192,58 @@ func TestCAReadyzCheck(t *testing.T) {
 	want := errors.New("ca watcher is down")
 	if err := caReadyzCheck(stubHealth{err: want})(nil); err == nil {
 		t.Error("readyz check must fail when the CA reports unhealthy")
+	}
+}
+
+// Issue #87: per-pod SPIFFE-style identity must work on a default install, so
+// ${...} interpolation ships on. It grants no new identity - a placeholder
+// resolves only from apiserver-verified request fields, and the resolved value
+// is still checked against the pod's verified identity by exact string equality
+// (docs/adr/0001-verified-identity-allowlist-boundary.md,
+// docs/adr/0002-annotation-interpolation-on-by-default.md).
+//
+// This is one half of the guarantee that examples/workload-pod.yaml issues out
+// of the box. The other half is
+// hygiene.TestWorkloadPodExampleIssuesUnderIdentityConstraints, which proves
+// the example needs no --allow-unverified-identities once interpolation is on.
+// That test pins EnableInterpolation itself and so cannot see this default
+// regress; this test says nothing about the example. Neither is meaningful
+// alone - do not remove or simplify one without the other.
+func TestAnnotationInterpolationEnabledByDefault(t *testing.T) {
+	if !defaultEnableAnnotationInterpolation {
+		t.Error("defaultEnableAnnotationInterpolation = false, want true: " +
+			"${...} interpolation ships on, see docs/adr/0002-annotation-interpolation-on-by-default.md")
+	}
+}
+
+// The binary default and the chart default are two independent copies of one
+// decision. Almost nobody runs the binary directly - the chart is the shipped
+// interface - so a flip that lands on only one side ships a posture the docs do
+// not describe, and does it silently.
+func TestChartInterpolationDefaultMatchesBinary(t *testing.T) {
+	path := filepath.Join(chartDir(t), "values.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile(%q) = %v", path, err)
+	}
+
+	var values struct {
+		Signer struct {
+			EnableAnnotationInterpolation *bool `json:"enable_annotation_interpolation"`
+		} `json:"signer"`
+	}
+	if err := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096).Decode(&values); err != nil {
+		t.Fatalf("decoding %s: %v", path, err)
+	}
+
+	got := values.Signer.EnableAnnotationInterpolation
+	if got == nil {
+		t.Fatalf("%s does not set signer.enable_annotation_interpolation; the chart would fall back to "+
+			"the Go zero value and render --enable-annotation-interpolation=false", path)
+	}
+	if *got != defaultEnableAnnotationInterpolation {
+		t.Errorf("chart signer.enable_annotation_interpolation = %t, binary "+
+			"defaultEnableAnnotationInterpolation = %t; the two must agree",
+			*got, defaultEnableAnnotationInterpolation)
 	}
 }

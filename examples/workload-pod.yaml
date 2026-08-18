@@ -3,8 +3,9 @@
 # The certificate is customized via userAnnotations on the podCertificate
 # projected volume source (kubelet copies these verbatim into the
 # spec.unverifiedUserAnnotations of the PodCertificateRequest). The ${...}
-# placeholders require the controller to run with
-# --enable-annotation-interpolation.
+# placeholders are resolved by default; a controller started with
+# --enable-annotation-interpolation=false (Helm:
+# signer.enable_annotation_interpolation: false) denies them instead.
 #
 # Every value below resolves to an identity this pod owns - one the signer
 # derives from the apiserver-verified fields of the PodCertificateRequest - so

@@ -35,8 +35,8 @@ func TestInterpolationResolvesFromPCR(t *testing.T) {
 	}
 }
 
-// disabled (default): values containing placeholders are rejected, never
-// issued verbatim.
+// disabled (the opt-out; interpolation ships on, see ADR-0002): values
+// containing placeholders are rejected, never issued verbatim.
 func TestInterpolationDisabledRejectsPlaceholders(t *testing.T) {
 	pcr := testPCR(map[string]string{
 		testSignerName + "-cn": "${pod.name}.${pod.namespace}",

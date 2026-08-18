@@ -68,6 +68,21 @@ var (
 
 const (
 	DefaultControllerName = "PodCertificateSigner"
+
+	// defaultEnableAnnotationInterpolation is the shipped default for
+	// --enable-annotation-interpolation. On: a ${...} placeholder resolves
+	// only from apiserver-verified PodCertificateRequest fields plus the
+	// operator's --cluster-fqdn, and the resolved value must still clear the
+	// verified-identity allowlist unless --allow-unverified-identities is set -
+	// so turning it on grants no identity the pod does not already own. See
+	// docs/adr/0002-annotation-interpolation-on-by-default.md.
+	//
+	// This is a named constant rather than a literal in the flag registration
+	// below because the flag is registered inside main() and is otherwise
+	// unreachable from a test. Keep it in sync with the chart value
+	// signer.enable_annotation_interpolation; the two are one decision stored
+	// twice and TestChartInterpolationDefaultMatchesBinary guards the drift.
+	defaultEnableAnnotationInterpolation = true
 )
 
 func init() {
@@ -105,9 +120,11 @@ func main() {
 	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 5, "maximum number of concurrent reconciles which can be run.")
 	flag.IntVar(&maxPreviousCACerts, "max-previous-ca-certs", 2, "maximum number of previous CA certificates to keep during CA rotation.")
 	flag.DurationVar(&reconcileTimeout, "reconcile-timeout", 5*time.Minute, "maximum duration of a reconcile before it times out.")
-	flag.BoolVar(&enableAnnotationInterpolation, "enable-annotation-interpolation", false,
+	flag.BoolVar(&enableAnnotationInterpolation, "enable-annotation-interpolation", defaultEnableAnnotationInterpolation,
 		"Allow ${...} placeholders (e.g. ${pod.name}, ${pod.serviceAccountName}) in certificate configuration annotations, "+
-			"resolved from the verified fields of the PodCertificateRequest.")
+			"resolved from the verified fields of the PodCertificateRequest. On by default; resolved values remain subject "+
+			"to the identity constraints unless --allow-unverified-identities is set. Set to false to deny any value "+
+			"containing ${...} instead of resolving it.")
 	flag.BoolVar(&honorCSRSANs, "honor-csr-sans", false,
 		"Honor DNS and IP SANs embedded in the kubelet-generated PKCS#10 CSR when no SAN annotation overrides them. "+
 			"CSR SANs stay subject to the identity constraints unless --allow-unverified-identities is set (CSR DNS SANs "+
