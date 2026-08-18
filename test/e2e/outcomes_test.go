@@ -208,13 +208,30 @@ func expectDenied(ref podRef, wantReason string) deniedRequest {
 // expectFailed is the counterpart of expectDenied for requests the signer
 // accepts but cannot fulfil.
 //
-// It has no caller yet: the only path that records a Failed condition is a
-// signing failure (ReasonSigningFailed), which needs a broken or unusable CA
-// and is therefore reachable only once the CA-lifecycle specs land. It is
-// defined here so that stage does not have to re-derive the assertion set, and
-// so the Failed shape is documented alongside the Denied one it must match.
+// It has no caller, and the CA-lifecycle specs established that it cannot have
+// one. The expectation was that a broken CA would reach it; it does not. Every
+// route to a Failed condition was walked:
 //
-//nolint:unused // wired up by the CA-lifecycle stage; see the comment above.
+//   - Unloadable CA material (mismatched pair, unparseable PEM, non-CA
+//     certificate) never becomes the signing CA at all. authority.load fails
+//     and leaves the last-good CA in place, so requests keep issuing and no
+//     request ever sees the bad material. ca_lifecycle_test.go proves this.
+//   - A CA that loads but cannot cover the requested lifetime returns
+//     ErrCASignerUnusable, which Reconcile routes to a requeue rather than a
+//     terminal outcome, deliberately: a rotation can make the same request
+//     succeed. ca_lifecycle_test.go proves the request stays pending and
+//     issues later.
+//   - The one remaining branch, a notAfter already in the past, needs a
+//     requested duration below the signer's one-minute backdate; requests
+//     under podcertificate.MinDuration (one hour) are denied long before
+//     signing.
+//
+// That leaves only an x509.CreateCertificate failure, which no pod manifest can
+// provoke. Keep the helper: it documents the Failed shape next to the Denied one
+// it must match, and it is the assertion set to reach for if a future signer
+// change makes SigningFailed reachable. Do not manufacture a caller for it.
+//
+//nolint:unused // deliberately uncalled; see the comment above.
 func expectFailed(ref podRef, wantReason string) deniedRequest {
 	GinkgoHelper()
 	return expectTerminalDenialOrFailure(ref, capiv1beta1.PodCertificateRequestConditionTypeFailed, wantReason)
@@ -276,13 +293,12 @@ func expectStatusFieldsCleared(g Gomega, pcr *capiv1beta1.PodCertificateRequest)
 // controller another chance to reconcile the request and asserting nothing
 // moved.
 //
-// The nudge is a metadata annotation on the request. The reconciler's event
-// filter only overrides CreateFunc (see SetupWithManager), and predicate.Funcs
-// returns true for an unset UpdateFunc, so writing an annotation enqueues a
-// real reconcile - which Reconcile then drops on its immutability check. To keep
-// this from degrading into a sleep in assertion's clothing if that ever changes,
-// the helper counts the controller's "immutable" log lines for this request
-// before and after the nudge and requires the count to rise.
+// The nudge is a metadata annotation on the request (see
+// annotateReconcileNudge), which enqueues a real reconcile - one Reconcile then
+// drops on its immutability check. To keep this from degrading into a sleep in
+// assertion's clothing if that ever changes, the helper counts the controller's
+// "immutable" log lines for this request before and after the nudge and requires
+// the count to rise.
 func expectTerminalConditionStable(ref podRef, want metav1.Condition) {
 	GinkgoHelper()
 
@@ -293,11 +309,7 @@ func expectTerminalConditionStable(ref podRef, want metav1.Condition) {
 
 	By("nudging the controller to reconcile the terminal request once more")
 	before := controllerLogLineCount(requestName, "PodCertificateRequest is immutable")
-	cmd := exec.Command("kubectl", "annotate", "podcertificaterequest", requestName,
-		"-n", ref.namespace, "--overwrite",
-		fmt.Sprintf("%s=%d", reconcileNudgeAnnotation, time.Now().UnixNano()))
-	output, err := utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to annotate request %s: %s", requestName, output)
+	annotateReconcileNudge(ref.namespace, requestName)
 
 	By("waiting for the controller to observe the nudged request")
 	Eventually(func() int {
@@ -316,6 +328,41 @@ func expectTerminalConditionStable(ref podRef, want metav1.Condition) {
 			"a re-recorded condition would move lastTransitionTime")
 		expectStatusFieldsCleared(g, pcr)
 	}, 5*time.Second, time.Second).Should(Succeed())
+}
+
+// nudgeRequest forces the controller to reconcile the request belonging to the
+// given pod once more.
+//
+// It is the podRef-shaped spelling of annotateReconcileNudge, for a spec that
+// has a pod rather than a request name in hand.
+func nudgeRequest(ref podRef) {
+	GinkgoHelper()
+
+	var requestName string
+	Eventually(func(g Gomega) {
+		requestName = findPodCertificateRequest(g, ref).Name
+	}).Should(Succeed())
+
+	annotateReconcileNudge(ref.namespace, requestName)
+}
+
+// annotateReconcileNudge writes a fresh value of reconcileNudgeAnnotation onto a
+// request, which enqueues a further reconcile of it.
+//
+// The reconciler's event filter only overrides CreateFunc (see
+// SetupWithManager), and predicate.Funcs returns true for an unset UpdateFunc,
+// so a metadata write is enough to get the request looked at again. What the
+// caller does with that reconcile differs: expectTerminalConditionStable wants
+// it dropped on the immutability check, the CA-lifecycle specs want a request
+// that is still pending retried without waiting out the workqueue's backoff.
+func annotateReconcileNudge(namespace, requestName string) {
+	GinkgoHelper()
+
+	cmd := exec.Command("kubectl", "annotate", "podcertificaterequest", requestName,
+		"-n", namespace, "--overwrite",
+		fmt.Sprintf("%s=%d", reconcileNudgeAnnotation, time.Now().UnixNano()))
+	output, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to annotate request %s: %s", requestName, output)
 }
 
 // expectRequestEvent waits for an event on the request belonging to the given

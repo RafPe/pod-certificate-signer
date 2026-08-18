@@ -480,7 +480,15 @@ var _ = Describe("Manager", Ordered, Serial, func() {
 			}).Should(Succeed())
 
 			By("generating a new CA and updating the CA secret")
-			rotatedCA, err := testutil.NewCA("rotated-ca.example.org", 24*time.Hour)
+			// caLifecycleValidity, not 24 hours, which is what this asked for
+			// until the CA-lifecycle specs were written. A CA valid for exactly
+			// the default certificate lifetime cannot sign a default certificate
+			// at all: the signer backdates notBefore by a minute, so the
+			// certificate would outlive the CA by that minute and every request
+			// returns ErrCASignerUnusable. This spec never noticed - it asserts
+			// on the published bundle and issues nothing afterwards - but it
+			// leaves that CA current for whatever runs next. See the constant.
+			rotatedCA, err := testutil.NewCA("rotated-ca.example.org", caLifecycleValidity)
 			Expect(err).NotTo(HaveOccurred(), "Failed to generate the rotated CA")
 			updateCASecret(rotatedCA)
 
@@ -499,6 +507,14 @@ var _ = Describe("Manager", Ordered, Serial, func() {
 		})
 	})
 
+	// The CA lifecycle specs go last of the CA-mutating containers: they
+	// deliberately rotate, break and restore the CA, so nothing that assumes a
+	// stable signer may follow them. See ca_lifecycle_test.go.
+	defineCALifecycleTests()
+
+	// The admission specs are dry-run creates judged by a
+	// ValidatingAdmissionPolicy, so they neither reach the signer nor care what
+	// state the CA was left in.
 	defineAdmissionPolicyTests()
 })
 

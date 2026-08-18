@@ -1,0 +1,87 @@
+name: E2E Tests (nightly)
+
+# The per-PR e2e gate (test-e2e.yml) runs `make test-e2e`, whose default
+# E2E_LABEL_FILTER excludes the `nightly` label. Those specs are correct and
+# wanted - CA restart bootstrap, previous-CA retention, unusable-replacement
+# recovery and ClusterTrustBundle drift - but each one is dominated by kubelet's
+# mounted-secret refresh and would push the pull-request gate well past its
+# budget. This workflow is what actually runs them. Without it the label would
+# be a coverage hole dressed up as a partition: the specs would exist, look
+# covered, and execute nowhere.
+on:
+  schedule:
+    # Daily at 03:17 UTC. An off-peak minute avoids the scheduled runs GitHub
+    # drops when too many workflows fire on the hour, matching security.yaml.
+    - cron: '17 3 * * *'
+  # Scheduled workflows only run from the default branch, so a change to this
+  # file or to the specs it covers cannot be exercised until it is merged.
+  # workflow_dispatch is what makes it runnable on demand rather than only by
+  # waiting a day.
+  workflow_dispatch:
+
+# Least privilege: the suite only needs to read the checked-out source. It
+# builds and loads images into a local kind cluster and publishes nothing.
+permissions:
+  contents: read
+
+# One nightly run at a time, and never cancelled: a half-finished run of the
+# only job that covers these specs is worth less than letting it finish.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  test-e2e-nightly:
+    name: Run the full suite on Ubuntu
+    runs-on: ubuntu-latest
+    # The full set adds a CA rotation's worth of kubelet propagation per
+    # nightly spec on top of the per-PR suite. Generous, but bounded: a hung
+    # run must not sit on the runner until GitHub's six-hour default.
+    timeout-minutes: 90
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install kind
+        env:
+          KIND_VERSION: v0.31.0
+        run: |
+          KIND_BIN="${RUNNER_TEMP}/kind"
+          curl --fail --location --output "${KIND_BIN}" \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          chmod +x "${KIND_BIN}"
+          sudo mv "${KIND_BIN}" /usr/local/bin/kind
+
+      - name: Verify kind installation
+        run: kind version
+
+      # Same reasoning as the per-PR gate: the e2e package is behind
+      # //go:build e2e, so nothing else looks at it. Fail in seconds rather than
+      # after the cluster comes up.
+      - name: Vet and lint the tagged e2e package
+        run: make vet-e2e lint-e2e
+
+      # The guard that keeps this job honest. A renamed label or a mistyped
+      # filter would leave the nightly set empty, and an empty set passes - so
+      # this job would go green having run none of the specs it exists for.
+      # `make check-e2e-partition` dry-runs both tiers with
+      # -ginkgo.fail-on-empty, which turns that into a failure. It is also a
+      # prerequisite of test-e2e-nightly, so it cannot be skipped by editing
+      # this file alone.
+      - name: Verify the label partition still selects specs in both tiers
+        run: make check-e2e-partition
+
+      - name: Running the full e2e suite
+        run: make test-e2e-nightly
+
+      # make test-e2e tears the cluster down from an EXIT trap, so this is a
+      # backstop for the cases the trap cannot cover: a cancelled job, or the
+      # timeout above killing make outright.
+      - name: Tear down the kind cluster
+        if: always()
+        run: kind delete cluster --name pcs-e2e || true
