@@ -250,26 +250,26 @@ func TestTrustBundleRotation(t *testing.T) {
 	assertBundle(ca1)
 
 	// Reloading the same CA must not create history entries.
-	if err := ca.load(); err != nil {
+	if _, err := ca.load(); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
 	assertBundle(ca1)
 
 	ca2 := writeCA(t, dir, "ca-2.example.org", 24*time.Hour)
-	if err := ca.load(); err != nil {
+	if _, err := ca.load(); err != nil {
 		t.Fatalf("reload after rotation: %v", err)
 	}
 	assertBundle(ca2, ca1)
 
 	ca3 := writeCA(t, dir, "ca-3.example.org", 24*time.Hour)
-	if err := ca.load(); err != nil {
+	if _, err := ca.load(); err != nil {
 		t.Fatalf("reload after rotation: %v", err)
 	}
 	assertBundle(ca3, ca1, ca2)
 
 	// A fourth CA must evict the oldest previous certificate (window of 2).
 	ca4 := writeCA(t, dir, "ca-4.example.org", 24*time.Hour)
-	if err := ca.load(); err != nil {
+	if _, err := ca.load(); err != nil {
 		t.Fatalf("reload after rotation: %v", err)
 	}
 	assertBundle(ca4, ca2, ca3)

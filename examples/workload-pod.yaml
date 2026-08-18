@@ -14,6 +14,13 @@
 # literal name, an IP address) needs that escape hatch; the commented ip-san
 # below is the example of one.
 #
+# Every value below resolves to an identity this pod owns - one the signer
+# derives from the apiserver-verified fields of the PodCertificateRequest - so
+# the manifest issues under the controller's identity constraints as they ship,
+# with no --allow-unverified-identities. Anything the pod cannot prove (a
+# literal name, an IP address) needs that escape hatch; the commented ip-san
+# below is the example of one.
+#
 # The signer's ClusterTrustBundle is mounted alongside the credential bundle,
 # so the pod ends up with:
 #   /var/run/x509/credentialbundle.pem - private key + issued certificate chain

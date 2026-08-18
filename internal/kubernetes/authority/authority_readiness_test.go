@@ -155,7 +155,7 @@ func TestPersistentlyUnloadableCAEventuallyFailsReadiness(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if err := ca.reloadWithRetry(ctx, log.FromContext(ctx)); err == nil {
+	if _, err := ca.reloadWithRetry(ctx, log.FromContext(ctx)); err == nil {
 		t.Fatal("reloadWithRetry() = nil, want error for a permanently unloadable CA")
 	}
 
