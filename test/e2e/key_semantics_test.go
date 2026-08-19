@@ -378,17 +378,15 @@ func expectConformantLeaf(
 	Expect(leaf.SerialNumber).NotTo(BeNil())
 	Expect(leaf.SerialNumber.Sign()).To(Equal(1), "a certificate serial number must be positive and non-zero")
 	Expect(leaf.IsCA).To(BeFalse(), "a workload certificate must never be a CA")
-	// The signer emits no basicConstraints extension on a leaf at all, which is
-	// why this pins the absence rather than requiring an explicit cA:FALSE.
-	// RFC 5280 6.1.4 makes the absence safe - a certificate without
-	// basicConstraints must not be used to verify signatures on other
-	// certificates, and Go's verifier enforces exactly that - so this is the
-	// behavior as designed, not a gap the spec is papering over. If the signer
-	// ever starts asserting the extension, it must assert cA:FALSE, and this
-	// says so by failing.
-	Expect(leaf.BasicConstraintsValid).To(BeFalse(),
-		"the signer emits leaves without basicConstraints; an extension appearing here must be reviewed, "+
-			"and must carry cA:FALSE")
+	// The signer asserts basicConstraints with cA:FALSE rather than leaving the
+	// extension out (ADR-0003). RFC 5280 6.1.4 already makes the absence safe
+	// for a conforming verifier, but the signer cannot enumerate the TLS stacks
+	// that will verify its output, so it says end-entity explicitly instead of
+	// relying on the verifier to infer it. BasicConstraintsValid is Go's report
+	// that the extension was present in the DER, so this pins presence; IsCA
+	// above pins the value.
+	Expect(leaf.BasicConstraintsValid).To(BeTrue(),
+		"every issued leaf must carry a basicConstraints extension asserting cA:FALSE")
 
 	By("verifying the key usage matches the key type and the extended key usage the default")
 	Expect(leaf.KeyUsage).To(Equal(want.keyUsage),

@@ -1,14 +1,18 @@
 package authority
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"errors"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -154,6 +158,64 @@ func TestSignIssuesCertificateChain(t *testing.T) {
 	}
 	if !pc.IsValid() {
 		t.Error("freshly issued certificate must be valid")
+	}
+}
+
+// basicConstraintsOID is id-ce-basicConstraints (RFC 5280 4.2.1.9).
+var basicConstraintsOID = asn1.ObjectIdentifier{2, 5, 29, 19}
+
+// Every issued leaf must assert basicConstraints with cA:FALSE and without a
+// pathLenConstraint (ADR-0003). The assertions run against the certificate
+// parsed back from DER rather than against the template, so they prove what
+// was emitted rather than what was requested.
+func TestSignAssertsBasicConstraintsCAFalse(t *testing.T) {
+	dir := t.TempDir()
+	writeCA(t, dir, "ca.example.org", 24*time.Hour)
+	ca, err := New(dir+"/tls.crt", dir+"/tls.key")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	pc, err := ca.Sign(testConfig(t))
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	leaf, err := x509.ParseCertificate(pc.Certificate())
+	if err != nil {
+		t.Fatalf("parse issued certificate: %v", err)
+	}
+
+	if !leaf.BasicConstraintsValid {
+		t.Error("issued leaf must carry the basicConstraints extension")
+	}
+	if leaf.IsCA {
+		t.Error("issued leaf must assert cA:FALSE")
+	}
+	if leaf.MaxPathLen != -1 || leaf.MaxPathLenZero {
+		t.Errorf("pathLenConstraint must be absent: MaxPathLen = %d, MaxPathLenZero = %t",
+			leaf.MaxPathLen, leaf.MaxPathLenZero)
+	}
+
+	// x509.Certificate exposes no typed field for the criticality of
+	// basicConstraints, so read it off the raw extension. The value is an empty
+	// SEQUENCE because DER omits a field encoded at its DEFAULT and cA is
+	// BOOLEAN DEFAULT FALSE - which pins cA:FALSE and the absent
+	// pathLenConstraint in the bytes themselves, where no parser sentinel can
+	// blur them.
+	idx := slices.IndexFunc(leaf.Extensions, func(ext pkix.Extension) bool {
+		return ext.Id.Equal(basicConstraintsOID)
+	})
+	if idx < 0 {
+		t.Fatalf("no extension with OID %s in the issued leaf", basicConstraintsOID)
+	}
+	ext := leaf.Extensions[idx]
+	if !ext.Critical {
+		t.Error("basicConstraints must be emitted critical, as crypto/x509 does")
+	}
+	if want := []byte{0x30, 0x00}; !bytes.Equal(ext.Value, want) {
+		t.Errorf("basicConstraints value = % x, want % x (empty SEQUENCE: cA:FALSE, no pathLenConstraint)",
+			ext.Value, want)
 	}
 }
 

@@ -298,6 +298,16 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 		ExtKeyUsage:        pcConfig.ExtKeyUsage,
 		NotBefore:          nbf,
 		NotAfter:           naf,
+		// BasicConstraintsValid is what makes Go emit the basicConstraints
+		// extension at all; IsCA stays at its zero value, so the pair asserts
+		// cA:FALSE on every leaf. DER omits a field at its DEFAULT, so the
+		// encoded extension is an empty SEQUENCE - that is cA:FALSE, not a
+		// missing value. No pathLenConstraint: it is meaningless with cA:FALSE.
+		// crypto/x509 marks the extension critical, which is what we want: RFC
+		// 5280 4.2.1.9 already requires it critical on CA certificates, so any
+		// verifier that can validate a chain processes it. Why it is asserted
+		// at all: ADR-0003.
+		BasicConstraintsValid: true,
 	}
 
 	issuedCertificate, err := x509.CreateCertificate(rand.Reader, template, ca.certificate, pcConfig.PublicKey, ca.signer)
