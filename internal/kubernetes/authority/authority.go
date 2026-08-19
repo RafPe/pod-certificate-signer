@@ -468,6 +468,9 @@ func (ca *CertificateAuthority) watchLoop(
 			}
 
 			logger.Info("reloading CA certificate")
+			// Read before the reload: reloadWithRetry clears the streak on
+			// success.
+			wasFailing := ca.reloadFailing()
 			changed, err := ca.reloadWithRetry(ctx, logger)
 			if err != nil {
 				// The last-good CA is retained, so signing keeps working.
@@ -482,6 +485,15 @@ func (ca *CertificateAuthority) watchLoop(
 				// watched directories, events arriving after the drain window,
 				// or a tick that already picked the material up. Only the one
 				// that actually changed the CA is worth publishing.
+				//
+				// Recovery is the exception worth announcing: correcting a
+				// mismatched pair restores the same certificate, so nothing
+				// changed, but "the CA is loadable again" is exactly what an
+				// operator who just fixed it is watching for.
+				if wasFailing {
+					logger.Info("CA certificate reloaded successfully", "recovered", true)
+					continue
+				}
 				logger.V(1).Info("CA certificate on disk is unchanged, nothing to publish")
 				continue
 			}
@@ -526,6 +538,8 @@ func (ca *CertificateAuthority) drainEvents(ctx context.Context, logger logr.Log
 // also bounds the log stream: a permanently unloadable CA costs one line per
 // interval rather than the whole retry burst, forever.
 func (ca *CertificateAuthority) reconcileOnce(logger logr.Logger, notify chan<- struct{}, cause string) {
+	// Read before the reload: recordReloadResult below clears the streak.
+	wasFailing := ca.reloadFailing()
 	changed, err := ca.load()
 
 	// Recorded regardless of whether anything changed: a readable CA clears the
@@ -540,6 +554,14 @@ func (ca *CertificateAuthority) reconcileOnce(logger logr.Logger, notify chan<- 
 	case changed:
 		logger.Info("CA certificate reloaded successfully", "cause", cause)
 		notifyChanged(notify)
+	case wasFailing:
+		// Recovery is worth announcing even though nothing changed. Correcting
+		// a mismatched pair restores the *same* certificate, so `changed` is
+		// false and the V(1) line below would be the only record - invisible at
+		// the default verbosity, to an operator who has just fixed the CA and is
+		// watching for confirmation. No notify: nothing moved, so nothing needs
+		// republishing.
+		logger.Info("CA certificate reloaded successfully", "cause", cause, "recovered", true)
 	default:
 		logger.V(1).Info("CA certificate on disk is unchanged", "cause", cause)
 	}
@@ -599,6 +621,18 @@ func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr
 		case <-timer.C:
 		}
 	}
+}
+
+// reloadFailing reports whether the last reload attempt left the CA in a failed
+// state, so a caller can tell a reload that recovered from one that was routine.
+//
+// Read before the reload it describes, since recordReloadResult clears the
+// streak. Only the watch goroutine reloads, so no attempt can interleave.
+func (ca *CertificateAuthority) reloadFailing() bool {
+	ca.healthMu.Lock()
+	defer ca.healthMu.Unlock()
+
+	return ca.reloadFailures > 0
 }
 
 // recordReloadResult stores the outcome of the most recent reload attempt and
