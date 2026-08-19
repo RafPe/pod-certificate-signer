@@ -26,6 +26,8 @@ grep -q 'release/next' .github/workflows/prepare-release.yml ||
 	fail "Prepare Release must own release/next"
 grep -q 'autorelease: pending' .github/workflows/prepare-release.yml ||
 	fail "release PR must carry autorelease: pending"
+grep -q 'labels/autorelease%3A%20pending' .github/workflows/prepare-release.yml ||
+	fail "Prepare Release must confirm the automation label exists before it pushes"
 
 grep -q "head.ref == 'release/next'" .github/workflows/release.yml ||
 	fail "Release must only accept the generated release branch"
