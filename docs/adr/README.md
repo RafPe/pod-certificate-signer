@@ -27,3 +27,4 @@ when an ADR is required and how one is reviewed.
 | --- | ----- | ------ |
 | [0001](0001-verified-identity-allowlist-boundary.md) | Bound the verified-identity allowlist to identities the signer emits, plus the service-account short DNS form and SPIFFE ID | Accepted |
 | [0002](0002-annotation-interpolation-on-by-default.md) | Ship `--enable-annotation-interpolation` on by default | Accepted |
+| [0005](0005-bounded-metrics-surface.md) | Expose a bounded metrics surface, and never label a metric with a per-request identity | Proposed |
