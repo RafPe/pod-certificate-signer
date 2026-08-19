@@ -29,6 +29,7 @@ import (
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
 	podcertificate "github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
 
 	capiv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -350,6 +351,10 @@ func (r *PodCertificateRequestReconciler) recordFailure(ctx context.Context, pcr
 	var te *TerminalError
 	if !errors.As(err, &te) {
 		log.Error(err, "transient error; requeueing")
+		// Count every requeue, then announce the CA-unusable ones. The metric is
+		// unconditional so a rate is meaningful; the event is throttled per
+		// request, since the requeue repeats until the CA is rotated.
+		metrics.PodCertificateRequestRequeues.WithLabelValues(requeueReason(err)).Inc()
 		r.recordCASignerUnusable(pcr, err)
 		return ctrl.Result{}, err
 	}
@@ -402,7 +407,37 @@ func (r *PodCertificateRequestReconciler) recordCASignerUnusable(pcr *capiv1beta
 // reads the event. Deliberately no status write: the drop is not a terminal
 // outcome, and the event is the only breadcrumb an operator gets.
 func (r *PodCertificateRequestReconciler) recordPodGone(pcr *capiv1beta1.PodCertificateRequest, noteFmt string, args ...any) {
+	// The event names the object and is the only breadcrumb its owner gets; the
+	// metric carries the rate, which is what says the controller is losing a
+	// race with pod churn rather than dropping the odd stale request.
+	metrics.PodCertificateRequestDrops.WithLabelValues(metrics.ReasonAssociatedPodGone).Inc()
 	r.EventRecorder.Eventf(pcr, nil, corev1.EventTypeWarning, string(ReasonAssociatedPodGone), "SignPodCertificateRequest", noteFmt, args...)
+}
+
+// requeueReason classifies a transient error for the requeue counter. The
+// classification is a closed set computed here: the error text itself is
+// unbounded (it can carry std-lib and apiserver detail) and belongs in the log,
+// never in a label.
+func requeueReason(err error) string {
+	if errors.Is(err, authority.ErrCASignerUnusable) {
+		return metrics.ReasonCASignerUnusable
+	}
+
+	return metrics.ReasonTransient
+}
+
+// requestOutcome maps a condition type onto the outcome label. The three
+// condition types the signer writes are the closed set the certificates API
+// defines; anything else would be a condition this controller never records.
+func requestOutcome(conditionType string) string {
+	switch conditionType {
+	case capiv1beta1.PodCertificateRequestConditionTypeIssued:
+		return metrics.OutcomeIssued
+	case capiv1beta1.PodCertificateRequestConditionTypeDenied:
+		return metrics.OutcomeDenied
+	default:
+		return metrics.OutcomeFailed
+	}
 }
 
 func (r *PodCertificateRequestReconciler) recordIssued(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, cert *podcertificate.PodCertificate) error {
@@ -451,6 +486,11 @@ func (r *PodCertificateRequestReconciler) recordOutcome(ctx context.Context, pcr
 		return nil
 	}
 
+	// Counted here for the same reason the event is emitted here: the outcome
+	// is not real until the write that carries it has persisted. Counting
+	// before would inflate the issued rate with certificates no request ever
+	// received.
+	metrics.PodCertificateRequests.WithLabelValues(requestOutcome(conditionType), string(reason)).Inc()
 	r.EventRecorder.Eventf(pcr, nil, eventType, string(reason), "SignPodCertificateRequest", message)
 	return nil
 }

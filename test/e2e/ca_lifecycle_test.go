@@ -149,28 +149,38 @@ const maxPreviousCACerts = 2
 // signing fails with ErrCASignerUnusable.
 const shortCAValidity = 30 * time.Minute
 
-// Controller log lines the CA-lifecycle specs count.
+// Controller log lines the CA-lifecycle specs still count.
 //
 // Counting a log line is not the assertion; it is what makes the assertion
 // about the right moment. A spec that only waited for "the bundle did not
 // change" would pass against a controller that had not yet noticed the write at
 // all, which is the false pass these lines rule out.
+//
+// Two of these greps are gone, replaced by metric samples (see
+// metrics_scrape_test.go): a metric says what the controller *did*, where a log
+// line says what it *said*, and the difference turned this suite red once
+// already when a log level moved. The two below are deliberately not migrated,
+// and neither is the immutability grep in outcomes_test.go:
+//
+//   - caReloadFailedLine is asserted together with classification and detail
+//     needles that are standard-library error strings. They are unbounded and
+//     unstable, which is exactly what a metric label may never carry, so a
+//     metric could replace the count but never the claim that the controller
+//     said *why* it refused the material. Half a migration invites the belief
+//     that the migration is done.
+//   - caBootstrapLine is emitted before the manager starts, so the metrics
+//     endpoint is not listening when it happens. A gauge can show the history
+//     is non-empty, but the spec's claim is provenance - that it came from the
+//     published ClusterTrustBundle - and only the log line carries that.
 const (
 	// caReloadFailedLine is logged by authority.watchLoop once a reload has
 	// exhausted its retry budget. The error it carries names why, which is what
 	// distinguishes the invalid-material cases from each other.
 	caReloadFailedLine = "failed to reload CA certificate after retries"
 
-	// caReloadSucceededLine is logged after a reload that took.
-	caReloadSucceededLine = "CA certificate reloaded successfully"
-
 	// caBootstrapLine is logged by fetchPreviousCAs when a starting process
 	// seeds its previous-CA history from the published ClusterTrustBundle.
 	caBootstrapLine = "bootstrapped previous CA certificates from ClusterTrustBundle"
-
-	// transientRequeueLine is logged by the reconciler for an error it treats as
-	// retryable rather than terminal.
-	transientRequeueLine = "transient error; requeueing"
 )
 
 // defineCALifecycleTests is called from the top-level Manager container, after
@@ -188,6 +198,9 @@ func defineCALifecycleTests() {
 		var caA, caB *testutil.KeyPair
 
 		BeforeAll(func() {
+			By("authorizing the metrics scrapes these specs assert on")
+			authorizeMetricsScrapes()
+
 			By("rotating to a CA this container generated, so every spec below starts from a known one")
 			caA = newLifecycleCA("ca-lifecycle-a")
 			rotateCA(caA)
@@ -507,12 +520,31 @@ func defineCALifecycleTests() {
 					expectControllerStaysReady()
 
 					By("restoring loadable material and verifying recovery needs no restart")
-					reloadsBefore := controllerLogLineCount(caReloadSucceededLine)
+					// Asserted on the metrics endpoint rather than on a log
+					// line. The claim is behavioural - "a good write after a bad
+					// one reloads on its own" - but the old assertion was
+					// written against a log level and an emission condition, so
+					// changing when the controller logs turned this spec red for
+					// no behavioural reason. That is the wrong coupling.
+					//
+					// The observable is the last-success timestamp, not the
+					// changed counter: restoring the material the signer already
+					// had is a successful reload that changes nothing, which is
+					// precisely the recovery case. The streak returning to zero
+					// is the same fact from the readiness side.
+					var successBefore float64
+					Eventually(func(g Gomega) {
+						successBefore = scrapeMetricValue(g, caReloadLastSuccessGauge)
+					}, caPropagationTimeout, metricsScrapePollInterval).Should(Succeed())
+
 					applyCAMaterial(good.CertPEM, good.KeyPEM)
 					Eventually(func(g Gomega) {
-						g.Expect(controllerLogLineCount(caReloadSucceededLine)).To(BeNumerically(">", reloadsBefore),
+						body := scrapeControllerMetrics(g)
+						g.Expect(metricValue(g, body, caReloadLastSuccessGauge)).To(BeNumerically(">", successBefore),
 							"a good write after a bad one must reload on its own")
-					}, caPropagationTimeout).Should(Succeed())
+						g.Expect(metricValue(g, body, caReloadFailuresGauge)).To(BeZero(),
+							"a successful reload must clear the failure streak, so readiness recovers without a restart")
+					}, caPropagationTimeout, metricsScrapePollInterval).Should(Succeed())
 
 					By("verifying the published bundle came back unchanged")
 					// Restoring the same CA is not a rotation, so the history must
@@ -556,7 +588,18 @@ func defineCALifecycleTests() {
 				By("rotating to a CA that loads but expires before a default certificate would")
 				short, err := testutil.NewCA("ca-lifecycle-short", shortCAValidity)
 				Expect(err).NotTo(HaveOccurred(), "Failed to generate the short-lived CA")
-				requeuesBefore := controllerLogLineCount(transientRequeueLine, "exceeds the signer CA validity")
+				// The metric collapses both ErrCASignerUnusable producers - an
+				// expired signer and a lifetime the CA cannot cover - into one
+				// series, because errors.Is is the only discrimination the
+				// reconciler makes. The old grep proved the second branch
+				// specifically. This setup guarantees which one is hit (a CA
+				// that loads but expires before a default certificate would),
+				// so the weaker assertion still tests the intended thing, but
+				// it is weaker and that is worth knowing.
+				var requeuesBefore float64
+				Eventually(func(g Gomega) {
+					requeuesBefore = scrapeMetricValue(g, caUnusableRequeueSeries)
+				}, caPropagationTimeout, metricsScrapePollInterval).Should(Succeed())
 				rotateCA(short)
 
 				By("creating a workload whose default 24-hour lifetime cannot fit inside that CA")
@@ -564,10 +607,10 @@ func defineCALifecycleTests() {
 
 				By("verifying the controller treats the unusable CA as transient and requeues")
 				Eventually(func(g Gomega) {
-					g.Expect(controllerLogLineCount(transientRequeueLine, "exceeds the signer CA validity")).
+					g.Expect(scrapeMetricValue(g, caUnusableRequeueSeries)).
 						To(BeNumerically(">", requeuesBefore),
-							"an unusable CA must be logged as a transient error, not a terminal one")
-				}, caPropagationTimeout).Should(Succeed())
+							"an unusable CA must be counted as a requeue, not as a terminal outcome")
+				}, caPropagationTimeout, metricsScrapePollInterval).Should(Succeed())
 
 				By("verifying the request records no terminal outcome")
 				// This is the contract the reconciler states at the

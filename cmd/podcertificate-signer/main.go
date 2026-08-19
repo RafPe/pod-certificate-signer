@@ -58,6 +58,7 @@ import (
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
+	signermetrics "github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -87,7 +88,6 @@ const (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	metrics.Registry.MustRegister(ctbPublishFailuresTotal)
 
 	// +kubebuilder:scaffold:scheme
 }
@@ -209,6 +209,17 @@ func main() {
 	)
 	if err != nil {
 		setupLog.Error(err, "unable to create certificate authority")
+		os.Exit(1)
+	}
+
+	// The signer's custom metric surface is bounded by decision, not by
+	// convenience: see ADR-0005 (docs/adr/0005-bounded-metrics-surface.md).
+	// Registering into controller-runtime's registry puts it on the manager's
+	// existing SecureServing metrics endpoint, so there is no new transport.
+	// This runs here rather than in init() because the CA gauges are read from
+	// the loaded CA at scrape time, so the collector needs it to exist.
+	if err := signermetrics.Register(metrics.Registry, signermetrics.NewCACollector(ca)); err != nil {
+		setupLog.Error(err, "unable to register the signer metrics")
 		os.Exit(1)
 	}
 
@@ -400,15 +411,6 @@ func (*caWatchRunnable) NeedLeaderElection() bool { return false }
 // (e.g. a manual edit or a lost event).
 const ctbDriftRepairInterval = 10 * time.Minute
 
-// ctbPublishFailuresTotal counts ClusterTrustBundle publish attempts that
-// failed after exhausting their retry budget. It is registered with the
-// controller-runtime metrics registry so it is scraped on the manager's
-// metrics endpoint.
-var ctbPublishFailuresTotal = prometheus.NewCounter(prometheus.CounterOpts{
-	Name: "ctb_publish_failures_total",
-	Help: "Total number of ClusterTrustBundle publish attempts that failed after retries.",
-})
-
 // ctbPublisher reconciles the signer's ClusterTrustBundle towards the current
 // CA. It publishes when it starts, on every CA reload event, and on a periodic
 // drift-repair tick. Publishes are retried with exponential backoff and are
@@ -421,7 +423,10 @@ type ctbPublisher struct {
 	events   <-chan struct{}
 	interval time.Duration
 	backoff  wait.Backoff
-	failures prometheus.Counter
+	// publishes counts every publish attempt by its result, so a leader that
+	// stopped publishing is distinguishable from one that is publishing
+	// successfully - which a failure-only counter never was.
+	publishes *prometheus.CounterVec
 
 	// runMu is a single-flight guard: TryLock lets a reconcile skip when
 	// another is already publishing.
@@ -472,21 +477,42 @@ func (r *ctbPublisher) reconcile(ctx context.Context, logger logr.Logger) bool {
 	}
 	defer r.runMu.Unlock()
 
+	var op controllerutil.OperationResult
 	err := retry.OnError(r.backoff, func(error) bool { return true }, func() error {
-		return r.publishOnce(ctx, logger)
+		var perr error
+		op, perr = r.publishOnce(ctx, logger)
+		return perr
 	})
 	r.recordPublishResult(err)
 	if err != nil {
-		r.failures.Inc()
+		r.publishes.WithLabelValues(signermetrics.ResultFailed).Inc()
 		logger.Error(err, "unable to update ClusterTrustBundle after retries")
+		return true
 	}
+	r.publishes.WithLabelValues(publishResult(op)).Inc()
 	return true
+}
+
+// publishResult maps CreateOrPatch's OperationResult onto the bounded result
+// label. OperationResult is a closed set of Go constants, and the mutate
+// function touches only .spec, so the status results cannot occur; they are
+// folded into "updated" rather than minting a label value the surface does not
+// budget for.
+func publishResult(op controllerutil.OperationResult) string {
+	switch op {
+	case controllerutil.OperationResultNone:
+		return signermetrics.ResultUnchanged
+	case controllerutil.OperationResultCreated:
+		return signermetrics.ResultCreated
+	default:
+		return signermetrics.ResultUpdated
+	}
 }
 
 // publishOnce performs a single CreateOrPatch of the ClusterTrustBundle to the
 // current CA trust bundle. The mutate function overwrites (never merges) the
 // trust bundle, so CA pruning in the rolling window is preserved.
-func (r *ctbPublisher) publishOnce(ctx context.Context, logger logr.Logger) error {
+func (r *ctbPublisher) publishOnce(ctx context.Context, logger logr.Logger) (controllerutil.OperationResult, error) {
 	bundle := r.signer.ClusterTrustBundle()
 	// Use the direct API client: reading through the manager's cache-backed
 	// client would start an informer for ClusterTrustBundles, which requires
@@ -496,10 +522,10 @@ func (r *ctbPublisher) publishOnce(ctx context.Context, logger logr.Logger) erro
 		return nil
 	})
 	if err != nil {
-		return err
+		return op, err
 	}
 	logger.Info("reconciled ClusterTrustBundle", "name", bundle.Name, "operation", op)
-	return nil
+	return op, nil
 }
 
 // recordPublishResult stores the outcome of the most recent reconcile.
@@ -536,7 +562,7 @@ func newCARunnables(c client.Client, s *signer.Signer, ca *authority.Certificate
 			Factor:   2.0,
 			Jitter:   0.1,
 		},
-		failures: ctbPublishFailuresTotal,
+		publishes: signermetrics.ClusterTrustBundlePublishAttempts,
 	}
 	return watcher, publisher
 }

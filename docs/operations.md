@@ -91,8 +91,12 @@ CA. It publishes on startup (so a newly-elected leader publishes from the curren
 in-memory CA), on every CA reload event, and on a periodic **drift-repair tick**
 (every 10 minutes) that re-publishes even without a reload — repairing a manual
 edit or a lost event. Publishes are single-flight and retried with exponential
-backoff; failures after the retry budget increment the
-`ctb_publish_failures_total` metric and fail the leader's readiness.
+backoff; failures after the retry budget increment
+`podcertificatesigner_clustertrustbundle_publish_attempts_total{result="failed"}`
+and fail the leader's readiness. Every attempt is counted, so
+`{result="unchanged"}` standing still is how you see a leader that stopped
+publishing, and `{result="updated"}` on a drift-repair tick with no CA rotation
+to explain it means somebody edited the bundle and the signer overwrote them.
 
 Inspect the published bundle:
 
@@ -101,6 +105,59 @@ kubectl get clustertrustbundle
 kubectl get clustertrustbundle <name> -o jsonpath='{.spec.trustBundle}' \
   | openssl crl2pkcs7 -nocrl -certfile /dev/stdin | openssl pkcs7 -print_certs -noout
 ```
+
+## Metrics
+
+The signer exposes nine custom metric families under the
+`podcertificatesigner_` prefix, on the same authenticated endpoint as
+controller-runtime's (see [ADR-0005](adr/0005-bounded-metrics-surface.md)).
+**No label carries a pod, namespace, request or certificate identity**, so the
+number of time series is the same on a 10-pod cluster as on a 10,000-pod one.
+
+| Metric | Type | Labels | What it answers |
+| --- | --- | --- | --- |
+| `podcertificaterequests_total` | counter | `outcome`, `reason` | Are we denying or failing requests? Carries the SLI. |
+| `podcertificaterequest_requeues_total` | counter | `reason` | Is something retrying forever? |
+| `podcertificaterequest_drops_total` | counter | `reason` | Are requests outliving their pods? |
+| `ca_reload_attempts_total` | counter | `result` | Did the CA rotate, and are reloads failing? |
+| `ca_reload_consecutive_failures` | gauge | — | Is this replica about to leave the Service? |
+| `ca_reload_last_success_timestamp_seconds` | gauge | — | Are reloads happening at all? |
+| `ca_expiration_timestamp_seconds` | gauge | — | Will the signer stop being able to sign, and when? |
+| `clustertrustbundle_publish_attempts_total` | counter | `result` | Is the leader still publishing — and is somebody else editing the bundle? |
+| `trust_bundle_certificates` | gauge | — | How many anchors are we publishing? |
+
+The two outages an operator cannot otherwise see coming, and the expressions
+that catch them:
+
+```promql
+# The signer is about to be unable to issue a default-duration (24h)
+# certificate. Past this point requests requeue silently and pods sit in
+# ContainerCreating with nothing on the request explaining why.
+podcertificatesigner_ca_expiration_timestamp_seconds - time() < 86400
+
+# The reload loop has stopped. It reloads every 60s regardless of events, so
+# nothing failing is not the same as everything working: a dropped watch or a
+# wedged ticker produces no failures at all.
+time() - podcertificatesigner_ca_reload_last_success_timestamp_seconds > 300
+```
+
+Two more worth having. The first buys roughly five minutes' warning before
+readiness flips; the second says somebody edited the cluster's trust anchors
+and the signer overwrote them:
+
+```promql
+podcertificatesigner_ca_reload_consecutive_failures >= 3   # for: 5m
+
+increase(podcertificatesigner_clustertrustbundle_publish_attempts_total{result="updated"}[1h]) > 0
+  unless
+increase(podcertificatesigner_ca_reload_attempts_total{result="changed"}[1h]) > 0
+```
+
+Two things to know when reading these. `ca_reload_attempts_total` counts
+*attempts*: one failing burst retries up to five times, so the counter can rise
+by five where the log rose by one. And `trust_bundle_certificates` reports the
+in-memory bundle the signer *would* publish, not a read of the
+`ClusterTrustBundle` object, so it does not detect drift in what is published.
 
 ## Upgrades
 

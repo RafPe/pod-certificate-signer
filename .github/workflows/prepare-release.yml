@@ -5,6 +5,9 @@ on:
 
 permissions:
   contents: write
+  # Labels are an issues-scoped resource; read-only, so this job still cannot
+  # create the label it checks for - only report that it is missing.
+  issues: read
   pull-requests: write
 
 concurrency:
@@ -33,6 +36,16 @@ jobs:
           test -n "${VERSION}" || { echo "::error::release-drafter produced no version"; exit 1; }
           mapfile -d '' fragments < <(find .changes/unreleased -maxdepth 1 -name '*.yaml' -print0 | sort -z)
           test "${#fragments[@]}" -gt 0 || { echo "::notice::No releasable changelog fragments"; exit 0; }
+          # Checked before anything is pushed: gh resolves label names before it
+          # creates a pull request, so a missing label aborts the create with no
+          # PR - after release/next has already been force-pushed.
+          if ! label=$(gh api "repos/${GITHUB_REPOSITORY}/labels/autorelease%3A%20pending" 2>&1); then
+            case "${label}" in
+              *"Not Found"*) echo "::error::repository lacks the 'autorelease: pending' label; see the repository setup section of docs/releasing.md" ;;
+              *) echo "::error::could not verify the 'autorelease: pending' label: ${label}" ;;
+            esac
+            exit 1
+          fi
           version="${VERSION#v}"
           notes=$(for file in "${fragments[@]}"; do yq -r '"- " + .body' "${file}"; done)
           grep -q '<!-- next-release -->' CHANGELOG.md || { echo "::error::missing changelog insertion marker"; exit 1; }
@@ -50,7 +63,14 @@ jobs:
           git commit -m "chore: release ${VERSION}"
           git push --force origin release/next
           printf '%s\n' "${RELEASE_BODY}" > release-pr-body.md
-          gh pr create --base main --head release/next --title "chore: release ${VERSION}" \
-            --label "autorelease: pending" --body-file release-pr-body.md 2>/dev/null ||
-            gh pr edit release/next --title "chore: release ${VERSION}" \
+          # Branch on whether the PR already exists rather than falling back from
+          # a failed create: a bare `create || edit` swallows the create's error
+          # and reports whatever the edit then fails on instead.
+          existing=$(gh pr list --head release/next --base main --state open --json number --jq '.[0].number // ""')
+          if [ -n "${existing}" ]; then
+            gh pr edit "${existing}" --title "chore: release ${VERSION}" \
               --add-label "autorelease: pending" --body-file release-pr-body.md
+          else
+            gh pr create --base main --head release/next --title "chore: release ${VERSION}" \
+              --label "autorelease: pending" --body-file release-pr-body.md
+          fi

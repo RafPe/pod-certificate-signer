@@ -1,2 +1,0 @@
-kind: Changed
-body: "Documented what bounds `${...}` annotation interpolation: placeholders resolve only from apiserver-verified request fields plus the operator-set cluster FQDN, and every resolved value is checked against the pod's verified identity by exact string equality exactly as a literal value is - so interpolation grants no identity a pod does not already own. The security gate is `--allow-unverified-identities`, not `--enable-annotation-interpolation`."
