@@ -91,8 +91,12 @@ CA. It publishes on startup (so a newly-elected leader publishes from the curren
 in-memory CA), on every CA reload event, and on a periodic **drift-repair tick**
 (every 10 minutes) that re-publishes even without a reload — repairing a manual
 edit or a lost event. Publishes are single-flight and retried with exponential
-backoff; failures after the retry budget increment the
-`ctb_publish_failures_total` metric and fail the leader's readiness.
+backoff; failures after the retry budget increment
+`podcertificatesigner_clustertrustbundle_publish_attempts_total{result="failed"}`
+and fail the leader's readiness. Every attempt is counted, so
+`{result="unchanged"}` standing still is how you see a leader that stopped
+publishing, and `{result="updated"}` on a drift-repair tick with no CA rotation
+to explain it means somebody edited the bundle and the signer overwrote them.
 
 Inspect the published bundle:
 
