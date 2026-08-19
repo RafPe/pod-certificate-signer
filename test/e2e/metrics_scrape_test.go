@@ -24,7 +24,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -51,29 +50,38 @@ import (
 // one controller lifetime. No spec using these may put a restartController()
 // between its baseline and its assertion.
 //
-// And a scrape costs a pod, so it is far too expensive for the suite's default
-// one-second poll. Every Eventually over a scrape passes an explicit, wider
-// interval.
+// And the scrape runs `kubectl exec` into one long-lived pod rather than
+// creating a pod per sample. That is not only about cost. A `kubectl run --rm
+// --attach` pod that curls and exits races the attach: the container can finish
+// before kubectl is streaming, in which case the command succeeds and returns
+// an empty body - a silent wrong answer, not an error. An exec into a pod that
+// is already running has no such window.
 
-// metricsScrapeBinding authorizes the scrape pods. It is a separate
+// metricsScrapeBinding authorizes the scraper. It is a separate
 // ClusterRoleBinding from the one the metrics spec creates and deletes within
 // its own It, so the two cannot collide on name or lifetime.
 const metricsScrapeBinding = releaseName + "-e2e-metrics-scrape"
 
+// metricsScraperPod is the long-lived pod every scrape execs into. It runs as
+// the controller ServiceAccount so its projected token is the one the endpoint
+// authorizes.
+const metricsScraperPod = "pcs-metrics-scraper"
+
+// metricsScraperLifetime is how long the scraper idles before exiting. It has
+// to outlast the whole container that installs it, so it is set generously; the
+// pod is deleted on cleanup either way.
+const metricsScraperLifetime = "7200"
+
 // metricsScrapePollInterval is how often an Eventually over a scrape may run.
-// Each scrape creates and waits on a pod, so a one-second poll would spend the
-// whole timeout starting containers.
+// A scrape is an exec round trip, which is cheap but not free, and the CA
+// changes these specs wait on take tens of seconds to propagate.
 const metricsScrapePollInterval = 5 * time.Second
 
-// metricsScrapeSeq names each scrape pod uniquely: kubectl run --rm deletes on
-// exit, but a run killed mid-flight would otherwise leave the name taken.
-var metricsScrapeSeq atomic.Int64
-
 // authorizeMetricsScrapes binds the chart's metrics-reader ClusterRole to the
-// controller ServiceAccount, which the scrape pods run as, and removes the
-// binding when the calling container finishes. The secured endpoint authorizes
-// GET on the /metrics nonResourceURL via SubjectAccessReview, so without this
-// every scrape is a 403.
+// controller ServiceAccount and starts the scraper pod, removing both when the
+// calling container finishes. The secured endpoint authorizes GET on the
+// /metrics nonResourceURL via SubjectAccessReview, so without the binding every
+// scrape is a 403.
 func authorizeMetricsScrapes() {
 	GinkgoHelper()
 
@@ -81,17 +89,56 @@ func authorizeMetricsScrapes() {
 		"--clusterrole", metricsReaderClusterRole,
 		"--serviceaccount", fmt.Sprintf("%s:%s", namespace, serviceAccountName))
 	_, err := utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to authorize the metrics scrape pods")
-
+	Expect(err).NotTo(HaveOccurred(), "Failed to authorize the metrics scrapes")
 	DeferCleanup(func() {
 		cmd := exec.Command("kubectl", "delete", "clusterrolebinding", metricsScrapeBinding, "--ignore-not-found=true")
 		_, _ = utils.Run(cmd)
 	})
+
+	cmd = exec.Command("kubectl", "run", metricsScraperPod,
+		"--restart=Never",
+		"--namespace", namespace,
+		"--image=curlimages/curl:latest",
+		"--overrides",
+		fmt.Sprintf(`{
+			"spec": {
+				"containers": [{
+					"name": "curl",
+					"image": "curlimages/curl:latest",
+					"command": ["/bin/sh", "-c"],
+					"args": ["sleep %s"],
+					"securityContext": {
+						"readOnlyRootFilesystem": true,
+						"allowPrivilegeEscalation": false,
+						"capabilities": { "drop": ["ALL"] },
+						"runAsNonRoot": true,
+						"runAsUser": 1000,
+						"seccompProfile": { "type": "RuntimeDefault" }
+					}
+				}],
+				"serviceAccountName": %q
+			}
+		}`, metricsScraperLifetime, serviceAccountName))
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to create the metrics scraper pod")
+	DeferCleanup(func() {
+		cmd := exec.Command("kubectl", "delete", "pod", metricsScraperPod, "-n", namespace,
+			"--ignore-not-found=true", "--wait=false")
+		_, _ = utils.Run(cmd)
+	})
+
+	Eventually(func(g Gomega) {
+		cmd := exec.Command("kubectl", "get", "pod", metricsScraperPod, "-n", namespace,
+			"-o", "jsonpath={.status.phase}")
+		phase, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(phase).To(Equal("Running"), "the metrics scraper pod is not running yet")
+	}).Should(Succeed())
 }
 
 // scrapeControllerMetrics returns the exposition body from the controller pod's
-// metrics endpoint, scraped through a short-lived pod presenting its projected
-// ServiceAccount token.
+// metrics endpoint, read through the scraper pod's projected ServiceAccount
+// token.
 func scrapeControllerMetrics(g Gomega) string {
 	cmd := exec.Command("kubectl", "get", "pod", controllerPodName, "-n", namespace,
 		"-o", "jsonpath={.status.podIP}")
@@ -105,32 +152,7 @@ func scrapeControllerMetrics(g Gomega) string {
 	script := fmt.Sprintf(
 		"curl -fsk -H \"Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)\" https://%s:9090/metrics",
 		podIP)
-	podName := fmt.Sprintf("pcs-metrics-scrape-%d", metricsScrapeSeq.Add(1))
-
-	cmd = exec.Command("kubectl", "run", podName,
-		"--restart=Never", "--rm", "--attach", "--quiet",
-		"--namespace", namespace,
-		"--image=curlimages/curl:latest",
-		"--overrides",
-		fmt.Sprintf(`{
-			"spec": {
-				"containers": [{
-					"name": "curl",
-					"image": "curlimages/curl:latest",
-					"command": ["/bin/sh", "-c"],
-					"args": [%q],
-					"securityContext": {
-						"readOnlyRootFilesystem": true,
-						"allowPrivilegeEscalation": false,
-						"capabilities": { "drop": ["ALL"] },
-						"runAsNonRoot": true,
-						"runAsUser": 1000,
-						"seccompProfile": { "type": "RuntimeDefault" }
-					}
-				}],
-				"serviceAccountName": %q
-			}
-		}`, script, serviceAccountName))
+	cmd = exec.Command("kubectl", "exec", metricsScraperPod, "-n", namespace, "--", "/bin/sh", "-c", script)
 	body, err := utils.Run(cmd)
 	g.Expect(err).NotTo(HaveOccurred(), "Failed to scrape the controller metrics endpoint")
 	g.Expect(body).To(ContainSubstring("podcertificatesigner_"),
