@@ -1,2 +1,0 @@
-kind: Changed
-body: SECURITY.md now describes the shipped posture rather than a superseded one - annotation-driven identity forgery is closed by default, CSR-requested SANs pass through the same identity allowlist, and the metrics endpoint is authenticated by default. The supported-versions table and the production-posture section of docs/configuration.md were corrected too.
