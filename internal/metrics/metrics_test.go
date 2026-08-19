@@ -18,6 +18,13 @@ import (
 // surface; a metric or a label value added without amending that record fails
 // TestRegisteredSurfaceMatchesADR0005 rather than shipping.
 var wantSeries = []string{
+	`podcertificatesigner_ca_reload_attempts_total{result="changed"}`,
+	`podcertificatesigner_ca_reload_attempts_total{result="unchanged"}`,
+	`podcertificatesigner_ca_reload_attempts_total{result="failed"}`,
+	`podcertificatesigner_ca_reload_consecutive_failures`,
+	`podcertificatesigner_ca_reload_last_success_timestamp_seconds`,
+	`podcertificatesigner_ca_expiration_timestamp_seconds`,
+	`podcertificatesigner_trust_bundle_certificates`,
 	`podcertificatesigner_podcertificaterequests_total{outcome="issued",reason="CertificateIssued"}`,
 	`podcertificatesigner_podcertificaterequests_total{outcome="denied",reason="UnsupportedKeyType"}`,
 	`podcertificatesigner_podcertificaterequests_total{outcome="denied",reason="InvalidUnverifiedUserAnnotations"}`,
@@ -53,6 +60,11 @@ func TestPreInitialisedSeriesStartAtZero(t *testing.T) {
 	}
 	for _, mf := range families {
 		for _, m := range mf.GetMetric() {
+			// Gauges are read from live state at scrape time and have no
+			// meaningful starting value; only the counters are pre-initialised.
+			if m.GetCounter() == nil {
+				continue
+			}
 			if got := m.GetCounter().GetValue(); got != 0 {
 				t.Errorf("%s starts at %v, want 0", seriesID(mf.GetName(), m.GetLabel()), got)
 			}
@@ -65,7 +77,7 @@ func TestPreInitialisedSeriesStartAtZero(t *testing.T) {
 // name is effectively permanent once published, so the check belongs at build
 // time rather than at review time.
 func TestSurfaceIsLintClean(t *testing.T) {
-	for _, c := range collectors() {
+	for _, c := range append(collectors(), NewCACollector(&fakeCA{})) {
 		problems, err := testutil.CollectAndLint(c)
 		if err != nil {
 			t.Fatalf("lint: %v", err)
@@ -94,7 +106,7 @@ func register(t *testing.T) *prometheus.Registry {
 	t.Helper()
 
 	reg := prometheus.NewPedanticRegistry()
-	if err := Register(reg); err != nil {
+	if err := Register(reg, NewCACollector(&fakeCA{})); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 

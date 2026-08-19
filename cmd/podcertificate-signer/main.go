@@ -88,11 +88,6 @@ const (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	// The signer's custom metric surface is bounded by decision, not by
-	// convenience: see ADR-0005 (docs/adr/0005-bounded-metrics-surface.md).
-	// Registering into controller-runtime's registry puts it on the manager's
-	// existing SecureServing metrics endpoint, so there is no new transport.
-	utilruntime.Must(signermetrics.Register(metrics.Registry))
 
 	// +kubebuilder:scaffold:scheme
 }
@@ -214,6 +209,17 @@ func main() {
 	)
 	if err != nil {
 		setupLog.Error(err, "unable to create certificate authority")
+		os.Exit(1)
+	}
+
+	// The signer's custom metric surface is bounded by decision, not by
+	// convenience: see ADR-0005 (docs/adr/0005-bounded-metrics-surface.md).
+	// Registering into controller-runtime's registry puts it on the manager's
+	// existing SecureServing metrics endpoint, so there is no new transport.
+	// This runs here rather than in init() because the CA gauges are read from
+	// the loaded CA at scrape time, so the collector needs it to exist.
+	if err := signermetrics.Register(metrics.Registry, signermetrics.NewCACollector(ca)); err != nil {
+		setupLog.Error(err, "unable to register the signer metrics")
 		os.Exit(1)
 	}
 

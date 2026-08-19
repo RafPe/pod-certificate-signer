@@ -32,6 +32,10 @@ const (
 	ResultCreated   = "created"
 	ResultUpdated   = "updated"
 	ResultFailed    = "failed"
+
+	// ResultChanged is the CA reload counter's third value: the material on
+	// disk differed from what was loaded, i.e. a rotation actually took.
+	ResultChanged = "changed"
 )
 
 // Outcome values for the terminal-outcome counter. They name what happened to
@@ -122,6 +126,19 @@ var PodCertificateRequestDrops = prometheus.NewCounterVec(prometheus.CounterOpts
 		"not terminal and the same request may be counted more than once; read this as occurrences, not as distinct requests.",
 }, []string{"reason"})
 
+// CAReloadAttempts counts CA reload attempts by result (M2).
+//
+// It is attempts, not reloads: a single burst retries up to five times, so the
+// counter can rise by five where the log rose by one. {result="changed"} marks
+// a rotation on every dashboard panel; {result="failed"} is the warning-grade
+// alert; {result="unchanged"} is what makes a zero failure count interpretable.
+var CAReloadAttempts = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Namespace: Namespace,
+	Name:      "ca_reload_attempts_total",
+	Help: "CA reload attempts by result. changed means the material on disk differed from what was loaded; a failed reload retains the " +
+		"last-good CA, so signing keeps working. Counted per attempt, and one burst makes several.",
+}, []string{"result"})
+
 // ClusterTrustBundlePublishAttempts counts ClusterTrustBundle publish attempts
 // by result (M6). It replaces the unprefixed ctb_publish_failures_total, whose
 // failure count is now {result="failed"}: a failure-only counter cannot express
@@ -141,6 +158,7 @@ var ClusterTrustBundlePublishAttempts = prometheus.NewCounterVec(prometheus.Coun
 // collectors is every collector this package declares, in registration order.
 func collectors() []prometheus.Collector {
 	return []prometheus.Collector{
+		CAReloadAttempts,
 		PodCertificateRequests,
 		PodCertificateRequestRequeues,
 		PodCertificateRequestDrops,
@@ -174,6 +192,9 @@ func Register(r prometheus.Registerer, extra ...prometheus.Collector) error {
 //
 // If a label's values cannot be enumerated here, the label was never bounded.
 func preInitialise() {
+	for _, result := range []string{ResultChanged, ResultUnchanged, ResultFailed} {
+		CAReloadAttempts.WithLabelValues(result)
+	}
 	for _, pair := range IssuanceOutcomes {
 		PodCertificateRequests.WithLabelValues(pair[0], pair[1])
 	}

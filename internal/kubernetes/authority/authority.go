@@ -22,7 +22,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
 )
+
+// The CA state the metrics collector reads at scrape time. Compile-time, so a
+// renamed accessor is a build failure rather than a gauge that quietly stops
+// being reported.
+var _ metrics.CAState = (*CertificateAuthority)(nil)
 
 var serialNumberLimit = new(big.Int).Lsh(big.NewInt(1), 128)
 
@@ -68,6 +74,7 @@ type CertificateAuthority struct {
 	lastReloadErr    error
 	reloadFailures   int       // consecutive failed reload attempts
 	firstFailureTime time.Time // when the current failure streak started
+	lastSuccessTime  time.Time // when the CA was last read successfully
 	watcherErr       error
 }
 
@@ -177,6 +184,13 @@ func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error
 	if _, err := ca.load(); err != nil {
 		return nil, err
 	}
+	// Seed the last-success clock from the load that just succeeded. Nothing
+	// else records a success until the watch startup reconcile, which runs
+	// after the manager starts and never at all if the watcher fails to
+	// establish - so without this the "reloads have stopped" gauge would report
+	// the epoch, and its alert would fire on every process start. Not counted
+	// as a reload attempt: this is the bootstrap load, not the reload loop.
+	ca.recordReloadResult(nil)
 
 	return ca, nil
 }
@@ -547,6 +561,7 @@ func (ca *CertificateAuthority) reconcileOnce(logger logr.Logger, notify chan<- 
 	// unreadable one accumulates towards the readiness threshold even though no
 	// filesystem event ever arrived.
 	ca.recordReloadResult(err)
+	metrics.CAReloadAttempts.WithLabelValues(reloadResult(changed, err)).Inc()
 
 	switch {
 	case err != nil:
@@ -596,6 +611,7 @@ func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr
 		var changed bool
 		if changed, err = ca.load(); err == nil {
 			ca.recordReloadResult(nil)
+			metrics.CAReloadAttempts.WithLabelValues(reloadResult(changed, nil)).Inc()
 
 			return changed, nil
 		}
@@ -605,6 +621,7 @@ func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr
 		// stays unloadable must be able to cross the readiness threshold
 		// without one.
 		failures := ca.recordReloadResult(err)
+		metrics.CAReloadAttempts.WithLabelValues(metrics.ResultFailed).Inc()
 		if attempt >= ca.reloadAttempts {
 			return false, fmt.Errorf("reload failed after %d attempt(s), %d consecutive failure(s): %w",
 				attempt, failures, err)
@@ -646,6 +663,7 @@ func (ca *CertificateAuthority) recordReloadResult(err error) int {
 	if err == nil {
 		ca.reloadFailures = 0
 		ca.firstFailureTime = time.Time{}
+		ca.lastSuccessTime = ca.now()
 
 		return 0
 	}
@@ -656,6 +674,52 @@ func (ca *CertificateAuthority) recordReloadResult(err error) int {
 	ca.reloadFailures++
 
 	return ca.reloadFailures
+}
+
+// reloadResult classifies a reload attempt for the metric. The three values are
+// the three arms the callers already branch on, so the label cannot drift from
+// what the logs say happened.
+func reloadResult(changed bool, err error) string {
+	switch {
+	case err != nil:
+		return metrics.ResultFailed
+	case changed:
+		return metrics.ResultChanged
+	default:
+		return metrics.ResultUnchanged
+	}
+}
+
+// ReloadHealth reports the consecutive-failure streak and when the CA was last
+// read successfully. It is safe for concurrent use, and takes healthMu rather
+// than mu for the same reason Healthy does: a poller must not contend with a
+// reload, nor with a signing operation.
+func (ca *CertificateAuthority) ReloadHealth() (int, time.Time) {
+	ca.healthMu.Lock()
+	defer ca.healthMu.Unlock()
+
+	return ca.reloadFailures, ca.lastSuccessTime
+}
+
+// CertificateNotAfter reports when the loaded CA certificate expires. It is
+// safe for concurrent use: it takes mu, copies a scalar and releases, so a
+// caller reading it on a metrics scrape does not hold the lock across signing.
+func (ca *CertificateAuthority) CertificateNotAfter() time.Time {
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
+
+	return ca.certificate.NotAfter
+}
+
+// TrustBundleSize reports how many certificates the in-memory trust bundle
+// holds: the current CA plus the retained previous ones. It is what the signer
+// would publish, not a read of the published ClusterTrustBundle. Safe for
+// concurrent use.
+func (ca *CertificateAuthority) TrustBundleSize() int {
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
+
+	return 1 + len(ca.previousCertificates)
 }
 
 // now returns the current time from the configured clock, which tests replace
