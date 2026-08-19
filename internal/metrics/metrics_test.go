@@ -18,6 +18,13 @@ import (
 // surface; a metric or a label value added without amending that record fails
 // TestRegisteredSurfaceMatchesADR0005 rather than shipping.
 var wantSeries = []string{
+	`podcertificatesigner_podcertificaterequests_total{outcome="issued",reason="CertificateIssued"}`,
+	`podcertificatesigner_podcertificaterequests_total{outcome="denied",reason="UnsupportedKeyType"}`,
+	`podcertificatesigner_podcertificaterequests_total{outcome="denied",reason="InvalidUnverifiedUserAnnotations"}`,
+	`podcertificatesigner_podcertificaterequests_total{outcome="failed",reason="SigningFailed"}`,
+	`podcertificatesigner_podcertificaterequest_requeues_total{reason="CASignerUnusable"}`,
+	`podcertificatesigner_podcertificaterequest_requeues_total{reason="Transient"}`,
+	`podcertificatesigner_podcertificaterequest_drops_total{reason="AssociatedPodGone"}`,
 	`podcertificatesigner_clustertrustbundle_publish_attempts_total{result="created"}`,
 	`podcertificatesigner_clustertrustbundle_publish_attempts_total{result="failed"}`,
 	`podcertificatesigner_clustertrustbundle_publish_attempts_total{result="unchanged"}`,
