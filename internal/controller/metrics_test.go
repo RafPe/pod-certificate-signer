@@ -170,7 +170,9 @@ func TestRequeuesAreClassified(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := &PodCertificateRequestReconciler{Log: logr.Discard()}
+			// recordFailure announces CA-unusable requeues as an event, so the
+			// reconciler needs a recorder even though this test asserts the metric.
+			r := &PodCertificateRequestReconciler{Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
 			ctx := logr.NewContext(context.Background(), logr.Discard())
 
 			before := requeueCount(tc.wantReason)
