@@ -72,6 +72,57 @@ repaired by the next publish instead of becoming permanent history
 > a missing bundle fails startup instead, so the loss is caught before the
 > controller republishes without it.
 
+### Rotation runbook
+
+Rotation is one `kubectl apply`, but it is not instant and it is not atomic. The
+four things below are what decides whether it lands quietly or takes a fleet
+down.
+
+**Budget up to ~6 minutes for the new CA to reach running workloads.** Our own
+e2e measured a full rotation reaching mounted `ca.crt` files at **5m13s** and
+**5m26s** on two runs. The delay is not the controller — it reloads and
+republishes within seconds. It is kubelet: a `ClusterTrustBundle` projection is
+served from a normalization cache with a **hard-coded 5-minute TTL**, and the
+refreshed value then has to wait for the next pod sync (`--sync-frequency`,
+default 1 minute). **No flag shortens this.** Plan the maintenance window
+around six minutes rather than around the apply.
+
+**Rotate with an overlap window, never as a swap.** For those six minutes some
+pods hold a certificate from the old CA and some from the new one, and both
+directions have to verify. That is what `signer.max_previous_ca_certs` (default
+`2`) is for: the published bundle carries the new CA *and* its predecessors, so
+a peer on either side of the propagation front is still trusted. Rotate to a new
+CA, let the old certificates drain, and only then consider retiring the old
+anchor.
+
+> [!TIP]
+> **Do not reach for rolling the workloads first.** Restarting every pod to pick
+> up the new CA trades a six-minute wait for a fleet-wide restart, and the
+> restarted pods still read their anchors through the same cache. The overlap
+> window exists precisely so nothing has to restart.
+
+**Applications must re-read the file.** Kubelet rewrites `ca.crt` underneath a
+running container and signals nothing — no signal, no restart, no event. An
+application that loads its trust anchors once at startup keeps using the old set
+until it is restarted, which turns a rotation that propagated perfectly into a
+verification failure some hours later. Reload the anchors on a timer, on a file
+watch, or per connection.
+
+> [!WARNING]
+> **A stuck credential freezes the trust anchors too.** Kubelet builds a
+> projected volume in a single pass and skips the write entirely if any source
+> fails, so a pod whose `podCertificate` refresh is denied or failed silently
+> stops receiving `ca.crt` updates as well. The pod keeps running with the
+> anchors it already had, and a rotation never reaches it. Do not assume the
+> anchors in a running pod are current: alert on the request's condition, and on
+> the `CASignerUnusable` warning event the controller emits while a CA cannot
+> cover a request.
+
+```sh
+# Requests that are stuck rather than issued, across the cluster.
+kubectl get events -A --field-selector reason=CASignerUnusable
+```
+
 ## Leader election and replicas
 
 The chart runs `replicaCount: 2` with `leader_election.enabled: true`. Work is
