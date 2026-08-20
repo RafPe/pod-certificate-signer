@@ -53,8 +53,24 @@ What happens next:
 The retained history survives a restart: on startup the controller reseeds it
 from the `ClusterTrustBundle` it already published, so a rotation performed while
 the controller was down still keeps the previous CA trusted. If that history
-cannot be read on startup, the controller **fails closed** (refuses to start)
+cannot be **read** on startup, the controller **fails closed** (refuses to start)
 rather than publish an empty bundle and drop previously-trusted CAs.
+
+The bundle is not private controller state, so what is read back from it is
+bounded and validated rather than adopted: entries that are not usable signing
+CAs, entries that have expired, duplicates, and anything beyond
+`--max-previous-ca-certs` are dropped and logged. A hand-edited bundle is
+repaired by the next publish instead of becoming permanent history
+([ADR-0004](./adr/0004-bootstrapped-previous-ca-history.md)).
+
+> [!IMPORTANT]
+> **Set `signer.require_ca_history: true` once the signer has published its
+> bundle.** A bundle that has never existed and one that was *deleted* look
+> identical to the controller, so by default a missing bundle starts an empty
+> history — which is right for a first install and, after one, means the retained
+> CAs are gone for good the next time the controller restarts. With the flag on,
+> a missing bundle fails startup instead, so the loss is caught before the
+> controller republishes without it.
 
 ## Leader election and replicas
 

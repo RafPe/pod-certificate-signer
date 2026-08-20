@@ -98,7 +98,7 @@ func main() {
 	var healthProbeBindAddress, metricsBindAddress string
 	var maxConcurrentReconciles, maxPreviousCACerts int
 	var enableLeaderElection, enableAnnotationInterpolation, honorCSRSANs bool
-	var allowUnverifiedIdentities, metricsSecure bool
+	var allowUnverifiedIdentities, metricsSecure, requireCAHistory bool
 	var reconcileTimeout time.Duration
 
 	flag.StringVar(&signerName, "signer-name", "", "Only sign CSR with this .spec.signerName. Required.")
@@ -119,6 +119,11 @@ func main() {
 			"unauthenticated plaintext endpoint - see the chart's metrics.insecure escape hatch.")
 	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 5, "maximum number of concurrent reconciles which can be run.")
 	flag.IntVar(&maxPreviousCACerts, "max-previous-ca-certs", 2, "maximum number of previous CA certificates to keep during CA rotation.")
+	flag.BoolVar(&requireCAHistory, "require-ca-history", false,
+		"Refuse to start when the signer's ClusterTrustBundle does not exist, instead of starting with an empty "+
+			"previous-CA history. Off by default, because a first install has no bundle yet and the controller cannot "+
+			"tell that apart from one that was deleted. Turn it on once the signer has published its bundle, so a "+
+			"deleted bundle cannot silently reset the retained CA history (see docs/operations.md).")
 	flag.DurationVar(&reconcileTimeout, "reconcile-timeout", 5*time.Minute, "maximum duration of a reconcile before it times out.")
 	flag.BoolVar(&enableAnnotationInterpolation, "enable-annotation-interpolation", defaultEnableAnnotationInterpolation,
 		"Allow ${...} placeholders (e.g. ${pod.name}, ${pod.serviceAccountName}) in certificate configuration annotations, "+
@@ -171,7 +176,10 @@ func main() {
 	}
 
 	// Bootstrap previous CA certificates from the existing ClusterTrustBundle
-	// so that we retain trust across CA rotations even after a restart.
+	// so that we retain trust across CA rotations even after a restart. The
+	// bundle is a cluster-scoped object this controller does not exclusively
+	// own, so what is read from it is bounded and validated rather than
+	// adopted: ADR-0004.
 	//
 	// We need to use a new [client.Client] here, since the controller
 	// manager is not started yet, and we must update the ClusterTrustBundle
@@ -181,23 +189,9 @@ func main() {
 		setupLog.Error(err, "unable to create API client")
 		os.Exit(1)
 	}
-	// Read the previous-CA history with bounded retry. A transient read error
-	// must not fall through to an empty history: publishing an empty bundle
-	// would drop previously-trusted CAs. If the history cannot be read, fail
-	// closed rather than risk overwriting the ClusterTrustBundle.
-	bootstrapBackoff := wait.Backoff{
-		Steps:    5,
-		Duration: 500 * time.Millisecond,
-		Factor:   2.0,
-		Jitter:   0.1,
-	}
-	var previousCAs []*x509.Certificate
-	if err := retry.OnError(bootstrapBackoff, func(error) bool { return true }, func() error {
-		var ferr error
-		previousCAs, ferr = fetchPreviousCAs(ctx, c, signerName)
-		return ferr
-	}); err != nil {
-		setupLog.Error(err, "unable to read existing CA history from ClusterTrustBundle; "+
+	previousCAs, err := loadPreviousCAHistory(ctx, c, signerName, requireCAHistory)
+	if err != nil {
+		setupLog.Error(err, "unable to bootstrap the previous-CA history; "+
 			"refusing to start to avoid dropping previously-trusted CAs")
 		os.Exit(1)
 	}
@@ -206,6 +200,7 @@ func main() {
 		caKeyPath,
 		authority.WithPreviousCABundle(previousCAs),
 		authority.WithMaxPreviousCertificates(maxPreviousCACerts),
+		authority.WithLogger(ctrl.Log.WithName("certificate-authority")),
 	)
 	if err != nil {
 		setupLog.Error(err, "unable to create certificate authority")
@@ -577,13 +572,73 @@ func displayCommandlineFlags() {
 	})
 }
 
+// errCAHistoryBundleAbsent reports that the signer's ClusterTrustBundle does
+// not exist. It is a distinct outcome from a failed read: retrying will not
+// make an absent object appear, and whether absence is fatal is the caller's
+// policy (see loadPreviousCAHistory), not this function's.
+var errCAHistoryBundleAbsent = errors.New("the signer's ClusterTrustBundle does not exist")
+
+// bootstrapBackoff bounds the retries spent reading the previous-CA history
+// before startup gives up and fails closed.
+var bootstrapBackoff = wait.Backoff{
+	Steps:    5,
+	Duration: 500 * time.Millisecond,
+	Factor:   2.0,
+	Jitter:   0.1,
+}
+
+// loadPreviousCAHistory reads the previous-CA history the signer published
+// before this process started, with bounded retry. A transient read error must
+// not fall through to an empty history: publishing an empty bundle would drop
+// previously-trusted CAs, and every certificate issued under a retired CA would
+// stop verifying. Such errors fail closed.
+//
+// Absence is the case that cannot be decided from the cluster. A bundle that
+// has never existed (a first install) and one that was deleted look identical,
+// and the controller keeps no other record of its own history, so treating
+// absence as fatal would break every first install while treating it as empty
+// makes a deleted bundle a permanent, controller-endorsed loss of history.
+// The default keeps first installs working; requireHistory lets an operator who
+// knows the bundle should exist turn absence into a startup failure. Either way
+// the loss is announced rather than logged as routine. See
+// docs/adr/0004-bootstrapped-previous-ca-history.md.
+func loadPreviousCAHistory(ctx context.Context, c client.Client, signerName string, requireHistory bool) ([]*x509.Certificate, error) {
+	var previousCAs []*x509.Certificate
+	err := retry.OnError(bootstrapBackoff,
+		func(err error) bool { return !errors.Is(err, errCAHistoryBundleAbsent) },
+		func() error {
+			var ferr error
+			previousCAs, ferr = fetchPreviousCAs(ctx, c, signerName)
+
+			return ferr
+		})
+
+	switch {
+	case err == nil:
+		return previousCAs, nil
+	case !errors.Is(err, errCAHistoryBundleAbsent):
+		return nil, err
+	case requireHistory:
+		return nil, err
+	}
+
+	setupLog.Info("WARNING: no ClusterTrustBundle exists for this signer, so the previous-CA history starts empty. "+
+		"This is expected on a first install. If the signer has published its bundle before, the history it held is "+
+		"now lost and certificates issued under a retired CA will stop verifying once the bundle is republished; "+
+		"restore the bundle before this controller publishes, or run with --require-ca-history to make this fatal",
+		"bundle", signer.ClusterTrustBundleName(signerName))
+
+	return nil, nil
+}
+
 // fetchPreviousCAs reads the existing ClusterTrustBundle for the given signer
 // and parses its PEM certificates, so previously-trusted CAs are retained
 // across a restart.
 //
-// A missing bundle is the normal first-run state and yields an empty history
-// with a nil error. Any other read error is returned so the caller can retry
-// or fail closed: silently returning an empty history would overwrite the
+// A missing bundle is reported as errCAHistoryBundleAbsent rather than as an
+// empty history, so the decision of what absence means is taken once, by
+// loadPreviousCAHistory. Any other read error is returned so the caller can
+// retry or fail closed: silently returning an empty history would overwrite the
 // bundle on startup and drop previously-trusted CAs.
 func fetchPreviousCAs(ctx context.Context, c client.Client, signerName string) ([]*x509.Certificate, error) {
 	bundleName := signer.ClusterTrustBundleName(signerName)
@@ -591,8 +646,7 @@ func fetchPreviousCAs(ctx context.Context, c client.Client, signerName string) (
 	bundle := &certificatesv1beta1.ClusterTrustBundle{}
 	if err := c.Get(ctx, client.ObjectKey{Name: bundleName}, bundle); err != nil {
 		if apierrors.IsNotFound(err) {
-			setupLog.Info("no existing ClusterTrustBundle found, starting with empty CA history", "name", bundleName)
-			return nil, nil
+			return nil, fmt.Errorf("read existing ClusterTrustBundle %q: %w", bundleName, errCAHistoryBundleAbsent)
 		}
 		return nil, fmt.Errorf("read existing ClusterTrustBundle %q: %w", bundleName, err)
 	}
