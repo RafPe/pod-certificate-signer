@@ -29,6 +29,7 @@ import (
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
 	podcertificate "github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
 
 	capiv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -66,6 +67,17 @@ const (
 	// default that could not be applied (e.g. the pod DNS SANs for an over-long
 	// pod name) is surfaced as a Warning event so the operator can see why.
 	ReasonDefaultSANSkipped Reason = "DefaultSANSkipped"
+
+	// ReasonCASignerUnusable is event-only and is deliberately never written as
+	// a condition: the CA cannot sign this request right now (it has expired,
+	// or its remaining validity is shorter than the requested lifetime), but a
+	// CA rotation can make the same request succeed, so the reconcile requeues
+	// rather than recording an outcome. Writing a condition would make the
+	// request immutable (see api.IsPodCertificateRequestImmutable) and turn a
+	// recoverable wait into a permanent failure, so the event is the only
+	// operator-visible signal - and it is rate-limited, since the requeue
+	// repeats for as long as the CA stays unusable.
+	ReasonCASignerUnusable Reason = "CASignerUnusable"
 
 	// Well-known condition reasons defined by the certificates v1beta1 API.
 	ReasonUnsupportedKeyType     Reason = Reason(capiv1beta1.PodCertificateRequestConditionUnsupportedKeyType)
@@ -139,6 +151,12 @@ type PodCertificateRequestReconciler struct {
 	// certificate identities derive from the verified request fields (feature
 	// flag, off by default; keeping it off is the safe, recommended posture).
 	AllowUnverifiedIdentities bool
+
+	// caUnusableEvents rate-limits the CASignerUnusable warning per request, so
+	// a requeue loop reports the condition rather than flooding the event
+	// stream with it. The zero value is ready to use; it carries a mutex, so
+	// the reconciler must always be used through a pointer.
+	caUnusableEvents eventThrottle
 }
 
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=podcertificaterequests,verbs=get;list;watch
@@ -333,6 +351,11 @@ func (r *PodCertificateRequestReconciler) recordFailure(ctx context.Context, pcr
 	var te *TerminalError
 	if !errors.As(err, &te) {
 		log.Error(err, "transient error; requeueing")
+		// Count every requeue, then announce the CA-unusable ones. The metric is
+		// unconditional so a rate is meaningful; the event is throttled per
+		// request, since the requeue repeats until the CA is rotated.
+		metrics.PodCertificateRequestRequeues.WithLabelValues(requeueReason(err)).Inc()
+		r.recordCASignerUnusable(pcr, err)
 		return ctrl.Result{}, err
 	}
 
@@ -352,13 +375,69 @@ func (r *PodCertificateRequestReconciler) recordTerminal(ctx context.Context, pc
 	return r.recordOutcome(ctx, pcr, te.ConditionType, te.Reason, te.Err.Error(), corev1.EventTypeWarning)
 }
 
+// recordCASignerUnusable emits the warning event for a request the CA cannot
+// sign at the moment (see ReasonCASignerUnusable). Anything else transient - an
+// API read failure, a conflicted write - is the controller's own retry loop
+// doing its job and needs no event, so only the CA-unusable case is announced.
+//
+// Without it the wait is invisible where an operator looks for it: the requeue
+// writes no condition, so `kubectl describe podcertificaterequest` shows
+// nothing at all, and the pod stays in ContainerCreating while the only signals
+// are a controller log line and controller_runtime_reconcile_errors_total.
+//
+// The emission is rate-limited per request rather than per reconcile: the
+// requeue repeats until the CA is rotated, and an event per attempt would be an
+// event storm rather than a signal. Deliberately no status write, as with
+// recordPodGone: the outcome is not terminal, and a condition would freeze the
+// request (see ReasonCASignerUnusable).
+func (r *PodCertificateRequestReconciler) recordCASignerUnusable(pcr *capiv1beta1.PodCertificateRequest, err error) {
+	if !errors.Is(err, authority.ErrCASignerUnusable) {
+		return
+	}
+	if !r.caUnusableEvents.allow(pcr.UID) {
+		return
+	}
+	r.EventRecorder.Eventf(pcr, nil, corev1.EventTypeWarning, string(ReasonCASignerUnusable), "SignPodCertificateRequest",
+		"the signing CA cannot issue this certificate yet, retrying until it can: %s", err)
+}
+
 // recordPodGone emits the warning event for a request dropped because a live
 // read confirmed its pod is gone. The note is supplied by the caller, since
 // "absent" and "replaced by a different pod" are different facts for whoever
 // reads the event. Deliberately no status write: the drop is not a terminal
 // outcome, and the event is the only breadcrumb an operator gets.
 func (r *PodCertificateRequestReconciler) recordPodGone(pcr *capiv1beta1.PodCertificateRequest, noteFmt string, args ...any) {
+	// The event names the object and is the only breadcrumb its owner gets; the
+	// metric carries the rate, which is what says the controller is losing a
+	// race with pod churn rather than dropping the odd stale request.
+	metrics.PodCertificateRequestDrops.WithLabelValues(metrics.ReasonAssociatedPodGone).Inc()
 	r.EventRecorder.Eventf(pcr, nil, corev1.EventTypeWarning, string(ReasonAssociatedPodGone), "SignPodCertificateRequest", noteFmt, args...)
+}
+
+// requeueReason classifies a transient error for the requeue counter. The
+// classification is a closed set computed here: the error text itself is
+// unbounded (it can carry std-lib and apiserver detail) and belongs in the log,
+// never in a label.
+func requeueReason(err error) string {
+	if errors.Is(err, authority.ErrCASignerUnusable) {
+		return metrics.ReasonCASignerUnusable
+	}
+
+	return metrics.ReasonTransient
+}
+
+// requestOutcome maps a condition type onto the outcome label. The three
+// condition types the signer writes are the closed set the certificates API
+// defines; anything else would be a condition this controller never records.
+func requestOutcome(conditionType string) string {
+	switch conditionType {
+	case capiv1beta1.PodCertificateRequestConditionTypeIssued:
+		return metrics.OutcomeIssued
+	case capiv1beta1.PodCertificateRequestConditionTypeDenied:
+		return metrics.OutcomeDenied
+	default:
+		return metrics.OutcomeFailed
+	}
 }
 
 func (r *PodCertificateRequestReconciler) recordIssued(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, cert *podcertificate.PodCertificate) error {
@@ -407,6 +486,11 @@ func (r *PodCertificateRequestReconciler) recordOutcome(ctx context.Context, pcr
 		return nil
 	}
 
+	// Counted here for the same reason the event is emitted here: the outcome
+	// is not real until the write that carries it has persisted. Counting
+	// before would inflate the issued rate with certificates no request ever
+	// received.
+	metrics.PodCertificateRequests.WithLabelValues(requestOutcome(conditionType), string(reason)).Inc()
 	r.EventRecorder.Eventf(pcr, nil, eventType, string(reason), "SignPodCertificateRequest", message)
 	return nil
 }

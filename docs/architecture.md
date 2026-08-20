@@ -159,7 +159,7 @@ flowchart TB
 | **Signer** | Builds and signs the leaf certificate from the CSR and resolved configuration; assembles the trust bundle PEM. | No |
 | **ClusterTrustBundle publisher** | Reconciles the signer's `ClusterTrustBundle` towards the current CA on reload events and a 10-minute drift-repair tick, with single-flight retries. | **Yes** — only the elected leader writes the shared resource |
 | **Health & readiness** | Serves `healthz`/`readyz`; readiness is gated on CA watcher/reload health and the publisher's last outcome. | No |
-| **Metrics** | Exposes Prometheus metrics, including `ctb_publish_failures_total`. | No |
+| **Metrics** | Exposes Prometheus metrics under the `podcertificatesigner_` prefix, alongside controller-runtime's. The surface is bounded by [ADR-0005](adr/0005-bounded-metrics-surface.md): no label carries a pod, request or certificate identity. | No |
 
 The CA watcher runs on **every** replica so a standby never signs or publishes
 with stale material immediately after being promoted; only the publisher is

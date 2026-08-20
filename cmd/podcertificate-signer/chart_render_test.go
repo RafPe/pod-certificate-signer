@@ -42,6 +42,23 @@ func TestDeploymentRendersAllowUnverifiedIdentities(t *testing.T) {
 	}
 }
 
+// TestDeploymentRendersRequireCAHistory guards the switch that decides what an
+// absent ClusterTrustBundle means. It ships off, because a first install has no
+// bundle yet, and it is worth nothing unless an operator can turn it on through
+// values: an installation whose bundle is deleted loses its previous-CA history
+// permanently on the next restart, and this flag is what turns that into a
+// startup failure instead.
+func TestDeploymentRendersRequireCAHistory(t *testing.T) {
+	if out := renderChart(t); !strings.Contains(out, "--require-ca-history=false") {
+		t.Errorf("rendered Deployment does not carry --require-ca-history=false by default:\n%s", out)
+	}
+
+	out := renderChart(t, "--set", "signer.require_ca_history=true")
+	if !strings.Contains(out, "--require-ca-history=true") {
+		t.Errorf("signer.require_ca_history=true did not reach the controller flag:\n%s", out)
+	}
+}
+
 // renderChart runs `helm template` with the required CA value and returns the
 // rendered manifests, skipping the test when helm is not installed.
 func renderChart(t *testing.T, extraArgs ...string) string {

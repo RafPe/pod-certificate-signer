@@ -18,6 +18,7 @@ import (
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
+	signermetrics "github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
 )
 
@@ -50,7 +51,11 @@ func newTestPublisher(t *testing.T, c client.Client) *ctbPublisher {
 		events:   make(chan struct{}),
 		interval: time.Hour,
 		backoff:  wait.Backoff{Steps: 8, Duration: time.Millisecond, Factor: 2.0},
-		failures: prometheus.NewCounter(prometheus.CounterOpts{Name: "test_ctb_publish_failures_total"}),
+		// A throwaway vector rather than the package-level one, so each test
+		// counts only its own publishes.
+		publishes: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "test_clustertrustbundle_publish_attempts_total",
+		}, []string{"result"}),
 	}
 }
 
@@ -82,9 +87,17 @@ func TestReconcileRetriesTransientFailure(t *testing.T) {
 	if err := p.Healthy(); err != nil {
 		t.Errorf("Healthy = %v, want nil after a successful retry", err)
 	}
-	if got := promtestutil.ToFloat64(p.failures); got != 0 {
-		t.Errorf("ctb_publish_failures_total = %v, want 0 after eventual success", got)
+	if got := publishCount(p, signermetrics.ResultFailed); got != 0 {
+		t.Errorf("publish attempts {result=failed} = %v, want 0 after eventual success", got)
 	}
+	if got := publishCount(p, signermetrics.ResultCreated); got != 1 {
+		t.Errorf("publish attempts {result=created} = %v, want 1 after the first successful publish", got)
+	}
+}
+
+// publishCount reports the publisher's attempt counter for one result.
+func publishCount(p *ctbPublisher, result string) float64 {
+	return promtestutil.ToFloat64(p.publishes.WithLabelValues(result))
 }
 
 // The publisher must re-publish on a periodic tick, independent of any fsnotify
@@ -157,8 +170,8 @@ func TestReconcileSingleFlight(t *testing.T) {
 }
 
 // A publish that keeps failing must be surfaced: the publisher becomes
-// unhealthy (failing readiness) and the ctb_publish_failures_total counter is
-// incremented.
+// unhealthy (failing readiness) and the publish attempt counter records a
+// failed result.
 func TestReconcilePersistentFailureSurfaced(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(clientgoscheme.Scheme).
@@ -176,8 +189,27 @@ func TestReconcilePersistentFailureSurfaced(t *testing.T) {
 	if p.Healthy() == nil {
 		t.Error("Healthy must report an error after a persistent publish failure")
 	}
-	if got := promtestutil.ToFloat64(p.failures); got < 1 {
-		t.Errorf("ctb_publish_failures_total = %v, want >= 1 after persistent failure", got)
+	if got := publishCount(p, signermetrics.ResultFailed); got < 1 {
+		t.Errorf("publish attempts {result=failed} = %v, want >= 1 after persistent failure", got)
+	}
+}
+
+// A publish that changed nothing must still be counted, so a leader that has
+// stopped publishing is distinguishable from one that is publishing
+// successfully - the ambiguity the failure-only counter could not resolve.
+func TestReconcileCountsUnchangedPublish(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).Build()
+
+	p := newTestPublisher(t, c)
+	ctx := context.Background()
+	p.reconcile(ctx, log.FromContext(ctx))
+	p.reconcile(ctx, log.FromContext(ctx))
+
+	if got := publishCount(p, signermetrics.ResultCreated); got != 1 {
+		t.Errorf("publish attempts {result=created} = %v, want 1", got)
+	}
+	if got := publishCount(p, signermetrics.ResultUnchanged); got != 1 {
+		t.Errorf("publish attempts {result=unchanged} = %v, want 1 on a republish of the same bundle", got)
 	}
 }
 

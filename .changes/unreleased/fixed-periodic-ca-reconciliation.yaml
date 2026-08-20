@@ -1,2 +1,0 @@
-kind: Fixed
-body: The signer now reloads its CA on a 60s timer as well as on filesystem events, so a reload that failed after its retries - or a rotation whose events were dropped or never delivered - converges without a pod restart. The CA is fingerprinted, so consumers are notified and the ClusterTrustBundle republished only when the material actually changed, rather than on every event of a rotation burst. The watch also reconciles once at startup, closing the window between the initial load and the watch being registered, and no longer ignores file removals.

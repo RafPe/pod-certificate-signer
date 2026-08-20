@@ -1,0 +1,2 @@
+kind: Security
+body: Issued certificates now assert the basicConstraints extension with cA:FALSE, instead of omitting the extension and leaving each verifier to infer end-entity status from its absence. This grants no new capability and removes none - a conforming verifier already refused to treat these leaves as CAs (RFC 5280 6.1.4) - but the signer cannot enumerate the TLS stacks that verify its output, and lenient path validation around a missing basicConstraints has a long history of implementation bugs. No pathLenConstraint is set. See ADR-0003.

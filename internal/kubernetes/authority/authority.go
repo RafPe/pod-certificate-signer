@@ -22,7 +22,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
 )
+
+// The CA state the metrics collector reads at scrape time. Compile-time, so a
+// renamed accessor is a build failure rather than a gauge that quietly stops
+// being reported.
+var _ metrics.CAState = (*CertificateAuthority)(nil)
 
 var serialNumberLimit = new(big.Int).Lsh(big.NewInt(1), 128)
 
@@ -39,14 +45,22 @@ type Option func(ca *CertificateAuthority) error
 
 // CertificateAuthority is a CA which signs Pod Certificate Requests.
 type CertificateAuthority struct {
-	certFile             string
-	privKeyFile          string
-	certificate          *x509.Certificate
-	signer               crypto.Signer
+	certFile    string
+	privKeyFile string
+	certificate *x509.Certificate
+	signer      crypto.Signer
+	// previousCertificates is the retained history of CAs that were current
+	// before the one loaded now. It is ordered by how recently each was
+	// current, least recent first, and keyed by certificate identity: a
+	// certificate appears at most once, and re-observing it moves it rather
+	// than adding a second entry. Eviction therefore drops the CA least likely
+	// to still have certificates in the field, instead of whichever entry
+	// happened to be inserted first.
 	previousCertificates []*x509.Certificate
 	maxPreviousCerts     int
 	nowFunc              func() time.Time
 	backDate             time.Duration
+	logger               logr.Logger
 	// fingerprint is the SHA-256 of the loaded certificate's DER, used by load
 	// to tell a reload that changed the material from one that did not. It is
 	// content-based rather than file metadata, so a rotation that preserves
@@ -68,6 +82,7 @@ type CertificateAuthority struct {
 	lastReloadErr    error
 	reloadFailures   int       // consecutive failed reload attempts
 	firstFailureTime time.Time // when the current failure streak started
+	lastSuccessTime  time.Time // when the CA was last read successfully
 	watcherErr       error
 }
 
@@ -120,9 +135,30 @@ func WithBackDate(val time.Duration) Option {
 // with previously known CA certificates. This is useful for bootstrapping the
 // trust bundle from an external source (e.g. an existing ClusterTrustBundle)
 // so that previous CAs are retained across process restarts.
+//
+// The seed is not taken on trust: [New] normalizes it like any other history
+// (see normalizePreviousCertificates), so entries that are not usable CA
+// certificates, entries that have expired, duplicates and anything beyond
+// WithMaxPreviousCertificates are dropped rather than adopted and republished.
+// See docs/adr/0004-bootstrapped-previous-ca-history.md.
 func WithPreviousCABundle(certs []*x509.Certificate) Option {
 	opt := func(ca *CertificateAuthority) error {
 		ca.previousCertificates = certs
+
+		return nil
+	}
+
+	return opt
+}
+
+// WithLogger is an [Option], which gives the [CertificateAuthority] a logger for
+// decisions it takes outside a request or a watch: today, the previous-CA
+// history entries it declines to keep. Without it those drops are silent, which
+// is exactly what makes a rewritten trust bundle hard to notice. Defaults to a
+// discard logger.
+func WithLogger(logger logr.Logger) Option {
+	opt := func(ca *CertificateAuthority) error {
+		ca.logger = logger
 
 		return nil
 	}
@@ -161,6 +197,7 @@ func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error
 		nowFunc:              time.Now,
 		maxPreviousCerts:     1,
 		previousCertificates: make([]*x509.Certificate, 0),
+		logger:               logr.Discard(),
 		drainWindow:          500 * time.Millisecond,
 		reloadAttempts:       5,
 		reloadBackoff:        200 * time.Millisecond,
@@ -177,6 +214,13 @@ func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error
 	if _, err := ca.load(); err != nil {
 		return nil, err
 	}
+	// Seed the last-success clock from the load that just succeeded. Nothing
+	// else records a success until the watch startup reconcile, which runs
+	// after the manager starts and never at all if the watcher fails to
+	// establish - so without this the "reloads have stopped" gauge would report
+	// the epoch, and its alert would fire on every process start. Not counted
+	// as a reload attempt: this is the bootstrap load, not the reload loop.
+	ca.recordReloadResult(nil)
 
 	return ca, nil
 }
@@ -198,19 +242,8 @@ func (ca *CertificateAuthority) load() (bool, error) {
 		return false, fmt.Errorf("failed to parse certificate: %w", err)
 	}
 
-	// Validate: CA
-	if !caX509Cert.BasicConstraintsValid || !caX509Cert.IsCA {
-		return false, errors.New("certificate is not a valid CA certificate")
-	}
-
-	// Validate: key usage
-	if (caX509Cert.KeyUsage & x509.KeyUsageCertSign) == 0 {
-		return false, errors.New("CA certificate cannot sign certificates")
-	}
-
-	// Validate: not expired
-	if time.Now().After(caX509Cert.NotAfter) {
-		return false, errors.New("CA certificate has expired")
+	if err := validateCACertificate(caX509Cert, time.Now()); err != nil {
+		return false, err
 	}
 
 	signer, ok := caCert.PrivateKey.(crypto.Signer)
@@ -230,16 +263,13 @@ func (ca *CertificateAuthority) load() (bool, error) {
 		return false, nil
 	}
 
-	// Rotate: push current certificate into the history if it changed
+	// Rotate: the outgoing certificate becomes the most recently active entry
+	// in the history. It is appended unconditionally; normalization below
+	// collapses it onto any earlier occurrence of the same certificate, so a
+	// CA that is rotated back in and out again keeps one slot rather than
+	// accumulating one per flap.
 	if ca.certificate != nil && !ca.certificate.Equal(caX509Cert) {
-		if !slices.ContainsFunc(ca.previousCertificates, func(item *x509.Certificate) bool {
-			return item.Equal(ca.certificate)
-		}) {
-			ca.previousCertificates = append(ca.previousCertificates, ca.certificate)
-		}
-		if len(ca.previousCertificates) > ca.maxPreviousCerts {
-			ca.previousCertificates = ca.previousCertificates[len(ca.previousCertificates)-ca.maxPreviousCerts:]
-		}
+		ca.previousCertificates = append(ca.previousCertificates, ca.certificate)
 	}
 
 	// Set new cert and signer
@@ -247,13 +277,84 @@ func (ca *CertificateAuthority) load() (bool, error) {
 	ca.signer = signer
 	ca.fingerprint = fingerprint
 
-	// Remove the current cert from the previous CA certs, in order to avoid
-	// duplicate entries in the trust bundle.
-	ca.previousCertificates = slices.DeleteFunc(ca.previousCertificates, func(item *x509.Certificate) bool {
-		return item.Equal(ca.certificate)
-	})
+	// Runs on every load that changed the material, including the very first
+	// one: that is what subjects a bootstrapped history to the same rules as
+	// one this process built itself.
+	ca.normalizePreviousCertificates()
 
 	return true, nil
+}
+
+// validateCACertificate reports whether cert can serve as a signing CA at the
+// given time. The same checks decide whether the material on disk may become
+// the current CA and whether a certificate offered as history is worth
+// retaining, so they live in one place.
+func validateCACertificate(cert *x509.Certificate, now time.Time) error {
+	if !cert.BasicConstraintsValid || !cert.IsCA {
+		return errors.New("certificate is not a valid CA certificate")
+	}
+	if (cert.KeyUsage & x509.KeyUsageCertSign) == 0 {
+		return errors.New("CA certificate cannot sign certificates")
+	}
+	if now.After(cert.NotAfter) {
+		return errors.New("CA certificate has expired")
+	}
+
+	return nil
+}
+
+// normalizePreviousCertificates enforces the invariants of the previous-CA
+// history: every entry is a usable CA certificate, no entry is the current CA,
+// no certificate appears twice, the order runs least-recently-active first, and
+// there are never more than maxPreviousCerts of them. Callers must hold ca.mu.
+//
+// The order of the steps is the point. Dropping the current CA and the
+// unusable entries *before* trimming means a rotation back into a certificate
+// the history already holds, or an expired anchor nobody can verify against,
+// cannot evict a previous CA whose certificates are still in the field. Trimming
+// first - which is what the code did while the trim lived in the rotate branch -
+// spends retention slots on certificates that are about to be discarded anyway.
+//
+// Certificates are compared by their DER bytes, the same identity the
+// fingerprint expresses, so "the same CA" means the same certificate rather
+// than the same position in a slice.
+func (ca *CertificateAuthority) normalizePreviousCertificates() {
+	now := ca.now()
+
+	kept := make([]*x509.Certificate, 0, len(ca.previousCertificates))
+	for i, cert := range ca.previousCertificates {
+		switch {
+		case cert == nil:
+			continue
+		case ca.certificate != nil && cert.Equal(ca.certificate):
+			// The current CA is published from ca.certificate; holding it in
+			// the history too would duplicate it in the trust bundle and spend
+			// a retention slot on it.
+			continue
+		case slices.ContainsFunc(ca.previousCertificates[i+1:], cert.Equal):
+			// A later occurrence is the more recent one; keep that instead.
+			continue
+		}
+		if err := validateCACertificate(cert, now); err != nil {
+			ca.logger.Info("dropping a previous CA certificate from the retained history",
+				"reason", err.Error(), "subject", cert.Subject.String(), "notAfter", cert.NotAfter)
+
+			continue
+		}
+		kept = append(kept, cert)
+	}
+
+	if len(kept) > ca.maxPreviousCerts {
+		dropped := kept[:len(kept)-ca.maxPreviousCerts]
+		for _, cert := range dropped {
+			ca.logger.Info("dropping a previous CA certificate from the retained history",
+				"reason", "history exceeds the configured maximum", "max", ca.maxPreviousCerts,
+				"subject", cert.Subject.String(), "notAfter", cert.NotAfter)
+		}
+		kept = kept[len(dropped):]
+	}
+
+	ca.previousCertificates = kept
 }
 
 // Sign is responsible for signing our certificate request configuration.
@@ -298,6 +399,16 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 		ExtKeyUsage:        pcConfig.ExtKeyUsage,
 		NotBefore:          nbf,
 		NotAfter:           naf,
+		// BasicConstraintsValid is what makes Go emit the basicConstraints
+		// extension at all; IsCA stays at its zero value, so the pair asserts
+		// cA:FALSE on every leaf. DER omits a field at its DEFAULT, so the
+		// encoded extension is an empty SEQUENCE - that is cA:FALSE, not a
+		// missing value. No pathLenConstraint: it is meaningless with cA:FALSE.
+		// crypto/x509 marks the extension critical, which is what we want: RFC
+		// 5280 4.2.1.9 already requires it critical on CA certificates, so any
+		// verifier that can validate a chain processes it. Why it is asserted
+		// at all: ADR-0003.
+		BasicConstraintsValid: true,
 	}
 
 	issuedCertificate, err := x509.CreateCertificate(rand.Reader, template, ca.certificate, pcConfig.PublicKey, ca.signer)
@@ -458,6 +569,9 @@ func (ca *CertificateAuthority) watchLoop(
 			}
 
 			logger.Info("reloading CA certificate")
+			// Read before the reload: reloadWithRetry clears the streak on
+			// success.
+			wasFailing := ca.reloadFailing()
 			changed, err := ca.reloadWithRetry(ctx, logger)
 			if err != nil {
 				// The last-good CA is retained, so signing keeps working.
@@ -472,6 +586,15 @@ func (ca *CertificateAuthority) watchLoop(
 				// watched directories, events arriving after the drain window,
 				// or a tick that already picked the material up. Only the one
 				// that actually changed the CA is worth publishing.
+				//
+				// Recovery is the exception worth announcing: correcting a
+				// mismatched pair restores the same certificate, so nothing
+				// changed, but "the CA is loadable again" is exactly what an
+				// operator who just fixed it is watching for.
+				if wasFailing {
+					logger.Info("CA certificate reloaded successfully", "recovered", true)
+					continue
+				}
 				logger.V(1).Info("CA certificate on disk is unchanged, nothing to publish")
 				continue
 			}
@@ -516,6 +639,8 @@ func (ca *CertificateAuthority) drainEvents(ctx context.Context, logger logr.Log
 // also bounds the log stream: a permanently unloadable CA costs one line per
 // interval rather than the whole retry burst, forever.
 func (ca *CertificateAuthority) reconcileOnce(logger logr.Logger, notify chan<- struct{}, cause string) {
+	// Read before the reload: recordReloadResult below clears the streak.
+	wasFailing := ca.reloadFailing()
 	changed, err := ca.load()
 
 	// Recorded regardless of whether anything changed: a readable CA clears the
@@ -523,6 +648,7 @@ func (ca *CertificateAuthority) reconcileOnce(logger logr.Logger, notify chan<- 
 	// unreadable one accumulates towards the readiness threshold even though no
 	// filesystem event ever arrived.
 	ca.recordReloadResult(err)
+	metrics.CAReloadAttempts.WithLabelValues(reloadResult(changed, err)).Inc()
 
 	switch {
 	case err != nil:
@@ -530,6 +656,14 @@ func (ca *CertificateAuthority) reconcileOnce(logger logr.Logger, notify chan<- 
 	case changed:
 		logger.Info("CA certificate reloaded successfully", "cause", cause)
 		notifyChanged(notify)
+	case wasFailing:
+		// Recovery is worth announcing even though nothing changed. Correcting
+		// a mismatched pair restores the *same* certificate, so `changed` is
+		// false and the V(1) line below would be the only record - invisible at
+		// the default verbosity, to an operator who has just fixed the CA and is
+		// watching for confirmation. No notify: nothing moved, so nothing needs
+		// republishing.
+		logger.Info("CA certificate reloaded successfully", "cause", cause, "recovered", true)
 	default:
 		logger.V(1).Info("CA certificate on disk is unchanged", "cause", cause)
 	}
@@ -564,6 +698,7 @@ func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr
 		var changed bool
 		if changed, err = ca.load(); err == nil {
 			ca.recordReloadResult(nil)
+			metrics.CAReloadAttempts.WithLabelValues(reloadResult(changed, nil)).Inc()
 
 			return changed, nil
 		}
@@ -573,6 +708,7 @@ func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr
 		// stays unloadable must be able to cross the readiness threshold
 		// without one.
 		failures := ca.recordReloadResult(err)
+		metrics.CAReloadAttempts.WithLabelValues(metrics.ResultFailed).Inc()
 		if attempt >= ca.reloadAttempts {
 			return false, fmt.Errorf("reload failed after %d attempt(s), %d consecutive failure(s): %w",
 				attempt, failures, err)
@@ -591,6 +727,18 @@ func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr
 	}
 }
 
+// reloadFailing reports whether the last reload attempt left the CA in a failed
+// state, so a caller can tell a reload that recovered from one that was routine.
+//
+// Read before the reload it describes, since recordReloadResult clears the
+// streak. Only the watch goroutine reloads, so no attempt can interleave.
+func (ca *CertificateAuthority) reloadFailing() bool {
+	ca.healthMu.Lock()
+	defer ca.healthMu.Unlock()
+
+	return ca.reloadFailures > 0
+}
+
 // recordReloadResult stores the outcome of the most recent reload attempt and
 // returns the resulting number of consecutive failures, so callers can report
 // the streak alongside the failure. A successful reload clears the streak.
@@ -602,6 +750,7 @@ func (ca *CertificateAuthority) recordReloadResult(err error) int {
 	if err == nil {
 		ca.reloadFailures = 0
 		ca.firstFailureTime = time.Time{}
+		ca.lastSuccessTime = ca.now()
 
 		return 0
 	}
@@ -612,6 +761,52 @@ func (ca *CertificateAuthority) recordReloadResult(err error) int {
 	ca.reloadFailures++
 
 	return ca.reloadFailures
+}
+
+// reloadResult classifies a reload attempt for the metric. The three values are
+// the three arms the callers already branch on, so the label cannot drift from
+// what the logs say happened.
+func reloadResult(changed bool, err error) string {
+	switch {
+	case err != nil:
+		return metrics.ResultFailed
+	case changed:
+		return metrics.ResultChanged
+	default:
+		return metrics.ResultUnchanged
+	}
+}
+
+// ReloadHealth reports the consecutive-failure streak and when the CA was last
+// read successfully. It is safe for concurrent use, and takes healthMu rather
+// than mu for the same reason Healthy does: a poller must not contend with a
+// reload, nor with a signing operation.
+func (ca *CertificateAuthority) ReloadHealth() (int, time.Time) {
+	ca.healthMu.Lock()
+	defer ca.healthMu.Unlock()
+
+	return ca.reloadFailures, ca.lastSuccessTime
+}
+
+// CertificateNotAfter reports when the loaded CA certificate expires. It is
+// safe for concurrent use: it takes mu, copies a scalar and releases, so a
+// caller reading it on a metrics scrape does not hold the lock across signing.
+func (ca *CertificateAuthority) CertificateNotAfter() time.Time {
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
+
+	return ca.certificate.NotAfter
+}
+
+// TrustBundleSize reports how many certificates the in-memory trust bundle
+// holds: the current CA plus the retained previous ones. It is what the signer
+// would publish, not a read of the published ClusterTrustBundle. Safe for
+// concurrent use.
+func (ca *CertificateAuthority) TrustBundleSize() int {
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
+
+	return 1 + len(ca.previousCertificates)
 }
 
 // now returns the current time from the configured clock, which tests replace
