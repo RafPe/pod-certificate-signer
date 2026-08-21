@@ -42,7 +42,12 @@ grep -q 'target_ref: \${{ needs.verify.outputs.sha }}' .github/workflows/release
 grep -q 'git tag -a' .github/workflows/release.yml ||
 	fail "Release must create an annotated tag only after verification"
 
-grep -q 'exactly one' .github/workflows/pr-release-metadata.yml ||
+# Pin the enforcement itself, not prose describing it. This previously
+# matched the string "exactly one", which lived only in the job's display
+# name -- so renaming that job to "meta:release-label", a purely cosmetic
+# change, failed the guard even though the enforcement was untouched. The
+# label-count rejection is the behaviour worth pinning.
+grep -q '"${count}" -ne 1' .github/workflows/pr-release-metadata.yml ||
 	fail "PR metadata must enforce exactly one release label"
 grep -q '.changes/unreleased' .github/workflows/pr-release-metadata.yml ||
 	fail "PR metadata must enforce changelog fragments"

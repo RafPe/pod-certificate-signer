@@ -14,10 +14,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Cancel superseded pull request runs; never cancel a run on main or a
+  # scheduled run, whose results are recorded against the default branch.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   govulncheck:
     name: "scan:vuln"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Clone the code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
