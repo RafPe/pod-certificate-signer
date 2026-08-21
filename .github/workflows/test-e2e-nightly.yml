@@ -52,7 +52,7 @@ concurrency:
 
 jobs:
   test-e2e-nightly:
-    name: Run the full suite on Ubuntu
+    name: "test:e2e-full"
     runs-on: ubuntu-latest
     # Scheduled and manual runs always go ahead. A pull request runs only when
     # it carries the `run-nightly` label, so labelling a pull request anything
