@@ -30,3 +30,4 @@ when an ADR is required and how one is reviewed.
 | [0003](0003-leaf-basic-constraints-ca-false.md) | Assert `basicConstraints` with `cA:FALSE` on issued leaf certificates | Proposed |
 | [0004](0004-bootstrapped-previous-ca-history.md) | Bound and validate the previous-CA history bootstrapped from the ClusterTrustBundle | Proposed |
 | [0005](0005-bounded-metrics-surface.md) | Expose a bounded metrics surface, and never label a metric with a per-request identity | Proposed |
+| [0006](0006-shard-the-nightly-e2e-tier.md) | Shard the nightly e2e tier by cost, and make every nightly spec name its shard | Proposed |
