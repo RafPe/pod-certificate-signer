@@ -94,6 +94,18 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+      # Required to push the tag, not to edit workflows. GitHub refuses a tag
+      # push from GITHUB_TOKEN when the tagged commit's .github/workflows/
+      # differ from the tip of every branch - and that is the normal case here,
+      # because this job runs after verify, check and E2E, so anything merged
+      # to main in those ~20 minutes moves the tip out from under the release
+      # commit. It is what broke v2.4.0: #127 landed 8 minutes after the
+      # release PR and changed 12 workflow files.
+      #
+      # The grant does not let this job change workflows on main - branch
+      # protection still applies, and its only steps are a SHA-pinned checkout
+      # and git. Keep it on this job rather than at workflow level.
+      workflows: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
