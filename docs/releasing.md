@@ -78,12 +78,20 @@ The failure that makes this necessary is worth recognising:
 ```
 
 `release:tag` runs after verify, check and E2E, so `main` can move during those
-~20 minutes. GitHub refuses a tag push from `GITHUB_TOKEN` whenever the tagged
-commit's `.github/workflows/` differ from the tip of every branch, which is
-exactly what a workflow change merged mid-pipeline produces. The job now holds
-`workflows: write` for this reason. Merging anything that touches
-`.github/workflows/` while a release is in flight is still best avoided — it is
-the only thing that makes the tagged commit diverge in the first place.
+~20 minutes. GitHub refuses a tag *push* authenticated with `GITHUB_TOKEN`
+whenever the tagged commit's `.github/workflows/` differ from the tip of every
+branch, which is exactly what a workflow change merged mid-pipeline produces.
+
+No `permissions:` key lifts that restriction — `workflows` is a PAT/OAuth scope,
+not an Actions permission, and putting it in a `permissions:` block makes the
+whole workflow fail to parse. `release:tag` therefore creates the tag through
+the REST API, which points a new ref at a commit already on `main` rather than
+pushing one. If that ever stops working, the fallback is a PAT or App token
+carrying the `workflow` scope, used only by that job.
+
+Merging anything that touches `.github/workflows/` while a release is in flight
+is still best avoided — it is the only thing that makes the tagged commit
+diverge in the first place.
 
 ## Repository setup
 

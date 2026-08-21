@@ -94,34 +94,56 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
-      # Required to push the tag, not to edit workflows. GitHub refuses a tag
-      # push from GITHUB_TOKEN when the tagged commit's .github/workflows/
-      # differ from the tip of every branch - and that is the normal case here,
-      # because this job runs after verify, check and E2E, so anything merged
-      # to main in those ~20 minutes moves the tip out from under the release
-      # commit. It is what broke v2.4.0: #127 landed 8 minutes after the
-      # release PR and changed 12 workflow files.
-      #
-      # The grant does not let this job change workflows on main - branch
-      # protection still applies, and its only steps are a SHA-pinned checkout
-      # and git. Keep it on this job rather than at workflow level.
-      workflows: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.verify.outputs.sha }}
-          fetch-depth: 0
+      # The tag is created through the REST API rather than `git push`.
+      #
+      # A tag push authenticated with GITHUB_TOKEN is refused whenever the
+      # tagged commit's .github/workflows/ differ from the tip of every branch:
+      #
+      #   ! [remote rejected] vX.Y.Z -> vX.Y.Z (refusing to allow a GitHub App
+      #     to create or update workflow `.github/workflows/...` without
+      #     `workflows` permission)
+      #
+      # That is the normal case here, not an edge one. This job runs after
+      # verify, check and E2E, so anything merged to main in those ~20 minutes
+      # moves the tip out from under the release commit. It is what broke
+      # v2.4.0: #127 landed 8 minutes after the release PR and changed 12
+      # workflow files.
+      #
+      # No permissions: key lifts that restriction - `workflows` is a PAT/OAuth
+      # scope, not an Actions permission, and setting it makes the whole
+      # workflow fail to parse. Creating the ref through the API sidesteps the
+      # push path: it points a new ref at a commit that is already on main, so
+      # no workflow file is created or updated.
       - env:
           TAG: ${{ needs.verify.outputs.tag }}
           SHA: ${{ needs.verify.outputs.sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
-            [ "$(git rev-list -n 1 "${TAG}")" = "${SHA}" ] || { echo "::error::immutable tag points elsewhere"; exit 1; }
+          set -euo pipefail
+
+          # Resolve the tag from the API rather than a checkout, so the result
+          # is the remote's truth and not a function of what was fetched.
+          if ref=$(gh api "repos/${REPO}/git/ref/tags/${TAG}" 2>/dev/null); then
+            target=$(echo "${ref}" | jq -r .object.sha)
+            # An annotated tag's ref points at the tag object, not the commit.
+            if [ "$(echo "${ref}" | jq -r .object.type)" = "tag" ]; then
+              target=$(gh api "repos/${REPO}/git/tags/${target}" --jq .object.sha)
+            fi
+            [ "${target}" = "${SHA}" ] || { echo "::error::immutable tag points elsewhere"; exit 1; }
+            echo "tag ${TAG} already points at ${SHA}"
           else
-            git config user.name github-actions[bot]
-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git tag -a "${TAG}" -m "Release ${TAG}" "${SHA}"
-            git push origin "refs/tags/${TAG}"
+            obj=$(gh api "repos/${REPO}/git/tags" \
+              -f tag="${TAG}" \
+              -f message="Release ${TAG}" \
+              -f object="${SHA}" \
+              -f type=commit \
+              --jq .sha)
+            gh api "repos/${REPO}/git/refs" \
+              -f ref="refs/tags/${TAG}" \
+              -f sha="${obj}" >/dev/null
+            echo "created ${TAG} at ${SHA}"
           fi
 
   publish-artifacts:
