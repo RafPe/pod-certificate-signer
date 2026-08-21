@@ -232,6 +232,17 @@ in-memory bundle the signer *would* publish, not a read of the
 is a dashboard over the whole surface. Import it through the Grafana UI, or
 provision it from a `ConfigMap` mounted under a file provider's `path`.
 
+![The PodCertificateSigner dashboard during a CA rotation exercise](assets/grafana-dashboard.png)
+
+The capture above is mid-exercise rather than idle, which is the useful view.
+The dashed vertical lines are CA rotations, drawn from
+`ca_reload_attempts_total{result="changed"}`. Read across them: the failure
+streak ramps to 9 and drops back the moment the CA is repaired, `Anchors in the
+bundle` steps 1 → 2 → 3 as each rotation retains its predecessor, the requeue
+burst is a CA too short-lived to cover the requested lifetime, and issuance
+never stops through any of it — a failed reload retains the last-good CA, so
+the signer keeps signing while the reload loop is broken.
+
 Every panel reads through a `datasource` dashboard variable rather than a
 hardcoded datasource uid, so it resolves to your default Prometheus on import
 and offers a picker if you run more than one. Nothing else needs editing.
