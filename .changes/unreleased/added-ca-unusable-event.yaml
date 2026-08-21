@@ -1,2 +1,0 @@
-kind: Added
-body: A PodCertificateRequest the CA cannot sign yet - an expired signer, or a requested lifetime longer than the CA's remaining validity - now carries a rate-limited `CASignerUnusable` warning event, so `kubectl describe podcertificaterequest` shows why a pod is stuck in ContainerCreating instead of nothing at all. The request is still requeued rather than failed, and still records no condition, so a CA rotation can satisfy it.
