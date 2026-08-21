@@ -536,6 +536,16 @@ var _ = Describe("Manager", Ordered, Serial, func() {
 	// would invalidate. Declared here, nothing follows that it can disturb. See
 	// goweb_interop_test.go.
 	defineGowebInteropTests()
+
+	// High availability goes after everything, and it is the one container that
+	// does not switch install profile: it uninstalls the release and installs
+	// its own two-replica deployment. Nothing above may run alongside a
+	// two-replica controller - installProfile, restartController and
+	// resolveControllerPod all assert exactly one pod - which is why this is
+	// last rather than one more profile in the rotation above. It also rotates
+	// the CA and leaves the release at two replicas, so nothing may follow it.
+	// See ha_test.go.
+	defineHighAvailabilityTests()
 })
 
 // getMetricsOutput retrieves and returns the logs from the curl pod used to access the metrics endpoint.

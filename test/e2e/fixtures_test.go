@@ -62,6 +62,16 @@ type certTestPod struct {
 	// identity ${pod.serviceAccountName} resolves to. Defaults to "default".
 	serviceAccountName string
 
+	// signerNameOverride names a signer other than the one under test, so a
+	// spec can create a request this controller must not touch. Empty - the
+	// case for every other fixture - uses signerName.
+	//
+	// It is spelled as an override rather than a plain `signerName` field
+	// because the correct value for a spec is almost always the package
+	// constant: a fixture that had to name the signer would let a typo point a
+	// spec at a request nothing serves, and it would pass by never issuing.
+	signerNameOverride string
+
 	// keyType is the projection's requested key algorithm. Defaults to
 	// ED25519.
 	keyType string
@@ -247,9 +257,14 @@ func (p certTestPod) observer() corev1.Container {
 func (p certTestPod) build() *corev1.Pod {
 	p = p.withDefaults()
 
+	requestedSigner := signerName
+	if p.signerNameOverride != "" {
+		requestedSigner = p.signerNameOverride
+	}
+
 	sources := []corev1.VolumeProjection{{
 		PodCertificate: &corev1.PodCertificateProjection{
-			SignerName:           signerName,
+			SignerName:           requestedSigner,
 			KeyType:              p.keyType,
 			CredentialBundlePath: p.credentialBundlePath,
 			MaxExpirationSeconds: p.maxExpirationSeconds,
