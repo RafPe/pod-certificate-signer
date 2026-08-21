@@ -151,11 +151,18 @@ ClusterRole.
 > to the `*-metrics-reader` ClusterRole, and trust (or skip verifying) the
 > controller's in-memory self-signed serving certificate.
 
-Bind the rendered `<release>-metrics-reader` ClusterRole to your scraper's
+Bind the rendered `*-metrics-reader` ClusterRole to your scraper's
 ServiceAccount and point a `ServiceMonitor` (or equivalent) at the endpoint with
 `scheme: https`, a `bearerTokenFile`, and `tlsConfig.insecureSkipVerify: true`
 (or your serving CA). Full walkthrough in the
 [configuration docs](../../docs/configuration.md#metrics-authentication).
+
+The role is named from the chart's `fullname` helper, so it is
+`<release>-metrics-reader` only when the release name already contains the
+chart name. A release called `pcs` renders
+`pcs-pod-certificate-signer-metrics-reader`; binding a name that does not exist
+returns `403` on every scrape. Confirm with
+`kubectl get clusterrole -o name | grep metrics-reader`.
 
 Set `metrics.insecure: true` **only** to restore the legacy unauthenticated
 plaintext endpoint, and only when the port is protected by other means. An

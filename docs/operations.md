@@ -226,6 +226,38 @@ by five where the log rose by one. And `trust_bundle_certificates` reports the
 in-memory bundle the signer *would* publish, not a read of the
 `ClusterTrustBundle` object, so it does not detect drift in what is published.
 
+### Grafana dashboard
+
+[`docs/dashboards/pod-certificate-signer.json`](dashboards/pod-certificate-signer.json)
+is a dashboard over the whole surface. Import it through the Grafana UI, or
+provision it from a `ConfigMap` mounted under a file provider's `path`.
+
+Every panel reads through a `datasource` dashboard variable rather than a
+hardcoded datasource uid, so it resolves to your default Prometheus on import
+and offers a picker if you run more than one. Nothing else needs editing.
+
+The top row is the two-second read — CA expiry, the reload failure streak,
+reload staleness, anchors published, and the issuance SLI. The rows below are
+issuance, CA lifecycle, trust bundle publication, and a collapsed
+controller-runtime row. Each panel carries the interpretation from its metric's
+`Help` text in the panel description, so the two that are easy to misread
+travel with the graph.
+
+Two panels will sit at zero on a healthy cluster, and that is not a fault:
+
+- **`drops_total`.** A request whose pod is gone is normally deleted before the
+  signer reconciles it — garbage collection removes it with its pod, and
+  kube-controller-manager reaps pod-less requests as well. The counter records
+  the case where the signer's live pod read wins that race, which is rare.
+- **`denied{reason="UnsupportedKeyType"}` and `failed{reason="SigningFailed"}`.**
+  kube-apiserver validates a projection's `keyType` against a closed enum the
+  signer fully supports, and a failed CA reload retains the last-good CA so
+  signing does not fail with it.
+
+All three are exported as zeros from the first scrape rather than appearing on
+first occurrence, so an alert written as `rate(...) > 0` has a series to
+evaluate against immediately.
+
 ## Upgrades
 
 > [!IMPORTANT]
