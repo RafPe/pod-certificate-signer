@@ -362,13 +362,30 @@ could reach the Service could scrape the controller's metrics.
 To let Prometheus scrape the secured endpoint:
 
 1. Bind the chart's `*-metrics-reader` `ClusterRole` (grants `get` on the
-   `/metrics` nonResourceURL) to the ServiceAccount Prometheus scrapes with:
+   `/metrics` nonResourceURL) to the ServiceAccount Prometheus scrapes with.
+
+   > [!IMPORTANT]
+   > **The name below assumes the release name used throughout these docs**
+   > (`helm install pod-certificate-signer`). The role is named from the
+   > chart's `fullname` helper — the release name, prefixed with the chart name
+   > unless the release name already contains it — so a release called `pcs`
+   > renders `pcs-pod-certificate-signer-metrics-reader`, not
+   > `pcs-metrics-reader`. Binding a name that does not exist fails the
+   > `SubjectAccessReview` and every scrape returns `403`, with nothing in the
+   > controller log to say why. Read the real name off the cluster:
+   >
+   > ```sh
+   > kubectl get clusterrole -o name | grep metrics-reader
+   > ```
+   >
+   > `roleRef` is immutable, so correcting a binding means deleting and
+   > recreating it, not patching it.
 
    ```yaml
    apiVersion: rbac.authorization.k8s.io/v1
    kind: ClusterRoleBinding
    metadata:
-     name: pod-certificate-signer-metrics-reader
+     name: prometheus-metrics-reader
    roleRef:
      apiGroup: rbac.authorization.k8s.io
      kind: ClusterRole
@@ -379,10 +396,11 @@ To let Prometheus scrape the secured endpoint:
      namespace: monitoring
    ```
 
-2. Configure the scrape (e.g. a Prometheus Operator `ServiceMonitor`) to use the
-   `https` scheme, the pod's bearer token, and either the serving CA or
-   `insecureSkipVerify: true` (the serving cert is self-signed, generated in
-   memory by controller-runtime):
+2. Configure the scrape to use the `https` scheme, the pod's bearer token, and
+   either the serving CA or `insecureSkipVerify: true` (the serving cert is
+   self-signed, generated in memory by controller-runtime).
+
+   With a Prometheus Operator `ServiceMonitor`:
 
    ```yaml
    endpoints:
@@ -392,6 +410,32 @@ To let Prometheus scrape the secured endpoint:
      tlsConfig:
        insecureSkipVerify: true
    ```
+
+   Without the operator, the equivalent `scrape_config`. The `keep` regex
+   matches `<service name>;<port name>`, and the service carries the same
+   release-dependent `fullname` as the ClusterRole above:
+
+   ```yaml
+   - job_name: pod-certificate-signer
+     scheme: https
+     tls_config:
+       insecure_skip_verify: true
+     authorization:
+       type: Bearer
+       credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+     kubernetes_sd_configs:
+     - role: endpoints
+       namespaces:
+         names: [pcs-system]
+     relabel_configs:
+     - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+       action: keep
+       regex: pod-certificate-signer;metrics
+   ```
+
+   Prometheus needs `get`/`list`/`watch` on `services`, `endpoints` and `pods`
+   for the discovery itself; that is separate from the metrics-reader role,
+   which only authorizes the scrape.
 
 The controller ServiceAccount is granted `create` on `tokenreviews` and
 `subjectaccessreviews` by the chart so the auth filter can call the apiserver.
