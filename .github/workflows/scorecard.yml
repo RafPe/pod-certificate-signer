@@ -18,7 +18,7 @@ permissions: read-all
 
 jobs:
   analysis:
-    name: Scorecard analysis
+    name: "scan:posture"
     runs-on: ubuntu-latest
     permissions:
       # Needed to upload the SARIF results to the code-scanning dashboard.

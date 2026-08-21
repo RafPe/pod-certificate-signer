@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   govulncheck:
-    name: Go vulnerability scan
+    name: "scan:vuln"
     runs-on: ubuntu-latest
     steps:
       - name: Clone the code

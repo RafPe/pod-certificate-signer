@@ -35,7 +35,7 @@ env:
 
 jobs:
   build-and-push:
-    name: Build and push multi-arch image
+    name: "image"
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -110,7 +110,7 @@ jobs:
           cosign sign --yes "${IMAGE_REPO}@${DIGEST}"
 
   push-chart:
-    name: Package and push Helm chart
+    name: "chart"
     runs-on: ubuntu-latest
     # Publish the chart only once its default image tag (the appVersion)
     # actually exists in the registry.

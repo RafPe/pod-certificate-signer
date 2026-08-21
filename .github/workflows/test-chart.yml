@@ -13,7 +13,7 @@ jobs:
   test-e2e:
     permissions:
       contents: read
-    name: Run on Ubuntu
+    name: "test:chart"
     runs-on: ubuntu-latest
     steps:
       - name: Clone the code
