@@ -48,10 +48,42 @@ If only skip changes have landed, no release should be prepared.
 ## Recovery
 
 Tags are immutable: never delete or move a release tag. If publication fails
-after the tag is created, fix the workflow on `main` and dispatch **Release**
-with the existing `vX.Y.Z` tag. Recovery verifies that the tag resolves to a
-commit on `main`, reruns checks and E2E, and resumes publication. It refuses a
-published release or a tag that points elsewhere.
+**after** the tag is created, fix the workflow on `main` and dispatch
+**Release** with the existing `vX.Y.Z` tag. Recovery verifies that the tag
+resolves to a commit on `main`, reruns checks and E2E, and resumes publication.
+It refuses a published release or a tag that points elsewhere.
+
+### When the tag was never created
+
+`workflow_dispatch` takes an *existing* tag, so it cannot recover a release that
+failed at `release:tag` itself. Create the tag by hand from a checkout that has
+`workflow` scope, then dispatch as above — pushing it also triggers
+`release-image.yml`, so the image and chart publish on their own and the
+dispatch only finishes the GitHub Release:
+
+```sh
+git fetch origin --tags
+# The SHA is the release PR's merge commit; the failed run logs it as SHA.
+git tag -a vX.Y.Z -m "Release vX.Y.Z" <merge-sha>
+git push origin refs/tags/vX.Y.Z
+gh workflow run release.yml -f tag=vX.Y.Z
+```
+
+The failure that makes this necessary is worth recognising:
+
+```
+! [remote rejected] vX.Y.Z -> vX.Y.Z (refusing to allow a GitHub App to
+  create or update workflow `.github/workflows/...` without `workflows`
+  permission)
+```
+
+`release:tag` runs after verify, check and E2E, so `main` can move during those
+~20 minutes. GitHub refuses a tag push from `GITHUB_TOKEN` whenever the tagged
+commit's `.github/workflows/` differ from the tip of every branch, which is
+exactly what a workflow change merged mid-pipeline produces. The job now holds
+`workflows: write` for this reason. Merging anything that touches
+`.github/workflows/` while a release is in flight is still best avoided — it is
+the only thing that makes the tagged commit diverge in the first place.
 
 ## Repository setup
 
