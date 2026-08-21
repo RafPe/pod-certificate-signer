@@ -16,10 +16,17 @@ on:
 # needs. We do NOT trigger on pull_request, so fork PRs cannot read these tokens.
 permissions: read-all
 
+concurrency:
+  # Cancel superseded pull request runs; never cancel a run on main or a
+  # scheduled run, whose results are recorded against the default branch.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   analysis:
     name: "scan:posture"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       # Needed to upload the SARIF results to the code-scanning dashboard.
       security-events: write
