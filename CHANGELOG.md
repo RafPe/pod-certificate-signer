@@ -5,6 +5,10 @@ request is prepared. This file follows Keep a Changelog and Semantic Versioning.
 
 <!-- next-release -->
 
+## [3.0.0] - 2026-08-27
+
+- The signer now speaks the GA `certificates.k8s.io/v1` API and requires Kubernetes 1.37 or newer; the chart's `kubeVersion` moves to `>= 1.37.0-0` and installs on older clusters are refused. Nothing needs enabling on the cluster any more: `PodCertificateRequest` and `ClusterTrustBundle` are served by default in 1.37, so the `PodCertificateRequest`, `ClusterTrustBundle` and `ClusterTrustBundleProjection` feature gates and the `certificates.k8s.io/v1beta1` runtime-config entry can all come out of your apiserver configuration. The GA type drops `spec.pkixPublicKey`, so the signer no longer honours it and reads the subject public key only from the PKCS#10 stub every 1.37 kubelet sends - a request that somehow carries neither is denied with `UnsupportedKeyType` rather than signed. The `-0` suffix on the version constraint is deliberate: it admits managed distributions whose version strings carry a suffix, such as `1.37.2-eks-abc123`, which semver reads as prereleases and a bare `>= 1.37.0` would reject.
+
 ## [2.4.0] - 2026-08-21
 
 - Two outages that were previously visible only in logs are now alertable. `podcertificatesigner_ca_expiration_timestamp_seconds` says when the signer will stop being able to issue - past that point requests requeue silently and pods sit in ContainerCreating - and `podcertificatesigner_ca_reload_last_success_timestamp_seconds` catches a reload loop that stopped, which no failure-based signal can, since a dropped watch or a wedged ticker produces no failures at all. Alongside them: `podcertificatesigner_ca_reload_attempts_total{result}` marks rotations and reload failures, `podcertificatesigner_ca_reload_consecutive_failures` crosses its threshold roughly five minutes before readiness flips, and `podcertificatesigner_trust_bundle_certificates` reports how many anchors the signer would publish. The four gauges are computed at scrape time from the loaded CA, so they cannot go stale relative to the reload loop. docs/operations.md carries the alert expressions.
