@@ -26,7 +26,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -85,19 +85,16 @@ var _ = BeforeSuite(func() {
 
 	ctx, cancel = context.WithCancel(context.TODO())
 
-	Expect(certificatesv1beta1.AddToScheme(scheme.Scheme)).To(Succeed())
+	Expect(certificatesv1.AddToScheme(scheme.Scheme)).To(Succeed())
 
 	// +kubebuilder:scaffold:scheme
 
 	By("bootstrapping test environment")
+	// PodCertificateRequest is a built-in API, not a CRD, so there is nothing
+	// to install from disk. Since Kubernetes 1.37 it is GA in
+	// certificates.k8s.io/v1, which the apiserver enables and serves by
+	// default - no feature-gate or runtime-config override needed.
 	testEnv = &envtest.Environment{}
-
-	// PodCertificateRequest is a built-in API behind a feature gate, not a
-	// CRD, so there is nothing to install from disk. The apiserver has to be
-	// told both to enable the gate and to serve the beta API group version.
-	testEnv.ControlPlane.GetAPIServer().Configure().
-		Append("feature-gates", "PodCertificateRequest=true").
-		Append("runtime-config", "certificates.k8s.io/v1beta1=true")
 
 	// Retrieve the first found binary directory to allow running tests from IDEs
 	if getFirstFoundEnvTestBinaryDir() != "" {

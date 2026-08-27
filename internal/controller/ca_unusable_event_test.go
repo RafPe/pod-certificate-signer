@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
@@ -34,7 +34,7 @@ func caUnusableErr() error {
 // caUnusableHarness wires a reconciler over a request whose pod exists, with a
 // signer that fails the way an unusable CA does, and a clock the test advances.
 func caUnusableHarness(t *testing.T, signErr error, clock *time.Time) (
-	*PodCertificateRequestReconciler, *capiv1beta1.PodCertificateRequest, *events.FakeRecorder, client.Client,
+	*PodCertificateRequestReconciler, *certificatesv1.PodCertificateRequest, *events.FakeRecorder, client.Client,
 ) {
 	t.Helper()
 
@@ -45,7 +45,7 @@ func caUnusableHarness(t *testing.T, signErr error, clock *time.Time) (
 	cl := fake.NewClientBuilder().
 		WithScheme(newTestScheme(t)).
 		WithObjects(pcr, pod).
-		WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
+		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
 		Build()
 	rec := events.NewFakeRecorder(10)
 	r := &PodCertificateRequestReconciler{
@@ -62,7 +62,7 @@ func caUnusableHarness(t *testing.T, signErr error, clock *time.Time) (
 
 // reconcileOnce runs a full Reconcile and asserts it requeued (returned the
 // transient error) rather than recording a terminal outcome.
-func reconcileRequeues(t *testing.T, r *PodCertificateRequestReconciler, pcr *capiv1beta1.PodCertificateRequest) {
+func reconcileRequeues(t *testing.T, r *PodCertificateRequestReconciler, pcr *certificatesv1.PodCertificateRequest) {
 	t.Helper()
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pcr)})
@@ -102,7 +102,7 @@ func TestReconcileCASignerUnusableEmitsThrottledWarning(t *testing.T) {
 
 	// The requeue must stay recoverable: a condition would make the request
 	// immutable, so a later CA rotation could never satisfy it.
-	got := &capiv1beta1.PodCertificateRequest{}
+	got := &certificatesv1.PodCertificateRequest{}
 	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(pcr), got); err != nil {
 		t.Fatalf("get PodCertificateRequest: %v", err)
 	}

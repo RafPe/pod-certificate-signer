@@ -27,7 +27,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -52,7 +52,7 @@ var _ = Describe("PodCertificateRequest Controller", func() {
 			pcr := createPodAndRequest("issued", testSignerName, nil)
 
 			By("waiting for the controller to record the Issued condition")
-			issued := waitForCondition(pcr, capiv1beta1.PodCertificateRequestConditionTypeIssued)
+			issued := waitForCondition(pcr, certificatesv1.PodCertificateRequestConditionTypeIssued)
 			Expect(issued.Reason).To(Equal(string(ReasonCertificateIssued)))
 
 			By("reading back the status the API server persisted")
@@ -60,7 +60,7 @@ var _ = Describe("PodCertificateRequest Controller", func() {
 			// that matters: kube-apiserver validates the certificate chain and
 			// the lifetime/refresh bounds on the status subresource, so a
 			// rejected write would leave the status empty and time out above.
-			var got capiv1beta1.PodCertificateRequest
+			var got certificatesv1.PodCertificateRequest
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pcr), &got)).To(Succeed())
 
 			Expect(got.Status.CertificateChain).NotTo(BeEmpty())
@@ -83,7 +83,7 @@ var _ = Describe("PodCertificateRequest Controller", func() {
 			pcr := createPodAndRequest("issued-event", testSignerName, nil)
 
 			By("waiting for the Issued condition, so the status write has landed")
-			waitForCondition(pcr, capiv1beta1.PodCertificateRequestConditionTypeIssued)
+			waitForCondition(pcr, certificatesv1.PodCertificateRequestConditionTypeIssued)
 
 			By("observing exactly one CertificateIssued event for the request")
 			// The event recorder is asynchronous, so the event may lag the
@@ -105,11 +105,11 @@ var _ = Describe("PodCertificateRequest Controller", func() {
 			pcr := createPodAndRequest("denied", testSignerName, map[string]string{durationAnnotation: "30m"})
 
 			By("waiting for the controller to record the Denied condition")
-			denied := waitForCondition(pcr, capiv1beta1.PodCertificateRequestConditionTypeDenied)
+			denied := waitForCondition(pcr, certificatesv1.PodCertificateRequestConditionTypeDenied)
 			Expect(denied.Reason).To(Equal(string(ReasonInvalidUserAnnotations)))
 
 			By("checking the API server accepted the terminal write with cleared certificate fields")
-			var got capiv1beta1.PodCertificateRequest
+			var got certificatesv1.PodCertificateRequest
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pcr), &got)).To(Succeed())
 
 			Expect(got.Status.CertificateChain).To(BeEmpty())
@@ -124,7 +124,7 @@ var _ = Describe("PodCertificateRequest Controller", func() {
 			pcr := createPodAndRequest("other-signer", foreignSignerName, nil)
 
 			Consistently(func(g Gomega) {
-				var got capiv1beta1.PodCertificateRequest
+				var got certificatesv1.PodCertificateRequest
 				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pcr), &got)).To(Succeed())
 				g.Expect(got.Status.Conditions).To(BeEmpty())
 			}, 3*time.Second, 250*time.Millisecond).Should(Succeed())
@@ -141,7 +141,7 @@ var _ = Describe("PodCertificateRequest Controller", func() {
 			pcr := createPodAndRequest("invalid-status", foreignSignerName, nil)
 
 			pcr.Status.Conditions = []metav1.Condition{{
-				Type:               capiv1beta1.PodCertificateRequestConditionTypeIssued,
+				Type:               certificatesv1.PodCertificateRequestConditionTypeIssued,
 				Status:             metav1.ConditionTrue,
 				LastTransitionTime: metav1.Now(),
 				Reason:             string(ReasonCertificateIssued),
@@ -161,7 +161,7 @@ var _ = Describe("PodCertificateRequest Controller", func() {
 // carries the pod's live UID, which the reconciler gates on before signing.
 // The signer name is a parameter because the request spec is immutable, so it
 // has to be right at creation time.
-func createPodAndRequest(suffix, signerName string, userAnnotations map[string]string) *capiv1beta1.PodCertificateRequest {
+func createPodAndRequest(suffix, signerName string, userAnnotations map[string]string) *certificatesv1.PodCertificateRequest {
 	GinkgoHelper()
 
 	name := "pcr-" + suffix
@@ -179,9 +179,9 @@ func createPodAndRequest(suffix, signerName string, userAnnotations map[string]s
 	})
 
 	maxExpirationSeconds := testMaxExpirationSeconds
-	pcr := &capiv1beta1.PodCertificateRequest{
+	pcr := &certificatesv1.PodCertificateRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
-		Spec: capiv1beta1.PodCertificateRequestSpec{
+		Spec: certificatesv1.PodCertificateRequestSpec{
 			SignerName:                signerName,
 			PodName:                   pod.Name,
 			PodUID:                    pod.UID,
@@ -220,7 +220,7 @@ func newStubPKCS10Request() []byte {
 // issuedEventsFor returns the CertificateIssued events the API server holds for
 // the given request. Events are listed as core/v1 and filtered in Go, which
 // sidesteps field-selector support questions and keeps the assertion explicit.
-func issuedEventsFor(g Gomega, pcr *capiv1beta1.PodCertificateRequest) []corev1.Event {
+func issuedEventsFor(g Gomega, pcr *certificatesv1.PodCertificateRequest) []corev1.Event {
 	var list corev1.EventList
 	g.Expect(k8sClient.List(ctx, &list, client.InNamespace(pcr.Namespace))).To(Succeed())
 
@@ -235,12 +235,12 @@ func issuedEventsFor(g Gomega, pcr *capiv1beta1.PodCertificateRequest) []corev1.
 
 // waitForCondition polls the request until the controller records the given
 // condition type, and returns it.
-func waitForCondition(pcr *capiv1beta1.PodCertificateRequest, conditionType string) metav1.Condition {
+func waitForCondition(pcr *certificatesv1.PodCertificateRequest, conditionType string) metav1.Condition {
 	GinkgoHelper()
 
 	var found metav1.Condition
 	Eventually(func(g Gomega) {
-		var got capiv1beta1.PodCertificateRequest
+		var got certificatesv1.PodCertificateRequest
 		g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pcr), &got)).To(Succeed())
 		g.Expect(got.Status.Conditions).To(HaveLen(1))
 		g.Expect(got.Status.Conditions[0].Type).To(Equal(conditionType))

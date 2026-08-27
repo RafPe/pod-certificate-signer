@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
@@ -60,7 +60,7 @@ func TestReconcileDroppedGonePodEmitsEvent(t *testing.T) {
 			cache := fake.NewClientBuilder().
 				WithScheme(newTestScheme(t)).
 				WithObjects(append([]client.Object{pcr}, pods...)...).
-				WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
+				WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
 				Build()
 			live := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(pods...).Build()
 
@@ -81,7 +81,7 @@ func TestReconcileDroppedGonePodEmitsEvent(t *testing.T) {
 				t.Error("signer must not run for a request whose pod is gone")
 			}
 
-			got := &capiv1beta1.PodCertificateRequest{}
+			got := &certificatesv1.PodCertificateRequest{}
 			if err := cache.Get(context.Background(), client.ObjectKeyFromObject(pcr), got); err != nil {
 				t.Fatalf("get PodCertificateRequest: %v", err)
 			}

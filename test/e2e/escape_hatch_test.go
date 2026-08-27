@@ -25,7 +25,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 )
 
 // Escape-hatch invariants.
@@ -85,7 +85,7 @@ func defineEscapeHatchInvariantTests() {
 				pod := createCertTestPod(fixture)
 
 				By("waiting for the PodCertificateRequest to be denied")
-				denial := expectDenied(pod, capiv1beta1.PodCertificateRequestConditionInvalidUserConfig)
+				denial := expectDenied(pod, certificatesv1.PodCertificateRequestConditionInvalidUserConfig)
 				Expect(denial.Message).To(ContainSubstring(wantMessage))
 
 				By("verifying the denial is about the malformed value, not about ownership")

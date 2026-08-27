@@ -30,7 +30,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -76,9 +76,9 @@ type deniedRequest struct {
 // API gives special handling: at most one may be present, and it must have
 // status True.
 var terminalConditionTypes = []string{
-	capiv1beta1.PodCertificateRequestConditionTypeIssued,
-	capiv1beta1.PodCertificateRequestConditionTypeDenied,
-	capiv1beta1.PodCertificateRequestConditionTypeFailed,
+	certificatesv1.PodCertificateRequestConditionTypeIssued,
+	certificatesv1.PodCertificateRequestConditionTypeDenied,
+	certificatesv1.PodCertificateRequestConditionTypeFailed,
 }
 
 // findPodCertificateRequest returns the single PodCertificateRequest belonging
@@ -91,16 +91,16 @@ var terminalConditionTypes = []string{
 //
 // More than one match is not a condition that resolves by waiting, so it aborts
 // the retry loop immediately rather than burning the whole timeout.
-func findPodCertificateRequest(g Gomega, ref podRef) *capiv1beta1.PodCertificateRequest {
+func findPodCertificateRequest(g Gomega, ref podRef) *certificatesv1.PodCertificateRequest {
 	cmd := exec.Command("kubectl", "get", "podcertificaterequests", "-n", ref.namespace, "-o", "json")
 	output, err := utils.Run(cmd)
 	g.Expect(err).NotTo(HaveOccurred(), "Failed to list PodCertificateRequests")
 
-	var list capiv1beta1.PodCertificateRequestList
+	var list certificatesv1.PodCertificateRequestList
 	g.Expect(json.Unmarshal([]byte(trimToJSON(output)), &list)).To(Succeed(),
 		"Failed to decode the PodCertificateRequest list")
 
-	var matches []*capiv1beta1.PodCertificateRequest
+	var matches []*certificatesv1.PodCertificateRequest
 	for i := range list.Items {
 		pcr := &list.Items[i]
 		if pcr.Spec.PodName == ref.name && pcr.Spec.PodUID == ref.uid && pcr.Spec.SignerName == signerName {
@@ -127,7 +127,7 @@ func findPodCertificateRequest(g Gomega, ref podRef) *capiv1beta1.PodCertificate
 // terminalCondition returns the request's single terminal condition, failing if
 // the request carries none yet or - which kube-apiserver is supposed to prevent
 // - carries more than one.
-func terminalCondition(g Gomega, pcr *capiv1beta1.PodCertificateRequest) metav1.Condition {
+func terminalCondition(g Gomega, pcr *certificatesv1.PodCertificateRequest) metav1.Condition {
 	var terminal []metav1.Condition
 	for _, cond := range pcr.Status.Conditions {
 		for _, want := range terminalConditionTypes {
@@ -161,7 +161,7 @@ func expectIssued(ref podRef) []*x509.Certificate {
 	Eventually(func(g Gomega) {
 		pcr := findPodCertificateRequest(g, ref)
 		cond := terminalCondition(g, pcr)
-		if cond.Type != capiv1beta1.PodCertificateRequestConditionTypeIssued {
+		if cond.Type != certificatesv1.PodCertificateRequestConditionTypeIssued {
 			StopTrying(fmt.Sprintf("request %s for pod %s reached the terminal outcome %s (%s): %s",
 				pcr.Name, ref, cond.Type, cond.Reason, cond.Message)).Now()
 		}
@@ -202,7 +202,7 @@ func expectIssued(ref podRef) []*x509.Certificate {
 //nolint:unparam // see above; the reason is asserted deliberately, not incidentally.
 func expectDenied(ref podRef, wantReason string) deniedRequest {
 	GinkgoHelper()
-	return expectTerminalDenialOrFailure(ref, capiv1beta1.PodCertificateRequestConditionTypeDenied, wantReason)
+	return expectTerminalDenialOrFailure(ref, certificatesv1.PodCertificateRequestConditionTypeDenied, wantReason)
 }
 
 // expectFailed is the counterpart of expectDenied for requests the signer
@@ -234,7 +234,7 @@ func expectDenied(ref podRef, wantReason string) deniedRequest {
 //nolint:unused // deliberately uncalled; see the comment above.
 func expectFailed(ref podRef, wantReason string) deniedRequest {
 	GinkgoHelper()
-	return expectTerminalDenialOrFailure(ref, capiv1beta1.PodCertificateRequestConditionTypeFailed, wantReason)
+	return expectTerminalDenialOrFailure(ref, certificatesv1.PodCertificateRequestConditionTypeFailed, wantReason)
 }
 
 // expectTerminalDenialOrFailure implements the shared shape of expectDenied and
@@ -278,7 +278,7 @@ func expectTerminalDenialOrFailure(ref podRef, wantType, wantReason string) deni
 // timestamps matter as much as the chain: kubelet reads beginRefreshAt to
 // schedule renewal, and a denied request advertising one is a renewal loop
 // waiting to happen.
-func expectStatusFieldsCleared(g Gomega, pcr *capiv1beta1.PodCertificateRequest) {
+func expectStatusFieldsCleared(g Gomega, pcr *certificatesv1.PodCertificateRequest) {
 	g.Expect(pcr.Status.CertificateChain).To(BeEmpty(),
 		"a non-issuing terminal outcome must never carry a certificate chain")
 	g.Expect(pcr.Status.NotBefore).To(BeNil(),

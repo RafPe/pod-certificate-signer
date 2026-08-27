@@ -1,13 +1,9 @@
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
-featureGates:
-  "PodCertificateRequest": true
-  "ClusterTrustBundle": true
-  "ClusterTrustBundleProjection": true
-runtimeConfig:
-  "certificates.k8s.io/v1beta1": "true"
 nodes:
 - role: control-plane
-  # 1.36+ is required for spec.unverifiedUserAnnotations on the
-  # podCertificate projected volume source.
-  image: "kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5"
+  # Kubernetes 1.37 promoted PodCertificateRequest and ClusterTrustBundle to
+  # certificates.k8s.io/v1, so the gates are locked on and the group version is
+  # served by default - no featureGates or runtimeConfig needed.
+  # Published with kind v0.33.0; the digest pins the multi-arch manifest list.
+  image: "kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5"

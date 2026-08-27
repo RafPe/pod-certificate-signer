@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -154,9 +154,9 @@ func TestFetchPreviousCAsParsesExistingBundle(t *testing.T) {
 		t.Fatalf("generate CA: %v", err)
 	}
 
-	bundle := &certificatesv1beta1.ClusterTrustBundle{
+	bundle := &certificatesv1.ClusterTrustBundle{
 		ObjectMeta: metav1.ObjectMeta{Name: signer.ClusterTrustBundleName(testSignerName)},
-		Spec: certificatesv1beta1.ClusterTrustBundleSpec{
+		Spec: certificatesv1.ClusterTrustBundleSpec{
 			SignerName:  testSignerName,
 			TrustBundle: string(ca.CertPEM),
 		},

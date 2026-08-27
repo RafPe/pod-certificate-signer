@@ -2,15 +2,11 @@ package controller
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -42,28 +38,21 @@ func (s *stubSigner) IsSignerNameMatching(n string) bool { return s.name == n }
 func (s *stubSigner) Name() string { return s.name }
 
 // newSigningHarness wires a reconciler to the given stub with a pod present and
-// a PCR carrying a valid PKIX public key, so process() runs the full pipeline
+// a PCR carrying a valid stub CSR, so process() runs the full pipeline
 // and reaches SignPodCertificate. The returned context carries a discard logger
 // (pcConfig.LogConfiguration reads it off the context on this path).
-func newSigningHarness(t *testing.T, stub *stubSigner) (*PodCertificateRequestReconciler, *capiv1beta1.PodCertificateRequest, context.Context) {
+func newSigningHarness(t *testing.T, stub *stubSigner) (*PodCertificateRequestReconciler, *certificatesv1.PodCertificateRequest, context.Context) {
 	t.Helper()
 
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate leaf key: %v", err)
-	}
-	pkixKey, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
-	if err != nil {
-		t.Fatalf("marshal PKIX public key: %v", err)
-	}
+	csr, _ := newStubCSR(t)
 
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "mypod", Namespace: "ns", UID: "pod-uid"}}
-	pcr := &capiv1beta1.PodCertificateRequest{
+	pcr := &certificatesv1.PodCertificateRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns"},
-		Spec: capiv1beta1.PodCertificateRequestSpec{
-			PodName:       "mypod",
-			PodUID:        "pod-uid",
-			PKIXPublicKey: pkixKey,
+		Spec: certificatesv1.PodCertificateRequestSpec{
+			PodName:           "mypod",
+			PodUID:            "pod-uid",
+			StubPKCS10Request: csr,
 		},
 	}
 

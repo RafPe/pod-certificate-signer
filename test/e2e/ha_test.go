@@ -32,7 +32,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -783,7 +783,7 @@ func defineHighAvailabilityTests() {
 				// expectDenied already nudges one further reconcile and
 				// asserts the outcome did not move, so by the time it returns
 				// the controller has been given a second look at the request.
-				expectDenied(pod, capiv1beta1.PodCertificateRequestConditionInvalidUserConfig)
+				expectDenied(pod, certificatesv1.PodCertificateRequestConditionInvalidUserConfig)
 
 				var requestName string
 				Eventually(func(g Gomega) {
@@ -1288,16 +1288,16 @@ func patchClusterRoleVerbs(index int, verbs []string) {
 // findPodCertificateRequest hard-codes the signer under test, which is the
 // right default everywhere else in the suite and exactly wrong for the spec
 // that asserts another signer's request is left alone.
-func findRequestForSigner(g Gomega, ref podRef, signer string) *capiv1beta1.PodCertificateRequest {
+func findRequestForSigner(g Gomega, ref podRef, signer string) *certificatesv1.PodCertificateRequest {
 	cmd := exec.Command("kubectl", "get", "podcertificaterequests", "-n", ref.namespace, "-o", "json")
 	output, err := utils.Run(cmd)
 	g.Expect(err).NotTo(HaveOccurred(), "Failed to list PodCertificateRequests")
 
-	var list capiv1beta1.PodCertificateRequestList
+	var list certificatesv1.PodCertificateRequestList
 	g.Expect(json.Unmarshal([]byte(trimToJSON(output)), &list)).To(Succeed(),
 		"Failed to decode the PodCertificateRequest list")
 
-	var matches []*capiv1beta1.PodCertificateRequest
+	var matches []*certificatesv1.PodCertificateRequest
 	for i := range list.Items {
 		pcr := &list.Items[i]
 		if pcr.Spec.PodName == ref.name && pcr.Spec.PodUID == ref.uid && pcr.Spec.SignerName == signer {

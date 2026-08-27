@@ -27,7 +27,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/test/utils"
@@ -273,7 +273,7 @@ func defineVerifiedInterpolationProfileTests() {
 				pod := applyCertTestPod(podName, annotations)
 
 				By("waiting for the PodCertificateRequest to be denied")
-				denial := expectDenied(pod, capiv1beta1.PodCertificateRequestConditionInvalidUserConfig)
+				denial := expectDenied(pod, certificatesv1.PodCertificateRequestConditionInvalidUserConfig)
 				Expect(denial.Message).To(ContainSubstring(wantMessage))
 			},
 			// The example manifest requests exactly this, which is why it
@@ -405,7 +405,7 @@ func defineInterpolationDisabledProfileTests() {
 			})
 
 			By("waiting for the PodCertificateRequest to be denied")
-			denial := expectDenied(pod, capiv1beta1.PodCertificateRequestConditionInvalidUserConfig)
+			denial := expectDenied(pod, certificatesv1.PodCertificateRequestConditionInvalidUserConfig)
 			Expect(denial.Message).To(ContainSubstring("interpolation, which is disabled on this signer"),
 				"the denial must name the disabled flag, not the identity constraint")
 		})

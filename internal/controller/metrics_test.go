@@ -2,10 +2,6 @@ package controller
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"testing"
@@ -13,7 +9,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -72,20 +68,20 @@ func TestTerminalOutcomesAreCounted(t *testing.T) {
 		reason        Reason
 		wantOutcome   string
 	}{
-		{"issued", capiv1beta1.PodCertificateRequestConditionTypeIssued, ReasonCertificateIssued, metrics.OutcomeIssued},
-		{"denied", capiv1beta1.PodCertificateRequestConditionTypeDenied, ReasonUnsupportedKeyType, metrics.OutcomeDenied},
-		{"failed", capiv1beta1.PodCertificateRequestConditionTypeFailed, ReasonSigningFailed, metrics.OutcomeFailed},
+		{"issued", certificatesv1.PodCertificateRequestConditionTypeIssued, ReasonCertificateIssued, metrics.OutcomeIssued},
+		{"denied", certificatesv1.PodCertificateRequestConditionTypeDenied, ReasonUnsupportedKeyType, metrics.OutcomeDenied},
+		{"failed", certificatesv1.PodCertificateRequestConditionTypeFailed, ReasonSigningFailed, metrics.OutcomeFailed},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			pcr := &capiv1beta1.PodCertificateRequest{
+			pcr := &certificatesv1.PodCertificateRequest{
 				ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns"},
 			}
 			cl := fake.NewClientBuilder().
 				WithScheme(newTestScheme(t)).
 				WithObjects(pcr).
-				WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
+				WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
 				Build()
 			r := &PodCertificateRequestReconciler{
 				Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10),
@@ -108,26 +104,26 @@ func TestTerminalOutcomesAreCounted(t *testing.T) {
 // announces nothing, so it must count nothing either - otherwise the issued
 // rate includes certificates no request ever carried.
 func TestOutcomeNotCountedWhenStatusWriteIsLost(t *testing.T) {
-	pcr := &capiv1beta1.PodCertificateRequest{
+	pcr := &certificatesv1.PodCertificateRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns"},
 	}
 	key := client.ObjectKeyFromObject(pcr)
 	cl := fake.NewClientBuilder().
 		WithScheme(newTestScheme(t)).
 		WithObjects(pcr).
-		WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
+		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
 		WithInterceptorFuncs(interceptor.Funcs{
 			SubResourceUpdate: func(ctx context.Context, c client.Client, _ string, obj client.Object, _ ...client.SubResourceUpdateOption) error {
 				// A concurrent writer denies the request first; this
 				// reconcile's write then loses on a conflict and, finding the
 				// object terminal, gives up without persisting.
-				concurrent := &capiv1beta1.PodCertificateRequest{}
+				concurrent := &certificatesv1.PodCertificateRequest{}
 				if err := c.Get(ctx, key, concurrent); err != nil {
 					return err
 				}
 				if len(concurrent.Status.Conditions) == 0 {
 					concurrent.Status.Conditions = []metav1.Condition{{
-						Type:               capiv1beta1.PodCertificateRequestConditionTypeDenied,
+						Type:               certificatesv1.PodCertificateRequestConditionTypeDenied,
 						Status:             metav1.ConditionTrue,
 						LastTransitionTime: metav1.Now(),
 						Reason:             string(ReasonInvalidUserAnnotations),
@@ -138,7 +134,7 @@ func TestOutcomeNotCountedWhenStatusWriteIsLost(t *testing.T) {
 					}
 				}
 				return apierrors.NewConflict(
-					capiv1beta1.Resource("podcertificaterequests"), obj.GetName(), errors.New("resourceVersion mismatch"))
+					certificatesv1.Resource("podcertificaterequests"), obj.GetName(), errors.New("resourceVersion mismatch"))
 			},
 		}).
 		Build()
@@ -148,7 +144,7 @@ func TestOutcomeNotCountedWhenStatusWriteIsLost(t *testing.T) {
 
 	before := outcomeCount(metrics.OutcomeIssued, ReasonCertificateIssued)
 	if err := r.recordOutcome(context.Background(), pcr,
-		capiv1beta1.PodCertificateRequestConditionTypeIssued, ReasonCertificateIssued, "issued", corev1.EventTypeNormal); err != nil {
+		certificatesv1.PodCertificateRequestConditionTypeIssued, ReasonCertificateIssued, "issued", corev1.EventTypeNormal); err != nil {
 		t.Fatalf("recordOutcome: %v", err)
 	}
 	if got := outcomeCount(metrics.OutcomeIssued, ReasonCertificateIssued) - before; got != 0 {
@@ -176,7 +172,7 @@ func TestRequeuesAreClassified(t *testing.T) {
 			ctx := logr.NewContext(context.Background(), logr.Discard())
 
 			before := requeueCount(tc.wantReason)
-			if _, err := r.recordFailure(ctx, &capiv1beta1.PodCertificateRequest{}, tc.err); err == nil {
+			if _, err := r.recordFailure(ctx, &certificatesv1.PodCertificateRequest{}, tc.err); err == nil {
 				t.Fatal("recordFailure() error = nil, want the transient error returned for requeue")
 			}
 			if got := requeueCount(tc.wantReason) - before; got != 1 {
@@ -192,7 +188,7 @@ func TestDropsAreCounted(t *testing.T) {
 	r := &PodCertificateRequestReconciler{EventRecorder: events.NewFakeRecorder(10)}
 
 	before := dropCount()
-	r.recordPodGone(&capiv1beta1.PodCertificateRequest{
+	r.recordPodGone(&certificatesv1.PodCertificateRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns"},
 	}, "pod is gone")
 	if got := dropCount() - before; got != 1 {
@@ -256,22 +252,15 @@ func reconcileDistinctRequest(t *testing.T, i int) {
 	uid := types.UID(fmt.Sprintf("uid-%d", i))
 	const signerName = "example.org/signer"
 
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate leaf key: %v", err)
-	}
-	pkixKey, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
-	if err != nil {
-		t.Fatalf("marshal PKIX public key: %v", err)
-	}
+	csr, _ := newStubCSR(t)
 
-	pcr := &capiv1beta1.PodCertificateRequest{
+	pcr := &certificatesv1.PodCertificateRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},
-		Spec: capiv1beta1.PodCertificateRequestSpec{
-			SignerName:    signerName,
-			PodName:       podName,
-			PodUID:        uid,
-			PKIXPublicKey: pkixKey,
+		Spec: certificatesv1.PodCertificateRequestSpec{
+			SignerName:        signerName,
+			PodName:           podName,
+			PodUID:            uid,
+			StubPKCS10Request: csr,
 		},
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: "ns", UID: uid}}
@@ -293,13 +282,13 @@ func reconcileDistinctRequest(t *testing.T, i int) {
 	cl := fake.NewClientBuilder().
 		WithScheme(newTestScheme(t)).
 		WithObjects(objects...).
-		WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
+		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
 		Build()
 	r := &PodCertificateRequestReconciler{
 		Client: cl, APIReader: cl, Log: logr.Discard(), Signer: stub, EventRecorder: events.NewFakeRecorder(10),
 	}
 	// The requeue case returns the error by design; every other case must not.
-	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pcr)})
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pcr)})
 	if err != nil && i%4 != 3 {
 		t.Fatalf("Reconcile(%s) error = %v", name, err)
 	}

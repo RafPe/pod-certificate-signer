@@ -1,7 +1,7 @@
 # pod-certificate-signer (Helm chart)
 
 Deploys the **pod-certificate-signer** controller — a signer for the built-in
-`certificates.k8s.io/v1beta1` `PodCertificateRequest` API that issues short-lived
+`certificates.k8s.io/v1` `PodCertificateRequest` API that issues short-lived
 pod certificates and publishes its CA as a `ClusterTrustBundle`.
 
 For what the signer does and how workloads consume it, see the [repository
@@ -9,8 +9,9 @@ README](../../README.md).
 
 ## Prerequisites
 
-- Kubernetes **≥ 1.35** with the `PodCertificateRequest` feature gate and the
-  `certificates.k8s.io/v1beta1` runtime config enabled (`kubeVersion: ">= 1.35.0"`).
+- Kubernetes **≥ 1.37**, where `PodCertificateRequest` is GA in
+  `certificates.k8s.io/v1` and served by default — no feature gate or runtime
+  config required (`kubeVersion: ">= 1.37.0-0"`).
 - A **CA key pair**. You provide your own CA — the chart does **not** ship one.
   Create a Secret and reference it (see [Providing the CA](#providing-the-ca)):
 

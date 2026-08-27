@@ -17,7 +17,7 @@ A Kubernetes controller that signs the native `PodCertificateRequest` API, issui
 ## Why
 
 - **The problem:** giving every pod its own short-lived x509 identity used to mean a sidecar mesh or a bespoke CSR pipeline — extra moving parts to run and secure.
-- **The fix:** Kubernetes 1.35 added the built-in [`PodCertificateRequest`](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#pod-certificate-requests) API. A pod asks for a certificate through a projected volume, the apiserver creates a request, and this controller issues (or denies) it from your CA — no sidecars, no external tooling.
+- **The fix:** Kubernetes ships a built-in [`PodCertificateRequest`](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#pod-certificate-requests) API, GA in `certificates.k8s.io/v1` since 1.37. A pod asks for a certificate through a projected volume, the apiserver creates a request, and this controller issues (or denies) it from your CA — no sidecars, no external tooling.
 - **What's different:** the controller also publishes its CA — current and previous, across rotations — as a [`ClusterTrustBundle`](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#cluster-trust-bundles), so workloads mount the matching trust anchors next to their certificate. Combined with a `ValidatingAdmissionPolicy`, this is a fully native workload-identity and mTLS foundation.
 
 > [!NOTE]
@@ -28,7 +28,7 @@ A Kubernetes controller that signs the native `PodCertificateRequest` API, issui
 
 ## Quickstart
 
-Prerequisites: Kubernetes 1.35+ with the `PodCertificateRequest` feature gates, Helm 3+, and a signing CA (see [prerequisites](./docs/getting-started.md#prerequisites)).
+Prerequisites: Kubernetes 1.37+, Helm 3+, and a signing CA (see [prerequisites](./docs/getting-started.md#prerequisites)).
 
 Create a Secret from your CA, then install the published OCI chart — `signer.name` and a CA source are required:
 

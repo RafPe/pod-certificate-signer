@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 )
 
 func TestTerminalError(t *testing.T) {
@@ -25,7 +25,7 @@ func TestTerminalError(t *testing.T) {
 	if te.Reason != ReasonSigningFailed {
 		t.Fatalf("Reason = %q, want %q", te.Reason, ReasonSigningFailed)
 	}
-	if te.ConditionType != capiv1beta1.PodCertificateRequestConditionTypeFailed {
+	if te.ConditionType != certificatesv1.PodCertificateRequestConditionTypeFailed {
 		t.Fatalf("ConditionType = %q, want Failed", te.ConditionType)
 	}
 
@@ -40,7 +40,7 @@ func TestDeniedConditionType(t *testing.T) {
 	if !errors.As(denied(ReasonUnsupportedKeyType, errors.New("bad key")), &te) {
 		t.Fatal("errors.As should match *TerminalError")
 	}
-	if te.ConditionType != capiv1beta1.PodCertificateRequestConditionTypeDenied {
+	if te.ConditionType != certificatesv1.PodCertificateRequestConditionTypeDenied {
 		t.Fatalf("ConditionType = %q, want Denied", te.ConditionType)
 	}
 	if te.Reason != ReasonUnsupportedKeyType {

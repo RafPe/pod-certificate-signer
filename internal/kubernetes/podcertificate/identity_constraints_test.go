@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
 
 // verifiedPCR returns a request whose verified fields (pod name/namespace/
 // serviceAccountName) are populated, so identity values derived from them can
 // be exercised.
-func verifiedPCR(userAnnotations map[string]string) *capiv1beta1.PodCertificateRequest {
+func verifiedPCR(userAnnotations map[string]string) *certificatesv1.PodCertificateRequest {
 	pcr := testPCR(userAnnotations)
 	pcr.Spec.ServiceAccountName = "mysa"
 	pcr.Spec.PodUID = types.UID("abc-123")

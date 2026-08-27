@@ -18,8 +18,6 @@ package controller
 
 import (
 	"context"
-	"crypto"
-	"crypto/x509"
 	"errors"
 	"time"
 
@@ -31,7 +29,7 @@ import (
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
 
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -79,9 +77,9 @@ const (
 	// repeats for as long as the CA stays unusable.
 	ReasonCASignerUnusable Reason = "CASignerUnusable"
 
-	// Well-known condition reasons defined by the certificates v1beta1 API.
-	ReasonUnsupportedKeyType     Reason = Reason(capiv1beta1.PodCertificateRequestConditionUnsupportedKeyType)
-	ReasonInvalidUserAnnotations Reason = Reason(capiv1beta1.PodCertificateRequestConditionInvalidUserConfig)
+	// Well-known condition reasons defined by the certificates v1 API.
+	ReasonUnsupportedKeyType     Reason = Reason(certificatesv1.PodCertificateRequestConditionUnsupportedKeyType)
+	ReasonInvalidUserAnnotations Reason = Reason(certificatesv1.PodCertificateRequestConditionInvalidUserConfig)
 )
 
 // TerminalError marks a failure that can never succeed on retry. The reconciler
@@ -93,7 +91,7 @@ const (
 // Construct it with [denied] or [failed], which pick the condition type.
 type TerminalError struct {
 	Reason        Reason
-	ConditionType string // capiv1beta1.PodCertificateRequestConditionType{Denied,Failed}
+	ConditionType string // certificatesv1.PodCertificateRequestConditionType{Denied,Failed}
 	Err           error
 }
 
@@ -103,7 +101,7 @@ func (e *TerminalError) Unwrap() error { return e.Err }
 // denied wraps err as a terminal "Denied" outcome: the signer refuses the
 // request (e.g. unsupported key type, invalid user configuration).
 func denied(reason Reason, err error) error {
-	return &TerminalError{Reason: reason, ConditionType: capiv1beta1.PodCertificateRequestConditionTypeDenied, Err: err}
+	return &TerminalError{Reason: reason, ConditionType: certificatesv1.PodCertificateRequestConditionTypeDenied, Err: err}
 }
 
 // failed wraps err as a terminal "Failed" outcome: the signer could not issue
@@ -111,7 +109,7 @@ func denied(reason Reason, err error) error {
 // pod is now dropped, not failed), so the reason is fixed rather than a
 // parameter; unlike denied, whose reason varies.
 func failed(err error) error {
-	return &TerminalError{Reason: ReasonSigningFailed, ConditionType: capiv1beta1.PodCertificateRequestConditionTypeFailed, Err: err}
+	return &TerminalError{Reason: ReasonSigningFailed, ConditionType: certificatesv1.PodCertificateRequestConditionTypeFailed, Err: err}
 }
 
 // podSigner is the consumer-side view of the signing dependency the reconciler
@@ -170,11 +168,11 @@ func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) err
 	// MaxConcurrentReconciles is inherited from the manager-wide controller
 	// configuration (see the -max-concurrent-reconciles flag).
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&capiv1beta1.PodCertificateRequest{}).
+		For(&certificatesv1.PodCertificateRequest{}).
 		WithEventFilter(predicate.Funcs{
 			// Skip create events for requests which are already in a terminal state.
 			CreateFunc: func(e event.CreateEvent) bool {
-				pcr, ok := e.Object.(*capiv1beta1.PodCertificateRequest)
+				pcr, ok := e.Object.(*certificatesv1.PodCertificateRequest)
 				if !ok {
 					return false
 				}
@@ -190,7 +188,7 @@ func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) err
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var pcr capiv1beta1.PodCertificateRequest
+	var pcr certificatesv1.PodCertificateRequest
 	if err := r.Get(ctx, req.NamespacedName, &pcr); err != nil {
 		// Gone -> drop; any real error -> requeue.
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -242,7 +240,7 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 //     warning event and writes no status; a pod being deleted is silent.
 //   - (nil, *TerminalError) for permanent failures (recorded on the PCR, no retry)
 //   - (nil, err)   for transient failures (requeued with backoff)
-func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest) (*podcertificate.PodCertificate, error) {
+func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *certificatesv1.PodCertificateRequest) (*podcertificate.PodCertificate, error) {
 	log := logf.FromContext(ctx)
 
 	// Read the pod from the manager cache first. The cache can be stale in two
@@ -293,25 +291,17 @@ func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capi
 		HonorCSRSANs:              r.HonorCSRSANs,
 		AllowUnverifiedIdentities: r.AllowUnverifiedIdentities,
 	}
-	var publicKey crypto.PublicKey
-	var publicKeyAlgorithm x509.PublicKeyAlgorithm
-	if len(pcr.Spec.StubPKCS10Request) > 0 {
-		csrInfo, cerr := signer.ParseCSR(pcr.Spec.StubPKCS10Request)
-		if cerr != nil {
-			return nil, denied(ReasonUnsupportedKeyType, cerr)
-		}
-		publicKey, publicKeyAlgorithm = csrInfo.PublicKey, csrInfo.PublicKeyAlgorithm
-		configOpts.CSRDNSNames = csrInfo.DNSNames
-		configOpts.CSRIPAddresses = csrInfo.IPAddresses
-	} else {
-		// PKIXPublicKey is deprecated in favour of StubPKCS10Request, but is
-		// still sent by kubelets which pre-date the CSR stub.
-		publicKey, publicKeyAlgorithm, err = signer.ParsePKIXPublicKey(pcr.Spec.PKIXPublicKey) //nolint:staticcheck
-		if err != nil {
-			return nil, denied(ReasonUnsupportedKeyType, err)
-		}
+	// certificates.k8s.io/v1 dropped spec.pkixPublicKey: every kubelet that
+	// speaks the GA API sends the PKCS#10 stub, so it is the only source of
+	// the subject public key.
+	csrInfo, err := signer.ParseCSR(pcr.Spec.StubPKCS10Request)
+	if err != nil {
+		return nil, denied(ReasonUnsupportedKeyType, err)
 	}
-	pcConfig, err := podcertificate.NewPodCertificateConfig(pcr, crPod, configOpts, publicKey, publicKeyAlgorithm)
+	configOpts.CSRDNSNames = csrInfo.DNSNames
+	configOpts.CSRIPAddresses = csrInfo.IPAddresses
+
+	pcConfig, err := podcertificate.NewPodCertificateConfig(pcr, crPod, configOpts, csrInfo.PublicKey, csrInfo.PublicKeyAlgorithm)
 	if err != nil {
 		return nil, denied(ReasonInvalidUserAnnotations, err)
 	}
@@ -345,7 +335,7 @@ func (r *PodCertificateRequestReconciler) process(ctx context.Context, pcr *capi
 // PCR and stop the reconcile; transient errors are returned so controller-runtime
 // requeues with backoff. If recording a terminal outcome fails, that write error
 // is returned so the reconcile requeues (the Failed condition is never silently lost).
-func (r *PodCertificateRequestReconciler) recordFailure(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, err error) (ctrl.Result, error) {
+func (r *PodCertificateRequestReconciler) recordFailure(ctx context.Context, pcr *certificatesv1.PodCertificateRequest, err error) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
 	var te *TerminalError
@@ -370,7 +360,7 @@ func (r *PodCertificateRequestReconciler) recordFailure(ctx context.Context, pcr
 // recordTerminal records a Denied/Failed condition carried by a *TerminalError.
 // The certificate fields are cleared, since kube-apiserver requires them to be
 // empty when denying or failing a PodCertificateRequest.
-func (r *PodCertificateRequestReconciler) recordTerminal(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, te *TerminalError) error {
+func (r *PodCertificateRequestReconciler) recordTerminal(ctx context.Context, pcr *certificatesv1.PodCertificateRequest, te *TerminalError) error {
 	r.clearPodCertificateRequestStatusFields(pcr)
 	return r.recordOutcome(ctx, pcr, te.ConditionType, te.Reason, te.Err.Error(), corev1.EventTypeWarning)
 }
@@ -390,7 +380,7 @@ func (r *PodCertificateRequestReconciler) recordTerminal(ctx context.Context, pc
 // event storm rather than a signal. Deliberately no status write, as with
 // recordPodGone: the outcome is not terminal, and a condition would freeze the
 // request (see ReasonCASignerUnusable).
-func (r *PodCertificateRequestReconciler) recordCASignerUnusable(pcr *capiv1beta1.PodCertificateRequest, err error) {
+func (r *PodCertificateRequestReconciler) recordCASignerUnusable(pcr *certificatesv1.PodCertificateRequest, err error) {
 	if !errors.Is(err, authority.ErrCASignerUnusable) {
 		return
 	}
@@ -406,7 +396,7 @@ func (r *PodCertificateRequestReconciler) recordCASignerUnusable(pcr *capiv1beta
 // "absent" and "replaced by a different pod" are different facts for whoever
 // reads the event. Deliberately no status write: the drop is not a terminal
 // outcome, and the event is the only breadcrumb an operator gets.
-func (r *PodCertificateRequestReconciler) recordPodGone(pcr *capiv1beta1.PodCertificateRequest, noteFmt string, args ...any) {
+func (r *PodCertificateRequestReconciler) recordPodGone(pcr *certificatesv1.PodCertificateRequest, noteFmt string, args ...any) {
 	// The event names the object and is the only breadcrumb its owner gets; the
 	// metric carries the rate, which is what says the controller is losing a
 	// race with pod churn rather than dropping the odd stale request.
@@ -431,22 +421,22 @@ func requeueReason(err error) string {
 // defines; anything else would be a condition this controller never records.
 func requestOutcome(conditionType string) string {
 	switch conditionType {
-	case capiv1beta1.PodCertificateRequestConditionTypeIssued:
+	case certificatesv1.PodCertificateRequestConditionTypeIssued:
 		return metrics.OutcomeIssued
-	case capiv1beta1.PodCertificateRequestConditionTypeDenied:
+	case certificatesv1.PodCertificateRequestConditionTypeDenied:
 		return metrics.OutcomeDenied
 	default:
 		return metrics.OutcomeFailed
 	}
 }
 
-func (r *PodCertificateRequestReconciler) recordIssued(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, cert *podcertificate.PodCertificate) error {
+func (r *PodCertificateRequestReconciler) recordIssued(ctx context.Context, pcr *certificatesv1.PodCertificateRequest, cert *podcertificate.PodCertificate) error {
 	r.setCertificateOnPodCertificateRequest(ctx, pcr, cert)
 	const message = "Certificate successfully issued"
-	return r.recordOutcome(ctx, pcr, capiv1beta1.PodCertificateRequestConditionTypeIssued, ReasonCertificateIssued, message, corev1.EventTypeNormal)
+	return r.recordOutcome(ctx, pcr, certificatesv1.PodCertificateRequestConditionTypeIssued, ReasonCertificateIssued, message, corev1.EventTypeNormal)
 }
 
-func (r *PodCertificateRequestReconciler) setCertificateOnPodCertificateRequest(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, podCertificate *podcertificate.PodCertificate) {
+func (r *PodCertificateRequestReconciler) setCertificateOnPodCertificateRequest(ctx context.Context, pcr *certificatesv1.PodCertificateRequest, podCertificate *podcertificate.PodCertificate) {
 	beginRefreshAt := podCertificate.NotAfter().Add(-podCertificate.Config().RefreshBefore)
 
 	logf.FromContext(ctx).V(1).Info("Setting the certificate in the PodCertificateRequest",
@@ -472,7 +462,7 @@ func (r *PodCertificateRequestReconciler) setCertificateOnPodCertificateRequest(
 // makes the outcome real has succeeded. Emitting first would advertise a result
 // that a failed or conflicting write never persisted, and re-advertise it on
 // every requeue.
-func (r *PodCertificateRequestReconciler) recordOutcome(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest, conditionType string, reason Reason, message, eventType string) error {
+func (r *PodCertificateRequestReconciler) recordOutcome(ctx context.Context, pcr *certificatesv1.PodCertificateRequest, conditionType string, reason Reason, message, eventType string) error {
 	r.setPodCertificateRequestStatusCondition(pcr, conditionType, string(reason), message)
 
 	persisted, err := r.updateStatusWithRetry(ctx, pcr)
@@ -507,7 +497,7 @@ func (r *PodCertificateRequestReconciler) recordOutcome(ctx context.Context, pcr
 // If the re-read shows a terminal condition another writer already recorded,
 // this reconcile lost the race: the request is now immutable, so its outcome is
 // left in place (persisted is false) rather than overwritten.
-func (r *PodCertificateRequestReconciler) updateStatusWithRetry(ctx context.Context, pcr *capiv1beta1.PodCertificateRequest) (bool, error) {
+func (r *PodCertificateRequestReconciler) updateStatusWithRetry(ctx context.Context, pcr *certificatesv1.PodCertificateRequest) (bool, error) {
 	desired := pcr.Status.DeepCopy()
 	key := client.ObjectKeyFromObject(pcr)
 
@@ -557,7 +547,7 @@ func (r *PodCertificateRequestReconciler) statusRetryReader() client.Reader {
 	return r.Client
 }
 
-func (r *PodCertificateRequestReconciler) setPodCertificateRequestStatusCondition(pcr *capiv1beta1.PodCertificateRequest, conditionType, reason, message string) {
+func (r *PodCertificateRequestReconciler) setPodCertificateRequestStatusCondition(pcr *certificatesv1.PodCertificateRequest, conditionType, reason, message string) {
 	pcr.Status.Conditions = []metav1.Condition{
 		{
 			Type:               conditionType,
@@ -569,7 +559,7 @@ func (r *PodCertificateRequestReconciler) setPodCertificateRequestStatusConditio
 	}
 }
 
-func (r *PodCertificateRequestReconciler) clearPodCertificateRequestStatusFields(pcr *capiv1beta1.PodCertificateRequest) {
+func (r *PodCertificateRequestReconciler) clearPodCertificateRequestStatusFields(pcr *certificatesv1.PodCertificateRequest) {
 	pcr.Status.CertificateChain = ""
 	pcr.Status.NotBefore = nil
 	pcr.Status.NotAfter = nil

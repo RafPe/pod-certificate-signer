@@ -35,7 +35,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
-	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -643,7 +643,7 @@ func loadPreviousCAHistory(ctx context.Context, c client.Client, signerName stri
 func fetchPreviousCAs(ctx context.Context, c client.Client, signerName string) ([]*x509.Certificate, error) {
 	bundleName := signer.ClusterTrustBundleName(signerName)
 
-	bundle := &certificatesv1beta1.ClusterTrustBundle{}
+	bundle := &certificatesv1.ClusterTrustBundle{}
 	if err := c.Get(ctx, client.ObjectKey{Name: bundleName}, bundle); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, fmt.Errorf("read existing ClusterTrustBundle %q: %w", bundleName, errCAHistoryBundleAbsent)
