@@ -38,8 +38,8 @@ body:
     id: kubernetes-version
     attributes:
       label: Kubernetes version
-      description: Output of `kubectl version`. The controller requires 1.35+ with the PodCertificateRequest feature gates enabled.
-      placeholder: v1.35.0
+      description: Output of `kubectl version`. The controller requires 1.37+, where PodCertificateRequest is GA in certificates.k8s.io/v1.
+      placeholder: v1.37.0
     validations:
       required: true
   - type: dropdown

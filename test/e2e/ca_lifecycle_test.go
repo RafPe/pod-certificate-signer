@@ -32,7 +32,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -977,7 +977,7 @@ func expectVerifiesAgainst(leaf *x509.Certificate, anchors []*x509.Certificate, 
 //
 // It is the counterpart of terminalCondition for a spec that expects *none*:
 // that helper asserts exactly one and would fail the wrong way round here.
-func terminalConditionsOf(pcr *capiv1beta1.PodCertificateRequest) []metav1.Condition {
+func terminalConditionsOf(pcr *certificatesv1.PodCertificateRequest) []metav1.Condition {
 	var terminal []metav1.Condition
 	for _, cond := range pcr.Status.Conditions {
 		for _, want := range terminalConditionTypes {

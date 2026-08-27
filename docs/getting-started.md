@@ -7,18 +7,16 @@ issued by `pod-certificate-signer`. For the full configuration surface see
 
 ## Prerequisites
 
-- **Kubernetes 1.35+.** The controller uses the `certificates.k8s.io/v1beta1`
-  `PodCertificateRequest` API, available since 1.35. The cluster must have:
-  - feature gates `PodCertificateRequest`, `ClusterTrustBundle`,
-    `ClusterTrustBundleProjection`;
-  - runtime config `certificates.k8s.io/v1beta1=true`.
+- **Kubernetes 1.37+.** The controller uses the `certificates.k8s.io/v1`
+  `PodCertificateRequest` API, which went GA in 1.37. No feature gates or
+  runtime config are needed — the group version is served by default.
 - **Helm 3+** and **`kubectl`**.
 - **A signing CA** (certificate + private key). It can be self-signed. The chart
   does **not** ship a CA — you provide your own.
 
 > [!TIP]
 > To try this on a laptop, [`kind/kind-config.yaml`](https://github.com/RafPe/pod-certificate-signer/blob/main/kind/kind-config.yaml)
-> enables the required feature gates and runtime config for a local Kind cluster.
+> pins a Kubernetes 1.37 node image for a local Kind cluster.
 
 ## 1. Create the CA Secret
 

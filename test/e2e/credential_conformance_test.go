@@ -30,7 +30,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/test/credprobe/report"
 	"github.com/rafpe/kubernetes-podcertificate-signer/test/utils"
@@ -272,10 +272,10 @@ func podStatusSummary(ref podRef) string {
 
 // getPodCertificateRequest returns the request belonging to the pod, for the
 // spec fields expectIssued does not surface.
-func getPodCertificateRequest(ref podRef) *capiv1beta1.PodCertificateRequest {
+func getPodCertificateRequest(ref podRef) *certificatesv1.PodCertificateRequest {
 	GinkgoHelper()
 
-	var request *capiv1beta1.PodCertificateRequest
+	var request *certificatesv1.PodCertificateRequest
 	Eventually(func(g Gomega) {
 		request = findPodCertificateRequest(g, ref)
 	}).Should(Succeed())

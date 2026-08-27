@@ -2,7 +2,7 @@
 
 `pod-certificate-signer` is a Kubernetes controller for the built-in
 [`PodCertificateRequest`](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#pod-certificate-requests)
-API (`certificates.k8s.io/v1beta1`). When a pod declares a `podCertificate`
+API (`certificates.k8s.io/v1`). When a pod declares a `podCertificate`
 projected volume that names this signer, the kube-apiserver creates a
 `PodCertificateRequest`; the controller validates it and either issues a
 short-lived x509 certificate from your CA or denies the request. In parallel it

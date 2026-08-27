@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -22,10 +22,10 @@ func testPod(annotations map[string]string) *corev1.Pod {
 	}
 }
 
-func testPCR(userAnnotations map[string]string) *capiv1beta1.PodCertificateRequest {
-	return &capiv1beta1.PodCertificateRequest{
+func testPCR(userAnnotations map[string]string) *certificatesv1.PodCertificateRequest {
+	return &certificatesv1.PodCertificateRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "myns"},
-		Spec: capiv1beta1.PodCertificateRequestSpec{
+		Spec: certificatesv1.PodCertificateRequestSpec{
 			SignerName:                testSignerName,
 			PodName:                   "mypod",
 			UnverifiedUserAnnotations: userAnnotations,
@@ -135,7 +135,7 @@ func TestNewPodCertificateConfigMalformedValues(t *testing.T) {
 }
 
 // Unrecognized keys in unverifiedUserAnnotations must be rejected, per the
-// certificates v1beta1 API contract for signers.
+// certificates v1 API contract for signers.
 func TestNewPodCertificateConfigUnrecognizedUserAnnotation(t *testing.T) {
 	pcr := testPCR(map[string]string{testSignerName + "-bogus": "value"})
 

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -205,7 +205,7 @@ type Options struct {
 // requests they do not fully understand rather than silently fall back to
 // defaults.
 func NewPodCertificateConfig(
-	pcr *capiv1beta1.PodCertificateRequest,
+	pcr *certificatesv1.PodCertificateRequest,
 	pod *corev1.Pod,
 	opts Options,
 	publicKey crypto.PublicKey,
@@ -416,7 +416,7 @@ var interpolationPattern = regexp.MustCompile(`\$\{([^}]*)\}`)
 // spec that kubelet populates and the kube-apiserver verifies (or from the
 // controller's own configuration), never from user-controlled input - so a
 // requester can only interpolate its own verified identity.
-func interpolationVars(pcr *capiv1beta1.PodCertificateRequest, clusterFQDN string) map[string]string {
+func interpolationVars(pcr *certificatesv1.PodCertificateRequest, clusterFQDN string) map[string]string {
 	return map[string]string{
 		"pod.name":               pcr.Spec.PodName,
 		"pod.namespace":          pcr.Namespace,
@@ -502,7 +502,7 @@ func defaultPodDNSNames(podName, namespace, clusterFQDN string) (names []string,
 // for an identity it does not own. The check is exact string equality on the
 // resolved value, which closes literal-injection loopholes such as
 // "${pod.name}.attacker.com".
-func verifiedIdentities(pcr *capiv1beta1.PodCertificateRequest, clusterFQDN string) map[string]struct{} {
+func verifiedIdentities(pcr *certificatesv1.PodCertificateRequest, clusterFQDN string) map[string]struct{} {
 	ns := pcr.Namespace
 	pod := pcr.Spec.PodName
 	sa := pcr.Spec.ServiceAccountName
@@ -569,7 +569,7 @@ func assertVerifiedIdentity(kind, value string, allowed map[string]struct{}) err
 
 // checkUnrecognizedUserAnnotations rejects unverifiedUserAnnotations keys the
 // signer does not recognize. Signers should deny such requests, see
-// https://pkg.go.dev/k8s.io/api/certificates/v1beta1#PodCertificateRequestSpec
+// https://pkg.go.dev/k8s.io/api/certificates/v1#PodCertificateRequestSpec
 func checkUnrecognizedUserAnnotations(annotations map[string]string, signerName string) error {
 	known := map[string]struct{}{
 		annotationKey(signerName, AnnotationSuffixCN):            {},

@@ -11,7 +11,7 @@ import (
 	"net"
 	"strings"
 
-	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
@@ -59,16 +59,6 @@ func (s *Signer) IsSignerNameMatching(signerName string) bool {
 // Name returns the signer name.
 func (s *Signer) Name() string {
 	return s.signerName
-}
-
-// ParsePKIXPublicKey parses a DER-encoded PKIX public key and classifies it.
-func ParsePKIXPublicKey(pkixPublicKey []byte) (crypto.PublicKey, x509.PublicKeyAlgorithm, error) {
-	publicKey, err := x509.ParsePKIXPublicKey(pkixPublicKey)
-	if err != nil {
-		return nil, 0, fmt.Errorf("unable to parse public key: %w", err)
-	}
-
-	return classifyPublicKey(publicKey)
 }
 
 // CSRInfo holds the values extracted from a kubelet-generated PKCS#10
@@ -130,15 +120,15 @@ func ClusterTrustBundleName(signerName string) string {
 	return strings.ReplaceAll(signerName, "/", ":") + ":bundle"
 }
 
-// ClusterTrustBundle returns a [certificatesv1beta1.ClusterTrustBundle] derived
+// ClusterTrustBundle returns a [certificatesv1.ClusterTrustBundle] derived
 // from the [Signer] and the [authority.CertificateAuthority] used by it for
 // signing certificates.
-func (s *Signer) ClusterTrustBundle() *certificatesv1beta1.ClusterTrustBundle {
-	bundle := &certificatesv1beta1.ClusterTrustBundle{
+func (s *Signer) ClusterTrustBundle() *certificatesv1.ClusterTrustBundle {
+	bundle := &certificatesv1.ClusterTrustBundle{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: ClusterTrustBundleName(s.signerName),
 		},
-		Spec: certificatesv1beta1.ClusterTrustBundleSpec{
+		Spec: certificatesv1.ClusterTrustBundleSpec{
 			TrustBundle: string(s.certificateAuthority.TrustBundlePEM()),
 			SignerName:  s.signerName,
 		},

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -72,9 +72,9 @@ func TestWorkloadPodExampleIssuesUnderIdentityConstraints(t *testing.T) {
 
 	for _, request := range requests {
 		t.Run(request.signerName, func(t *testing.T) {
-			pcr := &capiv1beta1.PodCertificateRequest{
+			pcr := &certificatesv1.PodCertificateRequest{
 				ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: pod.GetNamespace()},
-				Spec: capiv1beta1.PodCertificateRequestSpec{
+				Spec: certificatesv1.PodCertificateRequestSpec{
 					SignerName:                request.signerName,
 					PodName:                   pod.GetName(),
 					PodUID:                    types.UID("11111111-2222-3333-4444-555555555555"),

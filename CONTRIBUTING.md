@@ -34,10 +34,10 @@ Useful make targets (`make help` shows the full list):
 
 ### Local cluster with kind
 
-The repository ships a kind configuration (`kind/kind-config.yaml`) that
-enables the `PodCertificateRequest`, `ClusterTrustBundle` and
-`ClusterTrustBundleProjection` feature gates plus the
-`certificates.k8s.io/v1beta1` runtime config the controller needs:
+The repository ships a kind configuration (`kind/kind-config.yaml`) pinning a
+Kubernetes 1.37 node image, where the `PodCertificateRequest` and
+`ClusterTrustBundle` APIs the controller needs are GA in
+`certificates.k8s.io/v1` and served by default:
 
 | Target                 | What it does                                                          |
 | ---------------------- | --------------------------------------------------------------------- |

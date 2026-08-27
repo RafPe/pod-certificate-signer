@@ -24,8 +24,12 @@ version: 0.1.0
 # source checkout working without extra flags.
 appVersion: "latest"
 
-# Kubernetes version constraint
-kubeVersion: ">= 1.35.0"
+# Kubernetes version constraint. The signer serves certificates.k8s.io/v1,
+# which is GA as of Kubernetes 1.37. The "-0" suffix is what admits managed
+# distributions whose version strings carry a suffix ("1.37.2-eks-abc123"):
+# semver reads those as prereleases of 1.37.2, which a bare ">= 1.37.0"
+# constraint rejects.
+kubeVersion: ">= 1.37.0-0"
 
 home: https://github.com/rafpe/pod-certificate-signer
 sources:

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -24,8 +24,8 @@ import (
 func newTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
-	if err := capiv1beta1.AddToScheme(scheme); err != nil {
-		t.Fatalf("add capiv1beta1: %v", err)
+	if err := certificatesv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add certificatesv1: %v", err)
 	}
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add corev1: %v", err)
@@ -49,14 +49,14 @@ func TestRecordTerminal(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			pcr := &capiv1beta1.PodCertificateRequest{
+			pcr := &certificatesv1.PodCertificateRequest{
 				ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns"},
-				Status:     capiv1beta1.PodCertificateRequestStatus{CertificateChain: "preexisting"},
+				Status:     certificatesv1.PodCertificateRequestStatus{CertificateChain: "preexisting"},
 			}
 			cl := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithObjects(pcr).
-				WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
+				WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
 				Build()
 			rec := events.NewFakeRecorder(10)
 			r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: rec}
@@ -69,7 +69,7 @@ func TestRecordTerminal(t *testing.T) {
 				t.Fatalf("recordTerminal: %v", err)
 			}
 
-			got := &capiv1beta1.PodCertificateRequest{}
+			got := &certificatesv1.PodCertificateRequest{}
 			if err := cl.Get(context.Background(), client.ObjectKeyFromObject(pcr), got); err != nil {
 				t.Fatalf("get: %v", err)
 			}
@@ -104,13 +104,13 @@ func TestRecordTerminal(t *testing.T) {
 // recordIssued must keep the certificate fields, set the Issued condition and
 // emit a normal event.
 func TestRecordIssued(t *testing.T) {
-	pcr := &capiv1beta1.PodCertificateRequest{
+	pcr := &certificatesv1.PodCertificateRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns"},
 	}
 	cl := fake.NewClientBuilder().
 		WithScheme(newTestScheme(t)).
 		WithObjects(pcr).
-		WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
+		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
 		Build()
 	rec := events.NewFakeRecorder(10)
 	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: rec}
@@ -128,11 +128,11 @@ func TestRecordIssued(t *testing.T) {
 		t.Fatalf("recordIssued: %v", err)
 	}
 
-	got := &capiv1beta1.PodCertificateRequest{}
+	got := &certificatesv1.PodCertificateRequest{}
 	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(pcr), got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if len(got.Status.Conditions) != 1 || got.Status.Conditions[0].Type != capiv1beta1.PodCertificateRequestConditionTypeIssued {
+	if len(got.Status.Conditions) != 1 || got.Status.Conditions[0].Type != certificatesv1.PodCertificateRequestConditionTypeIssued {
 		t.Fatalf("conditions = %+v, want a single Issued condition", got.Status.Conditions)
 	}
 	if got.Status.CertificateChain != "pem-chain" {

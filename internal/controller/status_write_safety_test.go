@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,7 +23,7 @@ import (
 // no event, so a failed write is not advertised (and re-advertised on every
 // requeue) as a done deal.
 func TestRecordOutcomeNoEventWhenStatusWriteFails(t *testing.T) {
-	pcr := &capiv1beta1.PodCertificateRequest{
+	pcr := &certificatesv1.PodCertificateRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns"},
 	}
 	// A non-conflict error: rejected outright, never retried.
@@ -31,7 +31,7 @@ func TestRecordOutcomeNoEventWhenStatusWriteFails(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(newTestScheme(t)).
 		WithObjects(pcr).
-		WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
+		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
 		WithInterceptorFuncs(interceptor.Funcs{
 			SubResourceUpdate: func(_ context.Context, _ client.Client, _ string, _ client.Object, _ ...client.SubResourceUpdateOption) error {
 				return writeErr
@@ -42,7 +42,7 @@ func TestRecordOutcomeNoEventWhenStatusWriteFails(t *testing.T) {
 	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: rec}
 
 	err := r.recordOutcome(context.Background(), pcr,
-		capiv1beta1.PodCertificateRequestConditionTypeIssued, ReasonCertificateIssued, "issued", corev1.EventTypeNormal)
+		certificatesv1.PodCertificateRequestConditionTypeIssued, ReasonCertificateIssued, "issued", corev1.EventTypeNormal)
 	if err == nil {
 		t.Fatal("recordOutcome() error = nil, want the status write error to propagate")
 	}
@@ -67,7 +67,7 @@ func TestReconcileRetriesStatusConflict(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(newTestScheme(t)).
 		WithObjects(pcr, pod).
-		WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
+		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
 		WithInterceptorFuncs(interceptor.Funcs{
 			SubResourceUpdate: func(ctx context.Context, c client.Client, _ string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
 				updateAttempts++
@@ -105,11 +105,11 @@ func TestReconcileRetriesStatusConflict(t *testing.T) {
 		t.Errorf("successful status writes = %d, want exactly 1", successfulWrites)
 	}
 
-	got := &capiv1beta1.PodCertificateRequest{}
+	got := &certificatesv1.PodCertificateRequest{}
 	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(pcr), got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if len(got.Status.Conditions) != 1 || got.Status.Conditions[0].Type != capiv1beta1.PodCertificateRequestConditionTypeIssued {
+	if len(got.Status.Conditions) != 1 || got.Status.Conditions[0].Type != certificatesv1.PodCertificateRequestConditionTypeIssued {
 		t.Fatalf("conditions = %+v, want a single Issued condition persisted", got.Status.Conditions)
 	}
 	select {
@@ -134,19 +134,19 @@ func TestReconcileConflictPreservesConcurrentTerminalOutcome(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(newTestScheme(t)).
 		WithObjects(pcr, pod).
-		WithStatusSubresource(&capiv1beta1.PodCertificateRequest{}).
+		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
 		WithInterceptorFuncs(interceptor.Funcs{
 			SubResourceUpdate: func(ctx context.Context, c client.Client, _ string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
 				updateAttempts++
 				if updateAttempts == 1 {
 					// A concurrent writer denies the request, then this
 					// reconcile's write loses the race with a conflict.
-					concurrent := &capiv1beta1.PodCertificateRequest{}
+					concurrent := &certificatesv1.PodCertificateRequest{}
 					if err := c.Get(ctx, key, concurrent); err != nil {
 						return err
 					}
 					concurrent.Status.Conditions = []metav1.Condition{{
-						Type:               capiv1beta1.PodCertificateRequestConditionTypeDenied,
+						Type:               certificatesv1.PodCertificateRequestConditionTypeDenied,
 						Status:             metav1.ConditionTrue,
 						LastTransitionTime: metav1.Now(),
 						Reason:             string(ReasonInvalidUserAnnotations),
@@ -174,12 +174,12 @@ func TestReconcileConflictPreservesConcurrentTerminalOutcome(t *testing.T) {
 		t.Fatalf("Reconcile() error = %v, want nil (losing the race to a terminal outcome is not a failure)", err)
 	}
 
-	got := &capiv1beta1.PodCertificateRequest{}
+	got := &certificatesv1.PodCertificateRequest{}
 	if err := cl.Get(context.Background(), key, got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	if len(got.Status.Conditions) != 1 ||
-		got.Status.Conditions[0].Type != capiv1beta1.PodCertificateRequestConditionTypeDenied {
+		got.Status.Conditions[0].Type != certificatesv1.PodCertificateRequestConditionTypeDenied {
 		t.Fatalf("persisted conditions = %+v, want the concurrent Denied outcome preserved, not overwritten by this reconcile's Issued",
 			got.Status.Conditions)
 	}

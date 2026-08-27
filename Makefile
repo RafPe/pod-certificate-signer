@@ -37,7 +37,7 @@ KUBECTL ?= kubectl
 # ENVTEST_K8S_VERSION ?= $(shell go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{ printf "1.%d.%d", $$3, $$4 }')
 #
 # Or set the version here explicitly.
-ENVTEST_K8S_VERSION ?= 1.36.0
+ENVTEST_K8S_VERSION ?= 1.37.0
 
 # Kind cluster names.
 KIND_CLUSTER_DEV ?= pcs-dev

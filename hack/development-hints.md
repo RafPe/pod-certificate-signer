@@ -5,7 +5,7 @@ Some hints to quickly come back to portions of code if needed
 
 ```sh
 kubebuilder init --domain=operators.raftech.io --repo=github.com/rafpe/kubernetes-podcertificate-signer --project-name podcert
-kubebuilder create api --group certificates --version v1beta1 --kind PodCertificateRequest --controller --resource=false
+kubebuilder create api --group certificates --version v1 --kind PodCertificateRequest --controller --resource=false
 ```
 
 ## To Requeue or not 

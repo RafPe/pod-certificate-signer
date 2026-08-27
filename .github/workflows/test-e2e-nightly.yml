@@ -76,7 +76,7 @@ jobs:
 
       - name: Install kind
         env:
-          KIND_VERSION: v0.31.0
+          KIND_VERSION: v0.33.0
         run: |
           KIND_BIN="${RUNNER_TEMP}/kind"
           curl --fail --location --output "${KIND_BIN}" \

@@ -12,7 +12,7 @@ func renderChartResult(t *testing.T, values ...string) (string, error) {
 	args = append(args,
 		"template", "test", "../../charts/pod-certificate-signer",
 		"--namespace", "pcs-system",
-		"--kube-version", "1.35.0",
+		"--kube-version", "1.37.0",
 		"--set", "signer.ca.secretRef.name=test-ca",
 		"--set", "signer.name=example.org/signer",
 	)
@@ -31,7 +31,7 @@ func TestDeploymentRendersAllowUnverifiedIdentities(t *testing.T) {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm not installed; skipping chart render assertion")
 	}
-	out, err := exec.Command("helm", "template", "test", "../../charts/pod-certificate-signer", "--kube-version", "1.35.0",
+	out, err := exec.Command("helm", "template", "test", "../../charts/pod-certificate-signer", "--kube-version", "1.37.0",
 		// A CA source is required (the chart fails fast otherwise).
 		"--set", "signer.ca.secretRef.name=test-ca").CombinedOutput()
 	if err != nil {
@@ -68,7 +68,7 @@ func renderChart(t *testing.T, extraArgs ...string) string {
 	}
 	args := append([]string{
 		"template", "test", "../../charts/pod-certificate-signer",
-		"--kube-version", "1.35.0",
+		"--kube-version", "1.37.0",
 		// A CA source is required (the chart fails fast otherwise).
 		"--set", "signer.ca.secretRef.name=test-ca",
 	}, extraArgs...)

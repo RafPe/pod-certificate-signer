@@ -28,7 +28,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/test/utils"
 )
@@ -129,7 +129,7 @@ func defineVerifiedIdentityBoundaryTests() {
 				// expectDenied also proves the request carries no certificate
 				// and no timestamps, and that the outcome survives another
 				// reconcile - a partially-issued denial would be the worse bug.
-				denial := expectDenied(pod, capiv1beta1.PodCertificateRequestConditionInvalidUserConfig)
+				denial := expectDenied(pod, certificatesv1.PodCertificateRequestConditionInvalidUserConfig)
 
 				By("verifying the denial names the identity constraint and not something else")
 				inspect(pod, denial)
@@ -289,7 +289,7 @@ func defineCustomClusterFQDNProfileTests() {
 			})
 
 			By("waiting for the PodCertificateRequest to be denied")
-			denial := expectDenied(pod, capiv1beta1.PodCertificateRequestConditionInvalidUserConfig)
+			denial := expectDenied(pod, certificatesv1.PodCertificateRequestConditionInvalidUserConfig)
 			Expect(denial.Message).To(ContainSubstring("svc.cluster.local"))
 			expectOwnershipDenial(denial)
 		})

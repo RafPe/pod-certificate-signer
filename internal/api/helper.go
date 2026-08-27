@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -13,28 +13,28 @@ import (
 
 // IsPodCertificateRequestImmutable reports whether the request already carries
 // a terminal condition (Issued, Denied or Failed) and can no longer be updated.
-func IsPodCertificateRequestImmutable(pcr *capiv1beta1.PodCertificateRequest) bool {
+func IsPodCertificateRequestImmutable(pcr *certificatesv1.PodCertificateRequest) bool {
 	return GetPodCertificateRequestConditionType(&pcr.Status) != ""
 }
 
 // IsPodCertificateStatusIssued reports whether the request has been issued.
-func IsPodCertificateStatusIssued(pcr *capiv1beta1.PodCertificateRequest) bool {
-	return GetPodCertificateRequestConditionType(&pcr.Status) == capiv1beta1.PodCertificateRequestConditionTypeIssued
+func IsPodCertificateStatusIssued(pcr *certificatesv1.PodCertificateRequest) bool {
+	return GetPodCertificateRequestConditionType(&pcr.Status) == certificatesv1.PodCertificateRequestConditionTypeIssued
 }
 
 // GetPodCertificateRequestConditionType returns the terminal condition type
 // (Issued, Denied or Failed) recorded on the request status, or an empty
 // string when the request has not reached a terminal state yet.
-func GetPodCertificateRequestConditionType(status *capiv1beta1.PodCertificateRequestStatus) string {
+func GetPodCertificateRequestConditionType(status *certificatesv1.PodCertificateRequestStatus) string {
 	for _, c := range status.Conditions {
-		if c.Type == capiv1beta1.PodCertificateRequestConditionTypeIssued {
-			return capiv1beta1.PodCertificateRequestConditionTypeIssued
+		if c.Type == certificatesv1.PodCertificateRequestConditionTypeIssued {
+			return certificatesv1.PodCertificateRequestConditionTypeIssued
 		}
-		if c.Type == capiv1beta1.PodCertificateRequestConditionTypeDenied {
-			return capiv1beta1.PodCertificateRequestConditionTypeDenied
+		if c.Type == certificatesv1.PodCertificateRequestConditionTypeDenied {
+			return certificatesv1.PodCertificateRequestConditionTypeDenied
 		}
-		if c.Type == capiv1beta1.PodCertificateRequestConditionTypeFailed {
-			return capiv1beta1.PodCertificateRequestConditionTypeFailed
+		if c.Type == certificatesv1.PodCertificateRequestConditionTypeFailed {
+			return certificatesv1.PodCertificateRequestConditionTypeFailed
 		}
 	}
 

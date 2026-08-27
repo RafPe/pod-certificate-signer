@@ -30,7 +30,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	capiv1beta1 "k8s.io/api/certificates/v1beta1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/test/credprobe/report"
 )
@@ -293,7 +293,7 @@ func defineKeyTypeAndLifetimeTests() {
 				pod := applyCertTestPod(podName, annotations)
 
 				By("waiting for the PodCertificateRequest to be denied")
-				denial := expectDenied(pod, capiv1beta1.PodCertificateRequestConditionInvalidUserConfig)
+				denial := expectDenied(pod, certificatesv1.PodCertificateRequestConditionInvalidUserConfig)
 				Expect(denial.Message).To(ContainSubstring(wantMessage))
 			},
 			// maxExpirationSeconds is unset, so kube-apiserver's 24-hour default
@@ -445,7 +445,7 @@ func expectChainVerifies(leaf *x509.Certificate, trustAnchors []*x509.Certificat
 // renews at the wrong time, and a beginRefreshAt outside the validity window is
 // a status kube-apiserver refuses outright.
 func expectStatusTimes(
-	request *capiv1beta1.PodCertificateRequest,
+	request *certificatesv1.PodCertificateRequest,
 	leaf *x509.Certificate,
 	wantRefreshBefore time.Duration,
 ) {
