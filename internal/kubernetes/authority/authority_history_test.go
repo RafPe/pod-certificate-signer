@@ -93,8 +93,8 @@ func TestBootstrappedHistoryIsTrimmedToTheConfiguredMaximum(t *testing.T) {
 // own. It cannot prove that an entry was ever its own CA, but it can refuse to
 // carry certificates that could not have signed anything it issued, and refuse
 // to spend a retention slot on an anchor no verifier would accept: entries that
-// are not CAs, cannot sign certificates, or have expired are dropped instead of
-// being adopted as history and republished.
+// are not CAs, cannot sign certificates, have expired or are not yet valid are
+// dropped instead of being adopted as history and republished.
 func TestBootstrappedHistoryDropsUnusableEntries(t *testing.T) {
 	dir := t.TempDir()
 	current := newCA(t, "current")
@@ -110,11 +110,16 @@ func TestBootstrappedHistoryDropsUnusableEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate expired CA: %v", err)
 	}
+	notYetValid, err := testutil.NewCAWithValidity("not-yet-valid",
+		time.Now().Add(time.Hour), time.Now().Add(25*time.Hour))
+	if err != nil {
+		t.Fatalf("generate not-yet-valid CA: %v", err)
+	}
 	kept := newCA(t, "kept")
 
 	ca, err := New(dir+"/tls.crt", dir+"/tls.key",
-		WithPreviousCABundle([]*x509.Certificate{notACA.Cert, expired.Cert, kept.Cert}),
-		WithMaxPreviousCertificates(3),
+		WithPreviousCABundle([]*x509.Certificate{notACA.Cert, expired.Cert, notYetValid.Cert, kept.Cert}),
+		WithMaxPreviousCertificates(4),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)

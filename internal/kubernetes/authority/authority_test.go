@@ -112,6 +112,102 @@ func TestNewRejectsExpiredCertificate(t *testing.T) {
 	}
 }
 
+func TestNewRejectsNotYetValidCertificate(t *testing.T) {
+	dir := t.TempDir()
+	kp, err := testutil.NewCAWithValidity("future-ca.example.org",
+		time.Now().Add(time.Hour), time.Now().Add(25*time.Hour))
+	if err != nil {
+		t.Fatalf("generate CA: %v", err)
+	}
+	certPath, keyPath, err := kp.WriteFiles(dir)
+	if err != nil {
+		t.Fatalf("write CA files: %v", err)
+	}
+
+	_, err = New(certPath, keyPath)
+	if err == nil || !strings.Contains(err.Error(), "not yet valid") {
+		t.Fatalf("err = %v, want not-yet-valid CA error", err)
+	}
+}
+
+func TestValidateCACertificate(t *testing.T) {
+	// The tolerance is asserted as a literal rather than by referencing the
+	// production constant, so a change to the contract fails a test instead of
+	// silently rewriting what this test proves.
+	const tolerance = 5 * time.Minute
+	now := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		mutate  func(cert *x509.Certificate)
+		wantErr string
+	}{
+		{
+			name:   "usable CA",
+			mutate: func(cert *x509.Certificate) {},
+		},
+		{
+			name:    "basic constraints not asserted",
+			mutate:  func(cert *x509.Certificate) { cert.BasicConstraintsValid = false },
+			wantErr: "not a valid CA certificate",
+		},
+		{
+			name:    "not a CA",
+			mutate:  func(cert *x509.Certificate) { cert.IsCA = false },
+			wantErr: "not a valid CA certificate",
+		},
+		{
+			name:    "cannot sign certificates",
+			mutate:  func(cert *x509.Certificate) { cert.KeyUsage = x509.KeyUsageDigitalSignature },
+			wantErr: "cannot sign certificates",
+		},
+		{
+			name:    "expired",
+			mutate:  func(cert *x509.Certificate) { cert.NotAfter = now.Add(-time.Minute) },
+			wantErr: "has expired",
+		},
+		{
+			name:    "not yet valid beyond the skew tolerance",
+			mutate:  func(cert *x509.Certificate) { cert.NotBefore = now.Add(tolerance + time.Second) },
+			wantErr: "not yet valid",
+		},
+		{
+			name:   "not yet valid within the skew tolerance",
+			mutate: func(cert *x509.Certificate) { cert.NotBefore = now.Add(tolerance - time.Second) },
+		},
+		{
+			name:   "NotBefore exactly at the tolerance boundary",
+			mutate: func(cert *x509.Certificate) { cert.NotBefore = now.Add(tolerance) },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// validateCACertificate reads fields only, so a struct literal is
+			// enough - no key material is needed.
+			cert := &x509.Certificate{
+				BasicConstraintsValid: true,
+				IsCA:                  true,
+				KeyUsage:              x509.KeyUsageCertSign,
+				NotBefore:             now.Add(-time.Hour),
+				NotAfter:              now.Add(time.Hour),
+			}
+			tt.mutate(cert)
+
+			err := validateCACertificate(cert, now)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateCACertificate(%s) = %v, want nil", tt.name, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("validateCACertificate(%s) = %v, want error containing %q", tt.name, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestSignIssuesCertificateChain(t *testing.T) {
 	dir := t.TempDir()
 	caPair := writeCA(t, dir, "ca.example.org", 24*time.Hour)
