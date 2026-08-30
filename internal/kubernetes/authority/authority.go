@@ -285,6 +285,16 @@ func (ca *CertificateAuthority) load() (bool, error) {
 	return true, nil
 }
 
+// clockSkewTolerance is how far ahead of the local clock a CA certificate's
+// NotBefore may lie and still be accepted. A CA minted by an external PKI
+// (a cert-manager sub-CA, AWS Private CA, Vault) carries validity from the
+// issuer's clock, so a freshly rotated CA routinely opens a few seconds ahead
+// of this node; refusing it would turn benign skew into a reload failure.
+// Anything beyond this window is rejected, because verifiers check the
+// validity of the whole chain: a not-yet-valid CA signs leaves nobody can
+// verify while the signer itself reports healthy.
+const clockSkewTolerance = 5 * time.Minute
+
 // validateCACertificate reports whether cert can serve as a signing CA at the
 // given time. The same checks decide whether the material on disk may become
 // the current CA and whether a certificate offered as history is worth
@@ -295,6 +305,9 @@ func validateCACertificate(cert *x509.Certificate, now time.Time) error {
 	}
 	if (cert.KeyUsage & x509.KeyUsageCertSign) == 0 {
 		return errors.New("CA certificate cannot sign certificates")
+	}
+	if now.Add(clockSkewTolerance).Before(cert.NotBefore) {
+		return errors.New("CA certificate is not yet valid")
 	}
 	if now.After(cert.NotAfter) {
 		return errors.New("CA certificate has expired")
