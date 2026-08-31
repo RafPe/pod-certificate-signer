@@ -582,6 +582,19 @@ func defineCALifecycleTests() {
 						return leaf.CertPEM, leaf.KeyPEM
 					},
 					"certificate is not a valid CA certificate", "certificate is not a valid CA certificate"),
+				Entry("a CA certificate that is not yet valid",
+					"pcs-ca-bad-not-yet-valid",
+					func() ([]byte, []byte) {
+						// A perfectly good CA, hours early. Loading it would
+						// keep the signer green while every leaf it issues
+						// fails chain verification on the peer, because the
+						// verifier checks the validity window of the whole
+						// chain - which is why it must be refused up front
+						// like the other unusable material here.
+						kp := newLifecycleNotYetValidCA("ca-lifecycle-not-yet-valid")
+						return kp.CertPEM, kp.KeyPEM
+					},
+					"CA certificate is not yet valid", "CA certificate is not yet valid"),
 			)
 
 			It("leaves a request pending rather than failed while the CA cannot cover the lifetime", func() {
@@ -775,6 +788,19 @@ func newLifecycleNonCA(commonName string) *testutil.KeyPair {
 
 	kp, err := testutil.NewNonCA(commonName, caLifecycleValidity)
 	Expect(err).NotTo(HaveOccurred(), "Failed to generate non-CA certificate %q", commonName)
+	return kp
+}
+
+// newLifecycleNotYetValidCA generates a CA whose validity window opens six
+// hours from now - far beyond the signer's clock-skew tolerance and, unlike a
+// tighter margin, guaranteed not to become valid while the spec is still
+// waiting out kubelet's mounted-secret propagation.
+func newLifecycleNotYetValidCA(commonName string) *testutil.KeyPair {
+	GinkgoHelper()
+
+	notBefore := time.Now().Add(6 * time.Hour)
+	kp, err := testutil.NewCAWithValidity(commonName, notBefore, notBefore.Add(caLifecycleValidity))
+	Expect(err).NotTo(HaveOccurred(), "Failed to generate not-yet-valid CA %q", commonName)
 	return kp
 }
 

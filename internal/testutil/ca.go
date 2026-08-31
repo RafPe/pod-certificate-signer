@@ -30,16 +30,23 @@ type KeyPair struct {
 // one hour in the past until now+lifetime, so a negative lifetime produces an
 // already-expired certificate for negative tests.
 func NewCA(commonName string, lifetime time.Duration) (*KeyPair, error) {
-	return newSelfSigned(commonName, lifetime, true)
+	return newSelfSigned(commonName, time.Now().Add(-time.Hour), time.Now().Add(lifetime), true)
+}
+
+// NewCAWithValidity returns a self-signed CA certificate with an explicit
+// validity window, for tests that need bounds NewCA cannot express - most
+// notably a NotBefore in the future for not-yet-valid negative tests.
+func NewCAWithValidity(commonName string, notBefore, notAfter time.Time) (*KeyPair, error) {
+	return newSelfSigned(commonName, notBefore, notAfter, true)
 }
 
 // NewNonCA returns a self-signed certificate without CA capabilities, for
 // negative tests around CA validation.
 func NewNonCA(commonName string, lifetime time.Duration) (*KeyPair, error) {
-	return newSelfSigned(commonName, lifetime, false)
+	return newSelfSigned(commonName, time.Now().Add(-time.Hour), time.Now().Add(lifetime), false)
 }
 
-func newSelfSigned(commonName string, lifetime time.Duration, isCA bool) (*KeyPair, error) {
+func newSelfSigned(commonName string, notBefore, notAfter time.Time, isCA bool) (*KeyPair, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generate key: %w", err)
@@ -57,8 +64,8 @@ func newSelfSigned(commonName string, lifetime time.Duration, isCA bool) (*KeyPa
 	template := &x509.Certificate{
 		SerialNumber:          serialNumber,
 		Subject:               pkix.Name{CommonName: commonName},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(lifetime),
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
 		IsCA:                  isCA,
 		BasicConstraintsValid: true,
 		KeyUsage:              keyUsage,
