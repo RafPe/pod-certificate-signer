@@ -1,0 +1,2 @@
+kind: Fixed
+body: '`Sign` and `CertificateNotAfter` no longer dereference the CA certificate without a nil guard. An authority that somehow holds no certificate - possible only through a construction path that defers the first load, since `New` fails closed - now refuses to sign with the same "CA unusable, requeue" classification as an expired signer, and reports its expiry as a zero timestamp instead of panicking. The second guard matters beyond signing: `CertificateNotAfter` runs on every metrics scrape, where a panic takes down the scrape rather than being recovered.'

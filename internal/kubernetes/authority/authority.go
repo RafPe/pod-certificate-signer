@@ -375,6 +375,16 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 
+	// New fails closed, so a loaded certificate is an invariant today - but
+	// nothing else defends it, and any construction path that defers the first
+	// load would turn the dereferences below into panics. Classified as
+	// ErrCASignerUnusable: like an expired signer, a CA rotation can make an
+	// identical request succeed, so callers requeue rather than record a
+	// terminal outcome.
+	if ca.certificate == nil {
+		return nil, fmt.Errorf("no CA certificate loaded: %w", ErrCASignerUnusable)
+	}
+
 	now := time.Now()
 	if ca.nowFunc != nil {
 		now = ca.nowFunc()
@@ -807,6 +817,15 @@ func (ca *CertificateAuthority) ReloadHealth() (int, time.Time) {
 func (ca *CertificateAuthority) CertificateNotAfter() time.Time {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
+
+	// This runs on every metrics scrape, which is not a reconcile: a panic
+	// here takes down the scrape rather than being recovered. With no
+	// certificate loaded, report the zero time - the collector renders it as
+	// a 0 gauge (see metrics.timestamp), which correctly fires the staleness
+	// alert.
+	if ca.certificate == nil {
+		return time.Time{}
+	}
 
 	return ca.certificate.NotAfter
 }
