@@ -2,9 +2,11 @@ package authority
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -54,92 +56,102 @@ func TestReloadRetainsLastGoodCAOnFailure(t *testing.T) {
 // key catches up) must be retried, not abandoned, so an eventually-consistent
 // good pair is picked up.
 func TestReloadWithRetryRecoversFromTransientBadPair(t *testing.T) {
-	dir := t.TempDir()
-	writeCA(t, dir, "good-ca.example.org", 24*time.Hour)
-	ca, err := New(dir+"/tls.crt", dir+"/tls.key")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	ca.reloadBackoff = 20 * time.Millisecond
-	ca.reloadAttempts = 100
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		writeCA(t, dir, "good-ca.example.org", 24*time.Hour)
+		ca, err := New(dir+"/tls.crt", dir+"/tls.key")
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
 
-	// Write a mismatched pair: certificate of one CA, key of another. This
-	// fails tls.LoadX509KeyPair's public/private key consistency check.
-	a, err := testutil.NewCA("a.example.org", 24*time.Hour)
-	if err != nil {
-		t.Fatalf("generate CA a: %v", err)
-	}
-	b, err := testutil.NewCA("b.example.org", 24*time.Hour)
-	if err != nil {
-		t.Fatalf("generate CA b: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "tls.crt"), a.CertPEM, 0o600); err != nil {
-		t.Fatalf("write cert: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "tls.key"), b.KeyPEM, 0o600); err != nil {
-		t.Fatalf("write key: %v", err)
-	}
-	if _, err := ca.load(); err == nil {
-		t.Fatal("want error for mismatched key pair")
-	}
+		// Write a mismatched pair: certificate of one CA, key of another. This
+		// fails tls.LoadX509KeyPair's public/private key consistency check.
+		a, err := testutil.NewCA("a.example.org", 24*time.Hour)
+		if err != nil {
+			t.Fatalf("generate CA a: %v", err)
+		}
+		b, err := testutil.NewCA("b.example.org", 24*time.Hour)
+		if err != nil {
+			t.Fatalf("generate CA b: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "tls.crt"), a.CertPEM, 0o600); err != nil {
+			t.Fatalf("write cert: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "tls.key"), b.KeyPEM, 0o600); err != nil {
+			t.Fatalf("write key: %v", err)
+		}
+		if _, err := ca.load(); err == nil {
+			t.Fatal("want error for mismatched key pair")
+		}
 
-	// After a short delay a consistent good pair appears on disk.
-	rotated, err := testutil.NewCA("recovered.example.org", 24*time.Hour)
-	if err != nil {
-		t.Fatalf("generate rotated CA: %v", err)
-	}
-	go func() {
-		time.Sleep(120 * time.Millisecond)
-		_ = os.WriteFile(filepath.Join(dir, "tls.key"), rotated.KeyPEM, 0o600)
-		_ = os.WriteFile(filepath.Join(dir, "tls.crt"), rotated.CertPEM, 0o600)
-	}()
+		// A consistent good pair appears on disk after the first retry has
+		// failed and before the second runs: attempt 1 at t=0, attempt 2 at
+		// t=backoff, the write at 1.5*backoff, attempt 3 at 3*backoff.
+		rotated, err := testutil.NewCA("recovered.example.org", 24*time.Hour)
+		if err != nil {
+			t.Fatalf("generate rotated CA: %v", err)
+		}
+		writerDone := make(chan struct{})
+		go func() {
+			defer close(writerDone)
+			time.Sleep(ca.reloadBackoff + ca.reloadBackoff/2)
+			_ = os.WriteFile(filepath.Join(dir, "tls.key"), rotated.KeyPEM, 0o600)
+			_ = os.WriteFile(filepath.Join(dir, "tls.crt"), rotated.CertPEM, 0o600)
+		}()
 
-	ctx := context.Background()
-	if _, err := ca.reloadWithRetry(ctx, log.FromContext(ctx)); err != nil {
-		t.Fatalf("reloadWithRetry did not recover from a transient bad pair: %v", err)
-	}
-	if got := parseChain(t, ca.TrustBundlePEM()); !got[0].Equal(rotated.Cert) {
-		t.Fatal("must load the recovered CA after retrying")
-	}
+		if _, err := ca.reloadWithRetry(t.Context(), log.FromContext(t.Context())); err != nil {
+			t.Fatalf("reloadWithRetry did not recover from a transient bad pair: %v", err)
+		}
+		<-writerDone
+		if got := parseChain(t, ca.TrustBundlePEM()); !got[0].Equal(rotated.Cert) {
+			t.Fatal("must load the recovered CA after retrying")
+		}
+	})
 }
 
 // reloadWithRetry must give up (and stop looping) once ctx is canceled, rather
 // than blocking forever on a permanently bad pair.
 func TestReloadWithRetryHonorsContextCancellation(t *testing.T) {
-	dir := t.TempDir()
-	writeCA(t, dir, "good-ca.example.org", 24*time.Hour)
-	ca, err := New(dir+"/tls.crt", dir+"/tls.key")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	ca.reloadBackoff = 50 * time.Millisecond
-	ca.reloadAttempts = 1_000_000
-
-	// Permanently bad: a non-CA certificate.
-	nonCA, err := testutil.NewNonCA("bad.example.org", time.Hour)
-	if err != nil {
-		t.Fatalf("generate non-CA: %v", err)
-	}
-	if _, _, err := nonCA.WriteFiles(dir); err != nil {
-		t.Fatalf("write non-CA files: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		_, err := ca.reloadWithRetry(ctx, log.FromContext(ctx))
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("reloadWithRetry must return an error when it cannot reload before ctx is canceled")
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		writeCA(t, dir, "good-ca.example.org", 24*time.Hour)
+		ca, err := New(dir+"/tls.crt", dir+"/tls.key")
+		if err != nil {
+			t.Fatalf("New: %v", err)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("reloadWithRetry ignored context cancellation")
-	}
+		ca.reloadAttempts = 1_000_000
+
+		// Permanently bad: a non-CA certificate.
+		nonCA, err := testutil.NewNonCA("bad.example.org", time.Hour)
+		if err != nil {
+			t.Fatalf("generate non-CA: %v", err)
+		}
+		if _, _, err := nonCA.WriteFiles(dir); err != nil {
+			t.Fatalf("write non-CA files: %v", err)
+		}
+
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() {
+			_, err := ca.reloadWithRetry(ctx, log.FromContext(ctx))
+			done <- err
+		}()
+
+		// Settle with the retry loop parked in its backoff timer, then cancel.
+		synctest.Wait()
+		cancel()
+
+		// Bounded well under one backoff step, so a loop that ignored the
+		// cancellation fails here instead of burning through its attempts.
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("reloadWithRetry() after cancellation = %v, want %v", err, context.Canceled)
+			}
+		case <-time.After(ca.reloadBackoff / 2):
+			t.Fatal("reloadWithRetry did not return after context cancellation")
+		}
+	})
 }
 
 // A closed fsnotify events channel must terminate the watch loop promptly and

@@ -1,9 +1,9 @@
 package authority
 
 import (
-	"context"
 	"os"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -47,24 +47,25 @@ func TestReconcileOnceCountsReloadResults(t *testing.T) {
 // another filesystem event. The counter is named _attempts_ for exactly this
 // reason, and this pins it.
 func TestReloadWithRetryCountsEveryAttempt(t *testing.T) {
-	dir := t.TempDir()
-	writeCA(t, dir, "ca.example.org", 24*time.Hour)
-	ca, err := New(dir+"/tls.crt", dir+"/tls.key")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	ca.reloadAttempts = 3
-	ca.reloadBackoff = time.Millisecond
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		writeCA(t, dir, "ca.example.org", 24*time.Hour)
+		ca, err := New(dir+"/tls.crt", dir+"/tls.key")
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		ca.reloadAttempts = 3
 
-	if err := os.WriteFile(dir+"/tls.crt", []byte("not a certificate\n"), 0o600); err != nil {
-		t.Fatalf("write bad cert: %v", err)
-	}
+		if err := os.WriteFile(dir+"/tls.crt", []byte("not a certificate\n"), 0o600); err != nil {
+			t.Fatalf("write bad cert: %v", err)
+		}
 
-	before := reloadCounts()
-	if _, err := ca.reloadWithRetry(context.Background(), logr.Discard()); err == nil {
-		t.Fatal("reloadWithRetry() error = nil, want the reload to fail")
-	}
-	assertReloadDelta(t, before, map[string]float64{metrics.ResultFailed: 3})
+		before := reloadCounts()
+		if _, err := ca.reloadWithRetry(t.Context(), logr.Discard()); err == nil {
+			t.Fatal("reloadWithRetry() error = nil, want the reload to fail")
+		}
+		assertReloadDelta(t, before, map[string]float64{metrics.ResultFailed: 3})
+	})
 }
 
 // The last-success clock must be seeded by the load in New. Nothing else
