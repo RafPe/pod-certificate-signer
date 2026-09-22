@@ -4,10 +4,10 @@ Unit tests here never wait on the wall clock and never shorten a production
 interval to make a test fast. A test that needs time to pass runs inside a
 `testing/synctest` bubble, where `time.Now`, `time.Sleep`, timers, tickers and
 context deadlines use a fake clock that advances only when every goroutine in
-the bubble is blocked. The Kubernetes repository reaches the same place through
-`k8s.io/kubernetes/test/utils/ktesting` (see the review on
-kubernetes/kubernetes#141459); I use the standard library directly because that
-wrapper lives inside the `k8s.io/kubernetes` module.
+the bubble is durably blocked. I found synctest through the review on
+kubernetes/kubernetes#141459. I use the standard library directly, because the
+`k8s.io/kubernetes/test/utils/ktesting` wrapper is not importable from outside
+the `k8s.io/kubernetes` module.
 
 ## Rules
 
@@ -70,9 +70,9 @@ func TestTickDoesSomething(t *testing.T) {
 
 - Tests that drive the real fsnotify watcher through `ca.Watch`, such as
   `TestWatchReloadsCA`. The watcher goroutine blocks in a kernel syscall, which
-  synctest does not count as blocked, so fake time would never advance. Test the
-  loop through the `watchLoop` seam instead, which takes the event channels as
-  parameters.
+  synctest does not count as durably blocked, so fake time would never advance.
+  Test the loop through the `watchLoop` seam instead, which takes the event
+  channels as parameters.
 - The envtest controller suite and the Kind e2e suite. Those talk to real
   processes, so `Eventually` and `Consistently` with real timeouts are correct
   there.
