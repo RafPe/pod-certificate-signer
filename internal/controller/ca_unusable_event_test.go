@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -65,7 +64,7 @@ func caUnusableHarness(t *testing.T, signErr error) (
 func reconcileRequeues(t *testing.T, r *PodCertificateRequestReconciler, pcr *certificatesv1.PodCertificateRequest) {
 	t.Helper()
 
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pcr)})
+	_, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pcr)})
 	if err == nil {
 		t.Fatal("Reconcile() error = nil, want the transient error so controller-runtime requeues")
 	}
@@ -103,7 +102,7 @@ func TestReconcileCASignerUnusableEmitsThrottledWarning(t *testing.T) {
 		// The requeue must stay recoverable: a condition would make the request
 		// immutable, so a later CA rotation could never satisfy it.
 		got := &certificatesv1.PodCertificateRequest{}
-		if err := cl.Get(context.Background(), client.ObjectKeyFromObject(pcr), got); err != nil {
+		if err := cl.Get(t.Context(), client.ObjectKeyFromObject(pcr), got); err != nil {
 			t.Fatalf("get PodCertificateRequest: %v", err)
 		}
 		if len(got.Status.Conditions) != 0 {
@@ -145,7 +144,7 @@ func TestReconcileOtherTransientErrorsEmitNoEvent(t *testing.T) {
 
 		// A transient error that is not the CA (a failed API read, say) is routed
 		// through the same branch, so assert on that branch directly.
-		ctx := logr.NewContext(context.Background(), logr.Discard())
+		ctx := logr.NewContext(t.Context(), logr.Discard())
 		if _, err := r.recordFailure(ctx, pcr, errors.New("etcdserver: request timed out")); err == nil {
 			t.Fatal("recordFailure() error = nil, want the transient error returned so the reconcile requeues")
 		}
