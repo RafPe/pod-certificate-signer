@@ -12,9 +12,8 @@ import (
 // runWatchLoop starts watchLoop inside the caller's synctest bubble with event
 // and error channels that never fire on their own, so only the reconcile ticker
 // (or a send by the test on errs) can start a reload. The returned stop
-// function cancels the loop and waits for it to return; it must be called
-// before the bubble function returns, because a goroutine still running then is
-// a test failure.
+// function cancels the loop and asserts that it returned nil within a fake
+// second; it is the only check on the loop's return value, so defer it.
 //
 // Only call this from inside synctest.Test: outside a bubble the production
 // reconcile interval makes every tick a real minute.
