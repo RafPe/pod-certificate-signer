@@ -5,11 +5,11 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
-	"k8s.io/apimachinery/pkg/util/wait"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -23,7 +23,8 @@ import (
 )
 
 // newTestPublisher builds a ctbPublisher backed by a real CA and signer, and
-// the given client, with fast retry/tick settings suitable for tests.
+// the given client, with the production tick and retry settings. Tests that
+// hit a retry or a tick must run inside a synctest bubble.
 func newTestPublisher(t *testing.T, c client.Client) *ctbPublisher {
 	t.Helper()
 
@@ -49,8 +50,8 @@ func newTestPublisher(t *testing.T, c client.Client) *ctbPublisher {
 		signer:   s,
 		ca:       ca,
 		events:   make(chan struct{}),
-		interval: time.Hour,
-		backoff:  wait.Backoff{Steps: 8, Duration: time.Millisecond, Factor: 2.0},
+		interval: ctbDriftRepairInterval,
+		backoff:  ctbPublishBackoff,
 		// A throwaway vector rather than the package-level one, so each test
 		// counts only its own publishes.
 		publishes: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -62,37 +63,39 @@ func newTestPublisher(t *testing.T, c client.Client) *ctbPublisher {
 // A publish that fails transiently must be retried (with backoff) until it
 // succeeds, rather than being abandoned after a single attempt.
 func TestReconcileRetriesTransientFailure(t *testing.T) {
-	var getCalls atomic.Int32
-	c := fake.NewClientBuilder().
-		WithScheme(clientgoscheme.Scheme).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-				if getCalls.Add(1) <= 2 {
-					return errors.New("etcdserver: leader changed")
-				}
-				return cl.Get(ctx, key, obj, opts...)
-			},
-		}).
-		Build()
+	synctest.Test(t, func(t *testing.T) {
+		var getCalls atomic.Int32
+		c := fake.NewClientBuilder().
+			WithScheme(clientgoscheme.Scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if getCalls.Add(1) <= 2 {
+						return errors.New("etcdserver: leader changed")
+					}
+					return cl.Get(ctx, key, obj, opts...)
+				},
+			}).
+			Build()
 
-	p := newTestPublisher(t, c)
-	ctx := context.Background()
-	if !p.reconcile(ctx, log.FromContext(ctx)) {
-		t.Fatal("reconcile should have run")
-	}
+		p := newTestPublisher(t, c)
+		ctx := t.Context()
+		if !p.reconcile(ctx, log.FromContext(ctx)) {
+			t.Fatal("reconcile should have run")
+		}
 
-	if got := getCalls.Load(); got < 3 {
-		t.Errorf("Get was called %d times, want >= 3 (transient failures retried)", got)
-	}
-	if err := p.Healthy(); err != nil {
-		t.Errorf("Healthy = %v, want nil after a successful retry", err)
-	}
-	if got := publishCount(p, signermetrics.ResultFailed); got != 0 {
-		t.Errorf("publish attempts {result=failed} = %v, want 0 after eventual success", got)
-	}
-	if got := publishCount(p, signermetrics.ResultCreated); got != 1 {
-		t.Errorf("publish attempts {result=created} = %v, want 1 after the first successful publish", got)
-	}
+		if got := getCalls.Load(); got != 3 {
+			t.Errorf("Get was called %d times, want 3 (two transient failures, then success)", got)
+		}
+		if err := p.Healthy(); err != nil {
+			t.Errorf("Healthy = %v, want nil after a successful retry", err)
+		}
+		if got := publishCount(p, signermetrics.ResultFailed); got != 0 {
+			t.Errorf("publish attempts {result=failed} = %v, want 0 after eventual success", got)
+		}
+		if got := publishCount(p, signermetrics.ResultCreated); got != 1 {
+			t.Errorf("publish attempts {result=created} = %v, want 1 after the first successful publish", got)
+		}
+	})
 }
 
 // publishCount reports the publisher's attempt counter for one result.
@@ -104,36 +107,44 @@ func publishCount(p *ctbPublisher, result string) float64 {
 // event, so drift in the ClusterTrustBundle is repaired even when the CA files
 // never change.
 func TestReconcileTickerRepairsDrift(t *testing.T) {
-	var getCalls atomic.Int32
-	c := fake.NewClientBuilder().
-		WithScheme(clientgoscheme.Scheme).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-				getCalls.Add(1)
-				return cl.Get(ctx, key, obj, opts...)
-			},
-		}).
-		Build()
+	synctest.Test(t, func(t *testing.T) {
+		var getCalls atomic.Int32
+		c := fake.NewClientBuilder().
+			WithScheme(clientgoscheme.Scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					getCalls.Add(1)
+					return cl.Get(ctx, key, obj, opts...)
+				},
+			}).
+			Build()
 
-	p := newTestPublisher(t, c)
-	p.interval = 20 * time.Millisecond // drift-repair tick, no events ever fire
+		p := newTestPublisher(t, c)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- p.Start(ctx) }()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- p.Start(ctx) }()
 
-	// Initial publish plus at least one drift-repair tick, with no event sent.
-	deadline := time.After(2 * time.Second)
-	for getCalls.Load() < 2 {
-		select {
-		case <-deadline:
-			t.Fatalf("ticker did not repair drift: Get called %d times, want >= 2", getCalls.Load())
-		case <-time.After(5 * time.Millisecond):
+		// The startup publish, then exactly two drift-repair ticks with no
+		// event ever sent. The half interval keeps the second tick
+		// unambiguously before the sleep returns.
+		time.Sleep(2*p.interval + p.interval/2)
+		synctest.Wait()
+		if got := getCalls.Load(); got != 3 {
+			t.Errorf("Get called %d times after the startup publish and two ticks, want 3", got)
 		}
-	}
-	cancel()
-	<-done
+
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("Start() = %v, want nil on context cancellation", err)
+			}
+		case <-time.After(time.Second):
+			t.Error("Start() did not return within a fake second of context cancellation")
+		}
+	})
 }
 
 // Only one publish may run at a time: a reconcile triggered while another is in
@@ -173,25 +184,27 @@ func TestReconcileSingleFlight(t *testing.T) {
 // unhealthy (failing readiness) and the publish attempt counter records a
 // failed result.
 func TestReconcilePersistentFailureSurfaced(t *testing.T) {
-	c := fake.NewClientBuilder().
-		WithScheme(clientgoscheme.Scheme).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
-				return errors.New("etcdserver: request timed out")
-			},
-		}).
-		Build()
+	synctest.Test(t, func(t *testing.T) {
+		c := fake.NewClientBuilder().
+			WithScheme(clientgoscheme.Scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+					return errors.New("etcdserver: request timed out")
+				},
+			}).
+			Build()
 
-	p := newTestPublisher(t, c)
-	ctx := context.Background()
-	p.reconcile(ctx, log.FromContext(ctx))
+		p := newTestPublisher(t, c)
+		ctx := t.Context()
+		p.reconcile(ctx, log.FromContext(ctx))
 
-	if p.Healthy() == nil {
-		t.Error("Healthy must report an error after a persistent publish failure")
-	}
-	if got := publishCount(p, signermetrics.ResultFailed); got < 1 {
-		t.Errorf("publish attempts {result=failed} = %v, want >= 1 after persistent failure", got)
-	}
+		if p.Healthy() == nil {
+			t.Error("Healthy must report an error after a persistent publish failure")
+		}
+		if got := publishCount(p, signermetrics.ResultFailed); got != 1 {
+			t.Errorf("publish attempts {result=failed} = %v, want 1 after the retry budget is exhausted", got)
+		}
+	})
 }
 
 // A publish that changed nothing must still be counted, so a leader that has
@@ -215,32 +228,33 @@ func TestReconcileCountsUnchangedPublish(t *testing.T) {
 
 // A successful publish after a failure must clear the unhealthy state.
 func TestReconcileClearsHealthOnSuccess(t *testing.T) {
-	var fail atomic.Bool
-	fail.Store(true)
-	c := fake.NewClientBuilder().
-		WithScheme(clientgoscheme.Scheme).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-				if fail.Load() {
-					return errors.New("transient")
-				}
-				return cl.Get(ctx, key, obj, opts...)
-			},
-		}).
-		Build()
+	synctest.Test(t, func(t *testing.T) {
+		var fail atomic.Bool
+		fail.Store(true)
+		c := fake.NewClientBuilder().
+			WithScheme(clientgoscheme.Scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if fail.Load() {
+						return errors.New("transient")
+					}
+					return cl.Get(ctx, key, obj, opts...)
+				},
+			}).
+			Build()
 
-	p := newTestPublisher(t, c)
-	p.backoff = wait.Backoff{Steps: 2, Duration: time.Millisecond}
-	ctx := context.Background()
+		p := newTestPublisher(t, c)
+		ctx := t.Context()
 
-	p.reconcile(ctx, log.FromContext(ctx))
-	if p.Healthy() == nil {
-		t.Fatal("Healthy must report an error while publishing keeps failing")
-	}
+		p.reconcile(ctx, log.FromContext(ctx))
+		if p.Healthy() == nil {
+			t.Fatal("Healthy must report an error while publishing keeps failing")
+		}
 
-	fail.Store(false)
-	p.reconcile(ctx, log.FromContext(ctx))
-	if err := p.Healthy(); err != nil {
-		t.Errorf("Healthy = %v, want nil after a successful publish", err)
-	}
+		fail.Store(false)
+		p.reconcile(ctx, log.FromContext(ctx))
+		if err := p.Healthy(); err != nil {
+			t.Errorf("Healthy = %v, want nil after a successful publish", err)
+		}
+	})
 }

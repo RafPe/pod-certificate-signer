@@ -539,6 +539,16 @@ func (r *ctbPublisher) Healthy() error {
 	return r.lastPublishErr
 }
 
+// ctbPublishBackoff bounds the retries a single ClusterTrustBundle publish
+// spends on transient API errors before the outcome is recorded as failed.
+// Package-level so tests exercise the same policy the binary ships with.
+var ctbPublishBackoff = wait.Backoff{
+	Steps:    5,
+	Duration: 500 * time.Millisecond,
+	Factor:   2.0,
+	Jitter:   0.1,
+}
+
 // newCARunnables wires the CA file watcher and the ClusterTrustBundle publisher
 // so that CA reload events flow from the watcher to the publisher over a shared
 // channel. The watcher runs on every replica; the publisher is leader-gated.
@@ -546,17 +556,12 @@ func newCARunnables(c client.Client, s *signer.Signer, ca *authority.Certificate
 	events := make(chan struct{}, 2)
 	watcher := &caWatchRunnable{ca: ca, notify: events}
 	publisher := &ctbPublisher{
-		client:   c,
-		signer:   s,
-		ca:       ca,
-		events:   events,
-		interval: ctbDriftRepairInterval,
-		backoff: wait.Backoff{
-			Steps:    5,
-			Duration: 500 * time.Millisecond,
-			Factor:   2.0,
-			Jitter:   0.1,
-		},
+		client:    c,
+		signer:    s,
+		ca:        ca,
+		events:    events,
+		interval:  ctbDriftRepairInterval,
+		backoff:   ctbPublishBackoff,
 		publishes: signermetrics.ClusterTrustBundlePublishAttempts,
 	}
 	return watcher, publisher
