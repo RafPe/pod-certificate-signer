@@ -1,0 +1,2 @@
+kind: Dependencies
+body: Update google.golang.org/grpc to 1.83.1, which fixes GO-2026-6348.
