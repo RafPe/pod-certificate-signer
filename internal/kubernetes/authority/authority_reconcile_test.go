@@ -30,8 +30,7 @@ func (ca *CertificateAuthority) failureCount() int {
 // a good CA to disk is itself an event everywhere else.
 func TestReconcileTickRecoversAFailedReloadWithoutAnEvent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		clock := newFakeClock()
-		ca, dir := newTestCA(t, clock)
+		ca, dir := newTestCA(t)
 		ca.reloadAttempts = 3
 
 		// Spend the whole retry budget on unloadable material, exactly as the
@@ -46,10 +45,9 @@ func TestReconcileTickRecoversAFailedReloadWithoutAnEvent(t *testing.T) {
 		if _, err := ca.reloadWithRetry(t.Context(), log.FromContext(t.Context())); err == nil {
 			t.Fatal("reloadWithRetry() = nil, want error for a permanently unloadable CA")
 		}
-		// The health clock is the CA's own nowFunc, not bubble time, so the
-		// grace period is crossed by advancing it rather than by sleeping.
-		// Sleeping here would also fire ticks and add failures.
-		clock.advance(reloadFailureGracePeriod)
+		// The watch loop has not started yet, so this sleep crosses the grace
+		// period without firing any reconcile tick.
+		time.Sleep(reloadFailureGracePeriod)
 		if err := ca.Healthy(); err == nil {
 			t.Fatal("Healthy() = nil after an exhausted retry budget past the grace period, want an error")
 		}
@@ -90,7 +88,7 @@ func TestReconcileTickRecoversAFailedReloadWithoutAnEvent(t *testing.T) {
 // quiet would leave pods trusting a bundle without the signing CA.
 func TestReconcileTickNotifiesOnlyWhenTheCAChanges(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		ca, dir := newTestCA(t, newFakeClock())
+		ca, dir := newTestCA(t)
 		interval := ca.reconcileInterval
 
 		notify, _, stop := runWatchLoop(t, ca)
@@ -139,7 +137,7 @@ func TestReconcileTickNotifiesOnlyWhenTheCAChanges(t *testing.T) {
 // than the loop being wedged by it.
 func TestReconcileTickSurvivesAWatcherError(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		ca, dir := newTestCA(t, newFakeClock())
+		ca, dir := newTestCA(t)
 
 		notify, errs, stop := runWatchLoop(t, ca)
 		defer stop()
@@ -172,7 +170,7 @@ func TestReconcileTickSurvivesAWatcherError(t *testing.T) {
 // promptly and stop reloading.
 func TestWatchLoopStopsTheReconcileTickerOnContextCancel(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		ca, _ := newTestCA(t, newFakeClock())
+		ca, _ := newTestCA(t)
 
 		ctx, cancel := context.WithCancel(t.Context())
 		events := make(chan fsnotify.Event) // open, never sends
@@ -207,8 +205,7 @@ func TestWatchLoopStopsTheReconcileTickerOnContextCancel(t *testing.T) {
 // failure accounting honest (one tick, one failure) and bounds the log stream on
 // a permanently bad CA.
 func TestReconcileOnceRecordsASingleFailure(t *testing.T) {
-	clock := newFakeClock()
-	ca, dir := newTestCA(t, clock)
+	ca, dir := newTestCA(t)
 	if ca.reloadAttempts < 2 {
 		t.Fatalf("reloadAttempts = %d, the test needs a retry budget greater than one", ca.reloadAttempts)
 	}
@@ -234,8 +231,7 @@ func TestReconcileOnceRecordsASingleFailure(t *testing.T) {
 // threshold and fail readiness once the grace period elapses.
 func TestTickOnlyFailuresCrossTheReadinessThreshold(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		clock := newFakeClock()
-		ca, dir := newTestCA(t, clock)
+		ca, dir := newTestCA(t)
 
 		nonCA, err := testutil.NewNonCA("not-a-ca.example.org", time.Hour)
 		if err != nil {
@@ -257,13 +253,13 @@ func TestTickOnlyFailuresCrossTheReadinessThreshold(t *testing.T) {
 		}
 
 		// Inside the grace period the last-good CA keeps signing, so the
-		// replica stays ready; past it, readiness must fail. The health clock
-		// is advanced rather than slept on: bubble time would fire more ticks
-		// and break the exact failure count above.
+		// replica stays ready; past it, readiness must fail. The sleep below
+		// fires further ticks, which is why the exact failure count is
+		// asserted above it.
 		if err := ca.Healthy(); err != nil {
 			t.Errorf("Healthy() inside the grace period = %v, want nil", err)
 		}
-		clock.advance(reloadFailureGracePeriod)
+		time.Sleep(reloadFailureGracePeriod)
 		if err := ca.Healthy(); err == nil {
 			t.Error("Healthy() = nil after tick-only failures past the grace period, want an error")
 		}

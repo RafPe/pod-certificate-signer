@@ -95,32 +95,36 @@ func TestNewSeedsTheLastSuccessClock(t *testing.T) {
 // The streak the readiness probe uses is the streak the gauge reports; they
 // must not be two counts that can disagree.
 func TestReloadHealthTracksTheFailureStreak(t *testing.T) {
-	clock := newFakeClock()
-	ca, dir := newTestCA(t, clock)
+	synctest.Test(t, func(t *testing.T) {
+		ca, dir := newTestCA(t)
 
-	if err := os.WriteFile(dir+"/tls.crt", []byte("not a certificate\n"), 0o600); err != nil {
-		t.Fatalf("write bad cert: %v", err)
-	}
-	ca.reconcileOnce(logr.Discard(), nil, "test")
-	ca.reconcileOnce(logr.Discard(), nil, "test")
+		if err := os.WriteFile(dir+"/tls.crt", []byte("not a certificate\n"), 0o600); err != nil {
+			t.Fatalf("write bad cert: %v", err)
+		}
+		ca.reconcileOnce(logr.Discard(), nil, "test")
+		ca.reconcileOnce(logr.Discard(), nil, "test")
 
-	failures, _ := ca.ReloadHealth()
-	if failures != 2 {
-		t.Errorf("consecutive failures = %d, want 2", failures)
-	}
+		failures, _ := ca.ReloadHealth()
+		if failures != 2 {
+			t.Errorf("consecutive failures = %d, want 2", failures)
+		}
 
-	// Recovering must clear the streak and move the clock, without a restart.
-	writeCA(t, dir, "ca.example.org", 24*time.Hour)
-	clock.advance(time.Minute)
-	ca.reconcileOnce(logr.Discard(), nil, "test")
+		// Recovering must clear the streak and move the clock, without a
+		// restart. Inside the bubble time.Now does not move between the sleep
+		// and the reload, so the comparison is exact.
+		writeCA(t, dir, "ca.example.org", 24*time.Hour)
+		time.Sleep(time.Minute)
+		recoveredAt := time.Now()
+		ca.reconcileOnce(logr.Discard(), nil, "test")
 
-	failures, lastSuccess := ca.ReloadHealth()
-	if failures != 0 {
-		t.Errorf("consecutive failures = %d after a good reload, want 0", failures)
-	}
-	if !lastSuccess.Equal(clock.Now()) {
-		t.Errorf("last success = %v, want the recovery time %v", lastSuccess, clock.Now())
-	}
+		failures, lastSuccess := ca.ReloadHealth()
+		if failures != 0 {
+			t.Errorf("consecutive failures = %d after a good reload, want 0", failures)
+		}
+		if !lastSuccess.Equal(recoveredAt) {
+			t.Errorf("last success = %v, want the recovery time %v", lastSuccess, recoveredAt)
+		}
+	})
 }
 
 // The trust bundle gauge must count what the signer would publish: the current
