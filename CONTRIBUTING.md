@@ -16,7 +16,8 @@ All other tooling — `controller-gen`, `golangci-lint`, `kind`, `helm`,
 ## Development workflow
 
 1. Create a branch off `main` (fork first if you don't have push access).
-2. Make your changes, including tests for new behavior.
+2. Make your changes, including tests for new behavior. If a test involves
+   time, follow [`docs/testing/deterministic-time.md`](docs/testing/deterministic-time.md).
 3. Run the checks below before opening a pull request.
 
 Useful make targets (`make help` shows the full list):
