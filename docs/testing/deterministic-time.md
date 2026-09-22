@@ -5,9 +5,9 @@ interval to make a test fast. A test that needs time to pass runs inside a
 `testing/synctest` bubble, where `time.Now`, `time.Sleep`, timers, tickers and
 context deadlines use a fake clock that advances only when every goroutine in
 the bubble is blocked. The Kubernetes repository reaches the same place through
-its `ktesting` wrapper (see the review on kubernetes/kubernetes#141459); I use
-the standard library directly because `ktesting` lives inside the
-`k8s.io/kubernetes` module.
+`k8s.io/kubernetes/test/utils/ktesting` (see the review on
+kubernetes/kubernetes#141459); I use the standard library directly because that
+wrapper lives inside the `k8s.io/kubernetes` module.
 
 ## Rules
 
@@ -16,22 +16,23 @@ the standard library directly because `ktesting` lives inside the
    `p.interval`, or a package constant such as `defaultEventThrottleInterval`
    or `reloadFailureGracePeriod`.
 2. To assert on N ticks of a ticker loop, sleep N intervals plus half an
-   interval. A tick scheduled at the same fake instant the sleep wakes on is
-   otherwise ambiguous. A throttle window is a duration, not a tick count, so
-   sleep it exactly.
+   interval, so a tick landing on the same fake instant as the wake-up is never
+   in doubt. Once that half interval has taken the clock off the tick boundary,
+   later whole-interval sleeps in the same test are already unambiguous. A grace
+   period or throttle window is a duration, not a tick count, so sleep it
+   exactly.
 3. `time.Sleep(d)` inside a bubble means "advance the clock by d". Follow it
    with `synctest.Wait()` before asserting on anything a background goroutine
    produced.
 4. Assert with a non-blocking receive (`select { case <-ch: default: }`) after
-   the sleep and the wait. Inside a bubble a `time.After` bound belongs only on
-   a drain, as a regression guard against a goroutine that never returns; there
-   it is deterministic. Outside a bubble it is a guess about machine speed, so
-   the few tests that stay on the real clock have to guess generously.
+   the sleep and the wait. Keep `time.After` for a blocking wait that must
+   complete, a drain or a send the loop has to consume, where fake time makes
+   the bound exact.
 5. Cancel and drain every goroutine you started before the bubble function
-   returns. A goroutine still running when it returns fails the test. Bound that
-   drain with `time.After`: a goroutine that owns a ticker or a retry loop and
-   ignores the cancel would otherwise keep the bubble advancing fake time
-   through every tick, and an unbounded receive hangs instead of failing.
+   returns; fake time stops advancing once the root goroutine exits, so a
+   goroutine still waiting on a timer deadlocks and `synctest.Test` panics.
+   Bound the drain with `time.After` so a loop that ignored the cancel fails
+   instead of hanging.
 6. Use the bubble's shadowed `t` inside the bubble, including for `t.Context()`
    and for helpers such as `newTestCA(t)` and `runWatchLoop(t, ca)`.
 
@@ -42,6 +43,7 @@ func TestTickDoesSomething(t *testing.T) {
     synctest.Test(t, func(t *testing.T) {
         obj := newTestObject(t) // production interval
         ctx, cancel := context.WithCancel(t.Context())
+        defer cancel()
         done := make(chan error, 1)
         go func() { done <- obj.Run(ctx) }()
 
@@ -81,6 +83,5 @@ func TestTickDoesSomething(t *testing.T) {
   `time.Now`, so a certificate minted inside a bubble is valid around that date,
   consistently with every check that also reads `time.Now` inside the bubble. Do
   not sleep past the certificate lifetime.
-- Production code has no injected clock. I removed the `nowFunc` seam because a
-  bubble makes one redundant. If you want a clock to inject, put the test in a
-  bubble instead.
+- Production code has no injected clock, because a bubble makes one redundant.
+  If you want a clock to inject, put the test in a bubble instead.
