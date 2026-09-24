@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -140,35 +141,37 @@ func TestHealthyGracePeriodForReloadFailures(t *testing.T) {
 // health bookkeeping directly: a CA that stays unloadable across a full retry
 // budget must eventually fail readiness once the grace period elapses.
 func TestPersistentlyUnloadableCAEventuallyFailsReadiness(t *testing.T) {
-	clock := newFakeClock()
-	ca, dir := newTestCA(t, clock)
-	ca.reloadAttempts = 3
-	ca.reloadBackoff = time.Millisecond
+	synctest.Test(t, func(t *testing.T) {
+		clock := newFakeClock()
+		ca, dir := newTestCA(t, clock)
+		ca.reloadAttempts = 3
 
-	// Permanently bad material on disk: a non-CA certificate.
-	nonCA, err := testutil.NewNonCA("not-a-ca.example.org", time.Hour)
-	if err != nil {
-		t.Fatalf("generate non-CA: %v", err)
-	}
-	if _, _, err := nonCA.WriteFiles(dir); err != nil {
-		t.Fatalf("write non-CA files: %v", err)
-	}
+		// Permanently bad material on disk: a non-CA certificate.
+		nonCA, err := testutil.NewNonCA("not-a-ca.example.org", time.Hour)
+		if err != nil {
+			t.Fatalf("generate non-CA: %v", err)
+		}
+		if _, _, err := nonCA.WriteFiles(dir); err != nil {
+			t.Fatalf("write non-CA files: %v", err)
+		}
 
-	ctx := context.Background()
-	if _, err := ca.reloadWithRetry(ctx, log.FromContext(ctx)); err == nil {
-		t.Fatal("reloadWithRetry() = nil, want error for a permanently unloadable CA")
-	}
+		if _, err := ca.reloadWithRetry(t.Context(), log.FromContext(t.Context())); err == nil {
+			t.Fatal("reloadWithRetry() = nil, want error for a permanently unloadable CA")
+		}
 
-	// Still inside the grace window: the last-good CA keeps signing, so the
-	// replica must stay ready.
-	if err := ca.Healthy(); err != nil {
-		t.Errorf("Healthy() immediately after a failed reload = %v, want nil", err)
-	}
+		// Still inside the grace window: the last-good CA keeps signing, so the
+		// replica must stay ready.
+		if err := ca.Healthy(); err != nil {
+			t.Errorf("Healthy() immediately after a failed reload = %v, want nil", err)
+		}
 
-	clock.advance(10 * time.Minute)
-	if err := ca.Healthy(); err == nil {
-		t.Error("Healthy() = nil after the grace period elapsed, want an error")
-	}
+		// Healthy reads ca.nowFunc, not the bubble's clock, so the grace period
+		// is crossed by advancing the fake clock rather than by sleeping.
+		clock.advance(reloadFailureGracePeriod)
+		if err := ca.Healthy(); err == nil {
+			t.Error("Healthy() = nil after the grace period elapsed, want an error")
+		}
+	})
 }
 
 // A dead watcher is a real failure rather than a transient file blip: the CA
