@@ -1,0 +1,2 @@
+kind: Dependencies
+body: Update controller-runtime to 0.25.1, Ginkgo to 2.33.0, Gomega to 1.43.1, the Go container builds to 1.27.1, and the docker and codeql GitHub Actions.
