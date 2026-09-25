@@ -13,18 +13,15 @@ import (
 // in milliseconds: without a throttle a single wedged request would fill the
 // object's event stream (and the apiserver's event budget) with the same note.
 //
-// The zero value is usable: the map is created on first use, a zero interval
-// falls back to defaultEventThrottleInterval, and a nil clock to time.Now.
-// Because it carries a mutex, it must only ever be used through a pointer to
-// its owner - never copied.
+// The zero value is usable: the map is created on first use and a zero interval
+// falls back to defaultEventThrottleInterval. Because it carries a mutex, it
+// must only ever be used through a pointer to its owner - never copied.
 type eventThrottle struct {
 	mu   sync.Mutex
 	last map[types.UID]time.Time
 
 	// interval is the minimum spacing between two events for the same object.
 	interval time.Duration
-	// nowFunc is the clock, replaced in tests to advance time without sleeping.
-	nowFunc func() time.Time
 }
 
 // defaultEventThrottleInterval is the spacing used when an eventThrottle does
@@ -50,9 +47,6 @@ func (t *eventThrottle) allow(uid types.UID) bool {
 		interval = defaultEventThrottleInterval
 	}
 	now := time.Now()
-	if t.nowFunc != nil {
-		now = t.nowFunc()
-	}
 
 	for key, seen := range t.last {
 		if now.Sub(seen) >= interval {
