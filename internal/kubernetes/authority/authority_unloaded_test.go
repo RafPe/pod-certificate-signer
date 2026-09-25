@@ -14,7 +14,6 @@ func unloadedAuthority(t *testing.T) *CertificateAuthority {
 	t.Helper()
 	return &CertificateAuthority{
 		backDate: time.Minute,
-		nowFunc:  time.Now,
 	}
 }
 

@@ -3,7 +3,6 @@ package authority
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -14,35 +13,11 @@ import (
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
 )
 
-// fakeClock is a manually advanced clock, so the readiness grace period can be
-// exercised without sleeping. Its Now method is safe for concurrent use.
-type fakeClock struct {
-	mu  sync.Mutex
-	now time.Time
-}
-
-func newFakeClock() *fakeClock {
-	return &fakeClock{now: time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)}
-}
-
-func (c *fakeClock) Now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return c.now
-}
-
-func (c *fakeClock) advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.now = c.now.Add(d)
-}
-
-// newTestCA returns a CA backed by freshly generated material on disk, wired to
-// the given clock for its health bookkeeping, along with the directory holding
-// that material so tests can rewrite it.
-func newTestCA(t *testing.T, clock *fakeClock) (*CertificateAuthority, string) {
+// newTestCA returns a CA backed by freshly generated material on disk, along
+// with the directory holding that material so tests can rewrite it. Tests that
+// need time to pass run inside a synctest bubble and call time.Sleep; the CA
+// reads time.Now, which is the bubble's fake clock there.
+func newTestCA(t *testing.T) (*CertificateAuthority, string) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -51,7 +26,6 @@ func newTestCA(t *testing.T, clock *fakeClock) (*CertificateAuthority, string) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	ca.nowFunc = clock.Now
 
 	return ca, dir
 }
@@ -111,28 +85,29 @@ func TestHealthyGracePeriodForReloadFailures(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			clock := newFakeClock()
-			ca, _ := newTestCA(t, clock)
+			synctest.Test(t, func(t *testing.T) {
+				ca, _ := newTestCA(t)
 
-			// Record the first failure, let the clock run, then record the
-			// remaining ones: the elapsed guard must be measured from the
-			// first failure and must not be reset by later failures.
-			if tt.failures > 0 {
-				ca.recordReloadResult(reloadErr)
-				clock.advance(tt.elapsed)
-				for i := 1; i < tt.failures; i++ {
+				// Record the first failure, let the clock run, then record the
+				// remaining ones: the elapsed guard must be measured from the
+				// first failure and must not be reset by later failures.
+				if tt.failures > 0 {
 					ca.recordReloadResult(reloadErr)
+					time.Sleep(tt.elapsed)
+					for i := 1; i < tt.failures; i++ {
+						ca.recordReloadResult(reloadErr)
+					}
 				}
-			}
-			if tt.thenSucceeds {
-				ca.recordReloadResult(nil)
-			}
+				if tt.thenSucceeds {
+					ca.recordReloadResult(nil)
+				}
 
-			err := ca.Healthy()
-			if gotHealthy := err == nil; gotHealthy != tt.wantHealthy {
-				t.Errorf("Healthy() after %d failure(s) over %v = %v, want healthy = %t",
-					tt.failures, tt.elapsed, err, tt.wantHealthy)
-			}
+				err := ca.Healthy()
+				if gotHealthy := err == nil; gotHealthy != tt.wantHealthy {
+					t.Errorf("Healthy() after %d failure(s) over %v = %v, want healthy = %t",
+						tt.failures, tt.elapsed, err, tt.wantHealthy)
+				}
+			})
 		})
 	}
 }
@@ -142,8 +117,7 @@ func TestHealthyGracePeriodForReloadFailures(t *testing.T) {
 // budget must eventually fail readiness once the grace period elapses.
 func TestPersistentlyUnloadableCAEventuallyFailsReadiness(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		clock := newFakeClock()
-		ca, dir := newTestCA(t, clock)
+		ca, dir := newTestCA(t)
 		ca.reloadAttempts = 3
 
 		// Permanently bad material on disk: a non-CA certificate.
@@ -165,9 +139,7 @@ func TestPersistentlyUnloadableCAEventuallyFailsReadiness(t *testing.T) {
 			t.Errorf("Healthy() immediately after a failed reload = %v, want nil", err)
 		}
 
-		// Healthy reads ca.nowFunc, not the bubble's clock, so the grace period
-		// is crossed by advancing the fake clock rather than by sleeping.
-		clock.advance(reloadFailureGracePeriod)
+		time.Sleep(reloadFailureGracePeriod)
 		if err := ca.Healthy(); err == nil {
 			t.Error("Healthy() = nil after the grace period elapsed, want an error")
 		}
@@ -178,8 +150,7 @@ func TestPersistentlyUnloadableCAEventuallyFailsReadiness(t *testing.T) {
 // can no longer observe rotations at all, so readiness must fail immediately
 // without waiting out the reload grace period.
 func TestHealthyFailsImmediatelyOnWatcherExit(t *testing.T) {
-	clock := newFakeClock()
-	ca, _ := newTestCA(t, clock)
+	ca, _ := newTestCA(t)
 
 	events := make(chan fsnotify.Event)
 	errs := make(chan error) // open, never sends
@@ -198,7 +169,8 @@ func TestHealthyFailsImmediatelyOnWatcherExit(t *testing.T) {
 		t.Fatal("watchLoop did not return after the events channel closed")
 	}
 
-	// No clock advance: the watcher error is not subject to the grace period.
+	// No time passes here: the watcher error is not subject to the grace
+	// period.
 	if err := ca.Healthy(); !errors.Is(err, errWatchChannelClosed) {
 		t.Errorf("Healthy() after the watcher exited = %v, want %v", err, errWatchChannelClosed)
 	}

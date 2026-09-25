@@ -58,7 +58,6 @@ type CertificateAuthority struct {
 	// happened to be inserted first.
 	previousCertificates []*x509.Certificate
 	maxPreviousCerts     int
-	nowFunc              func() time.Time
 	backDate             time.Duration
 	logger               logr.Logger
 	// fingerprint is the SHA-256 of the loaded certificate's DER, used by load
@@ -194,7 +193,6 @@ func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error
 		certFile:             caFile,
 		privKeyFile:          caKeyFile,
 		backDate:             1 * time.Minute,
-		nowFunc:              time.Now,
 		maxPreviousCerts:     1,
 		previousCertificates: make([]*x509.Certificate, 0),
 		logger:               logr.Discard(),
@@ -385,10 +383,7 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 		return nil, fmt.Errorf("no CA certificate loaded: %w", ErrCASignerUnusable)
 	}
 
-	now := time.Now()
-	if ca.nowFunc != nil {
-		now = ca.nowFunc()
-	}
+	now := ca.now()
 
 	nbf := now.Add(-ca.backDate)
 	if !nbf.Before(ca.certificate.NotAfter) {
@@ -841,13 +836,10 @@ func (ca *CertificateAuthority) TrustBundleSize() int {
 	return 1 + len(ca.previousCertificates)
 }
 
-// now returns the current time from the configured clock, which tests replace
-// to exercise time-dependent behavior without sleeping.
+// now reads the wall clock. Tests that need time to pass run inside a
+// testing/synctest bubble, where time.Now is fake, so no injection point is
+// needed.
 func (ca *CertificateAuthority) now() time.Time {
-	if ca.nowFunc != nil {
-		return ca.nowFunc()
-	}
-
 	return time.Now()
 }
 
