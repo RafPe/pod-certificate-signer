@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	certificatesv1 "k8s.io/api/certificates/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/wait"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -37,23 +37,11 @@ func TestFetchPreviousCAsNotFoundReportsAbsence(t *testing.T) {
 	}
 }
 
-// withFastBootstrapBackoff shortens the startup retry so a test that exercises
-// the retry path does not spend its budget sleeping.
-func withFastBootstrapBackoff(t *testing.T) {
-	t.Helper()
-
-	original := bootstrapBackoff
-	bootstrapBackoff = wait.Backoff{Steps: 3, Duration: time.Millisecond, Factor: 1.0}
-	t.Cleanup(func() { bootstrapBackoff = original })
-}
-
 // A missing bundle is the normal first-run state, so by default startup
 // continues with an empty history rather than crash-looping every first
 // install. It must not be retried: an absent object does not appear on the
 // second read, and the retry budget exists for transient failures.
 func TestLoadPreviousCAHistoryAbsentBundleStartsEmpty(t *testing.T) {
-	withFastBootstrapBackoff(t)
-
 	reads := 0
 	c := fake.NewClientBuilder().
 		WithScheme(clientgoscheme.Scheme).
@@ -82,8 +70,6 @@ func TestLoadPreviousCAHistoryAbsentBundleStartsEmpty(t *testing.T) {
 // --require-ca-history the controller refuses to start rather than publish a
 // bundle that drops every retired CA.
 func TestLoadPreviousCAHistoryAbsentBundleIsFatalWhenRequired(t *testing.T) {
-	withFastBootstrapBackoff(t)
-
 	c := fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).Build()
 
 	certs, err := loadPreviousCAHistory(context.Background(), c, testSignerName, true)
@@ -99,25 +85,25 @@ func TestLoadPreviousCAHistoryAbsentBundleIsFatalWhenRequired(t *testing.T) {
 // whatever --require-ca-history says: an unreadable history is never the same
 // as an empty one.
 func TestLoadPreviousCAHistoryTransientErrorFailsClosed(t *testing.T) {
-	withFastBootstrapBackoff(t)
+	synctest.Test(t, func(t *testing.T) {
+		reads := 0
+		c := fake.NewClientBuilder().
+			WithScheme(clientgoscheme.Scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+					reads++
+					return errors.New("etcdserver: request timed out")
+				},
+			}).
+			Build()
 
-	reads := 0
-	c := fake.NewClientBuilder().
-		WithScheme(clientgoscheme.Scheme).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
-				reads++
-				return errors.New("etcdserver: request timed out")
-			},
-		}).
-		Build()
-
-	if _, err := loadPreviousCAHistory(context.Background(), c, testSignerName, false); err == nil {
-		t.Fatal("loadPreviousCAHistory err = nil, want the read failure so startup fails closed")
-	}
-	if reads != bootstrapBackoff.Steps {
-		t.Errorf("read the bundle %d times, want %d retries before failing closed", reads, bootstrapBackoff.Steps)
-	}
+		if _, err := loadPreviousCAHistory(t.Context(), c, testSignerName, false); err == nil {
+			t.Fatal("loadPreviousCAHistory err = nil, want the read failure so startup fails closed")
+		}
+		if reads != bootstrapBackoff.Steps {
+			t.Errorf("read the bundle %d times, want %d retries before failing closed", reads, bootstrapBackoff.Steps)
+		}
+	})
 }
 
 // A transient (non-NotFound) read error must be returned so startup can retry
