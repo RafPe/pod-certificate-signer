@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -258,3 +259,59 @@ func TestReconcileClearsHealthOnSuccess(t *testing.T) {
 		}
 	})
 }
+
+// A reconcile in flight when the manager's context is canceled must abandon its
+// retries immediately instead of sleeping out the backoff schedule. The delay
+// is paid on leader handover - controller-runtime releases the leader Lease only
+// after every runnable has returned - so a predicate that retried
+// context.Canceled as transient held the Lease for the whole schedule.
+//
+// Get blocks until the context is canceled and then returns the context error
+// the way client-go does, wrapped, so cancellation lands during an attempt
+// rather than during a bare time.Sleep that no cancel can interrupt.
+func TestReconcileStopsRetryingOnCancel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := fake.NewClientBuilder().
+			WithScheme(clientgoscheme.Scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, _ client.WithWatch, _ client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
+					<-ctx.Done()
+					return fmt.Errorf("get clustertrustbundle: %w", ctx.Err())
+				},
+			}).
+			Build()
+
+		p := newTestPublisher(t, c)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			p.reconcile(ctx, log.FromContext(ctx))
+		}()
+
+		synctest.Wait()
+		cancel()
+
+		// Well under the first backoff step, so a single retry sleep fails the
+		// bound. Fake time makes it exact.
+		select {
+		case <-done:
+		case <-time.After(ctxCancelReturnBound):
+			t.Fatalf("reconcile did not return within %v of cancellation; it is sleeping out the retry backoff",
+				ctxCancelReturnBound)
+		}
+
+		if p.Healthy() == nil {
+			t.Error("Healthy must report an error after a publish abandoned on cancellation")
+		}
+		if got := publishCount(p, signermetrics.ResultFailed); got != 1 {
+			t.Errorf("publish attempts {result=failed} = %v, want 1", got)
+		}
+	})
+}
+
+// ctxCancelReturnBound is the budget a canceled reconcile has to return. It is
+// a fifth of ctbPublishBackoff's first step, so it is only satisfiable by
+// returning without sleeping at all.
+var ctxCancelReturnBound = ctbPublishBackoff.Duration / 5
