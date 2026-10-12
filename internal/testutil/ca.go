@@ -1,6 +1,6 @@
 // Package testutil provides helpers for generating certificate authorities
-// and key material in tests. It is imported by unit tests and by the e2e
-// suite, and must not be used in production code.
+// and key material in tests. It is imported by unit tests, by the e2e suite
+// and by hack/dev-ca, and must not be used in production code.
 package testutil
 
 import (

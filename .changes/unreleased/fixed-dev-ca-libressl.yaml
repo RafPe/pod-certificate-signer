@@ -1,0 +1,2 @@
+kind: Fixed
+body: "`make dev-ca` generates the development CA with Go instead of openssl, so it works on macOS where LibreSSL silently produced an invalid key."

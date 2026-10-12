@@ -304,11 +304,7 @@ dev-ca: | $(LOCALBIN)  ## Generate an ephemeral self-signed dev CA (tls.crt/tls.
 	@mkdir -p $(DEV_CA_DIR)
 	@if [ ! -s $(DEV_CA_DIR)/tls.key ] || [ ! -s $(DEV_CA_DIR)/tls.crt ]; then \
 		echo "Generating ephemeral dev CA in $(DEV_CA_DIR) ..."; \
-		openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
-			-keyout $(DEV_CA_DIR)/tls.key -out $(DEV_CA_DIR)/tls.crt \
-			-days 30 -subj "/CN=podcertificate-signer-dev-ca" \
-			-addext "basicConstraints=critical,CA:TRUE" \
-			-addext "keyUsage=critical,keyCertSign,cRLSign"; \
+		$(GOCMD) run ./hack/dev-ca -dir $(DEV_CA_DIR) -days 30 -cn podcertificate-signer-dev-ca; \
 	fi
 
 .PHONY: helm-install
