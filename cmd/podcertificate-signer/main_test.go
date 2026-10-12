@@ -104,6 +104,19 @@ func TestManagerOptionsDisablesPodCache(t *testing.T) {
 	}
 }
 
+// A leader shutting down must release its Lease rather than leave a follower to
+// wait out the 15s LeaseDuration. Nothing else pins this, so without the
+// assertion an edit to the options literal could revert the decision silently
+// (docs/adr/0006-release-leader-lease-on-cancel.md).
+func TestManagerOptionsReleasesLeaseOnCancel(t *testing.T) {
+	opts := managerOptions(k8sruntime.NewScheme(), managerConfig{baseContext: context.Background()})
+
+	if !opts.LeaderElectionReleaseOnCancel {
+		t.Error("LeaderElectionReleaseOnCancel = false, want true: " +
+			"see docs/adr/0006-release-leader-lease-on-cancel.md")
+	}
+}
+
 // TestManagerOptionsSecuresMetricsByDefault asserts that, with the secure
 // metrics toggle on, the metrics server is configured to require
 // authentication and authorization (via controller-runtime's TokenReview /

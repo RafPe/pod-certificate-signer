@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -255,6 +256,95 @@ func TestReconcileClearsHealthOnSuccess(t *testing.T) {
 		p.reconcile(ctx, log.FromContext(ctx))
 		if err := p.Healthy(); err != nil {
 			t.Errorf("Healthy = %v, want nil after a successful publish", err)
+		}
+	})
+}
+
+// A reconcile in flight when the manager's context is canceled must abandon its
+// retries immediately instead of sleeping out the backoff schedule. The delay
+// is paid on leader handover - controller-runtime releases the leader Lease only
+// after every runnable has returned - so a predicate that treated a dead
+// context as transient held the Lease for the whole schedule.
+//
+// Get blocks until the context is canceled, so cancellation lands during an
+// attempt rather than during a bare time.Sleep that no cancel can interrupt.
+func TestReconcileStopsRetryingOnCancel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := fake.NewClientBuilder().
+			WithScheme(clientgoscheme.Scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, _ client.WithWatch, _ client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
+					<-ctx.Done()
+					return fmt.Errorf("get clustertrustbundle: %w", ctx.Err())
+				},
+			}).
+			Build()
+
+		p := newTestPublisher(t, c)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			p.reconcile(ctx, log.FromContext(ctx))
+		}()
+
+		synctest.Wait()
+		cancel()
+
+		// Well under the first backoff step, so a single retry sleep fails the
+		// bound. Fake time makes it exact.
+		select {
+		case <-done:
+		case <-time.After(ctxCancelReturnBound):
+			t.Fatalf("reconcile did not return within %v of cancellation; it is sleeping out the retry backoff",
+				ctxCancelReturnBound)
+		}
+
+		if p.Healthy() == nil {
+			t.Error("Healthy must report an error after a publish abandoned on cancellation")
+		}
+		if got := publishCount(p, signermetrics.ResultFailed); got != 1 {
+			t.Errorf("publish attempts {result=failed} = %v, want 1", got)
+		}
+	})
+}
+
+// ctxCancelReturnBound is the budget a canceled reconcile has to return. It is
+// a fifth of ctbPublishBackoff's first step, so it is only satisfiable by
+// returning without sleeping at all.
+var ctxCancelReturnBound = ctbPublishBackoff.Duration / 5
+
+// A timeout that is not the publisher's own context ending must stay retriable.
+// A transport or per-request deadline surfaces as an error wrapping
+// context.DeadlineExceeded while ctx is still live, so a predicate keyed on the
+// error would abandon the publish after one attempt and leave the
+// ClusterTrustBundle stale until the next drift-repair tick - worst of all right
+// after a CA rotation, which is when the bundle most needs to be current.
+func TestReconcileRetriesTimeoutWhileContextIsLive(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var getCalls atomic.Int32
+		c := fake.NewClientBuilder().
+			WithScheme(clientgoscheme.Scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if getCalls.Add(1) <= 2 {
+						return fmt.Errorf("dial tcp: %w", context.DeadlineExceeded)
+					}
+					return cl.Get(ctx, key, obj, opts...)
+				},
+			}).
+			Build()
+
+		p := newTestPublisher(t, c)
+		ctx := t.Context()
+		p.reconcile(ctx, log.FromContext(ctx))
+
+		if got := getCalls.Load(); got != 3 {
+			t.Errorf("Get was called %d times, want 3 (two timeouts, then success)", got)
+		}
+		if err := p.Healthy(); err != nil {
+			t.Errorf("Healthy = %v, want nil: a timeout on a live context is transient", err)
 		}
 	})
 }

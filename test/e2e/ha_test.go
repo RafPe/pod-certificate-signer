@@ -106,14 +106,19 @@ const (
 	// haLeaderHandoffTimeout bounds the wait for the Lease to move to another
 	// replica after the holder goes away.
 	//
-	// The floor is controller-runtime's default LeaseDuration of 15 seconds:
-	// the manager is built without LeaderElectionReleaseOnCancel, so a leader
-	// shutting down does not release the Lease and a follower must wait for it
-	// to expire. The bound here is generous over that floor because the
-	// follower then has to observe the expiry on its RetryPeriod, and a spec
-	// that asserted a tight bound would be measuring client-go's polling
-	// jitter rather than the product.
-	haLeaderHandoffTimeout = 90 * time.Second
+	// The manager is built with LeaderElectionReleaseOnCancel
+	// (cmd/podcertificate-signer/main.go,
+	// docs/adr/0006-release-leader-lease-on-cancel.md), so a leader shutting
+	// down voluntarily releases the Lease and the floor is no longer the 15
+	// second LeaseDuration: measured handover is ~1.2s, and the worst case is
+	// one jittered RetryPeriod plus the leader's shutdown.
+	//
+	// Not lower than this, for two reasons. currentLeaderPod uses the same
+	// bound for the *initial* election after installHighAvailability, which is
+	// a ~2.7s cold start rather than a handover. And a spec that asserted a
+	// tight bound would be measuring client-go's polling jitter rather than
+	// the product.
+	haLeaderHandoffTimeout = 30 * time.Second
 
 	// haReadinessTimeout bounds the wait for the deployment to present its
 	// full complement of Ready replicas.
@@ -911,10 +916,32 @@ func haControllerPods() []string {
 	return utils.GetNonEmptyLines(output)
 }
 
+// haAllControllerPods lists every controller replica, terminating ones included.
+//
+// The counterpart to haControllerPods, which filters terminating pods out. A pod
+// on its way out is not a replica most assertions are about, but it is still
+// running and can still reconcile until it is gone, so a caller that needs the
+// controller to be genuinely absent has to consult this list as well.
+func haAllControllerPods() []string {
+	cmd := exec.Command("kubectl", "get", "pods",
+		"-l", fmt.Sprintf("app.kubernetes.io/instance=%s", releaseName),
+		"-n", namespace,
+		"-o", "go-template={{ range .items }}{{ .metadata.name }}{{ \"\\n\" }}{{ end }}")
+	output, err := utils.Run(cmd)
+	if err != nil {
+		return nil
+	}
+	return utils.GetNonEmptyLines(output)
+}
+
 // haLeaseHolder returns the pod holding the leader-election Lease.
 //
 // controller-runtime writes the holder identity as "<hostname>_<uuid>", and a
 // pod's hostname is its name, so the pod is the part before the underscore.
+//
+// A released Lease transiently reads an empty holder, so the non-empty
+// assertion can fire during a passing run; every caller wraps this in an
+// Eventually or Consistently, which absorbs it as one more poll.
 func haLeaseHolder(g Gomega) string {
 	cmd := exec.Command("kubectl", "get", "lease", releaseName, "-n", namespace,
 		"-o", "jsonpath={.spec.holderIdentity}")
@@ -1100,6 +1127,13 @@ func scaleController(replicas int) {
 	Expect(err).NotTo(HaveOccurred(), "Failed to scale the controller: %s", output)
 
 	Eventually(func(g Gomega) {
+		// Both lists are consulted. haControllerPods filters out terminating
+		// pods, so on its own it reports the target count while a scaled-down
+		// replica is still inside its grace period - still running, and still
+		// able to reconcile. Requiring the unfiltered list to match too means
+		// this returns only once the old replicas are really gone.
+		g.Expect(haAllControllerPods()).To(HaveLen(replicas),
+			"a controller pod is still terminating, and can still reconcile until it is gone")
 		pods := haControllerPods()
 		g.Expect(pods).To(HaveLen(replicas))
 		for _, pod := range pods {
