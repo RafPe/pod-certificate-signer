@@ -263,12 +263,11 @@ func TestReconcileClearsHealthOnSuccess(t *testing.T) {
 // A reconcile in flight when the manager's context is canceled must abandon its
 // retries immediately instead of sleeping out the backoff schedule. The delay
 // is paid on leader handover - controller-runtime releases the leader Lease only
-// after every runnable has returned - so a predicate that retried
-// context.Canceled as transient held the Lease for the whole schedule.
+// after every runnable has returned - so a predicate that treated a dead
+// context as transient held the Lease for the whole schedule.
 //
-// Get blocks until the context is canceled and then returns the context error
-// the way client-go does, wrapped, so cancellation lands during an attempt
-// rather than during a bare time.Sleep that no cancel can interrupt.
+// Get blocks until the context is canceled, so cancellation lands during an
+// attempt rather than during a bare time.Sleep that no cancel can interrupt.
 func TestReconcileStopsRetryingOnCancel(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := fake.NewClientBuilder().
@@ -315,3 +314,37 @@ func TestReconcileStopsRetryingOnCancel(t *testing.T) {
 // a fifth of ctbPublishBackoff's first step, so it is only satisfiable by
 // returning without sleeping at all.
 var ctxCancelReturnBound = ctbPublishBackoff.Duration / 5
+
+// A timeout that is not the publisher's own context ending must stay retriable.
+// A transport or per-request deadline surfaces as an error wrapping
+// context.DeadlineExceeded while ctx is still live, so a predicate keyed on the
+// error would abandon the publish after one attempt and leave the
+// ClusterTrustBundle stale until the next drift-repair tick - worst of all right
+// after a CA rotation, which is when the bundle most needs to be current.
+func TestReconcileRetriesTimeoutWhileContextIsLive(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var getCalls atomic.Int32
+		c := fake.NewClientBuilder().
+			WithScheme(clientgoscheme.Scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if getCalls.Add(1) <= 2 {
+						return fmt.Errorf("dial tcp: %w", context.DeadlineExceeded)
+					}
+					return cl.Get(ctx, key, obj, opts...)
+				},
+			}).
+			Build()
+
+		p := newTestPublisher(t, c)
+		ctx := t.Context()
+		p.reconcile(ctx, log.FromContext(ctx))
+
+		if got := getCalls.Load(); got != 3 {
+			t.Errorf("Get was called %d times, want 3 (two timeouts, then success)", got)
+		}
+		if err := p.Healthy(); err != nil {
+			t.Errorf("Healthy = %v, want nil: a timeout on a live context is transient", err)
+		}
+	})
+}

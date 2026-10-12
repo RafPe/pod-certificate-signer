@@ -492,7 +492,16 @@ func (r *ctbPublisher) reconcile(ctx context.Context, logger logr.Logger) bool {
 	defer r.runMu.Unlock()
 
 	var op controllerutil.OperationResult
-	err := retry.OnError(r.backoff, retriablePublishError, func() error {
+	// The retriable predicate is keyed on ctx, not on the error. retry.OnError
+	// takes no context and sleeps between attempts with a bare time.Sleep, so a
+	// predicate that retried everything spent the whole backoff schedule
+	// re-failing after ctx was canceled - a delay paid on leader handover,
+	// since controller-runtime releases the Lease only once every runnable has
+	// returned. Matching the error against context.Canceled instead would be
+	// wrong in the other direction: a transport or per-request deadline
+	// surfaces as an error wrapping context.DeadlineExceeded while ctx is still
+	// live, and that is exactly the transient failure this backoff exists for.
+	err := retry.OnError(r.backoff, func(error) bool { return ctx.Err() == nil }, func() error {
 		var perr error
 		op, perr = r.publishOnce(ctx, logger)
 		return perr
@@ -505,20 +514,6 @@ func (r *ctbPublisher) reconcile(ctx context.Context, logger logr.Logger) bool {
 	}
 	r.publishes.WithLabelValues(publishResult(op)).Inc()
 	return true
-}
-
-// retriablePublishError reports whether a failed publish is worth another
-// attempt.
-//
-// retry.OnError takes no context and sleeps between attempts with a bare
-// time.Sleep, so a predicate that retries everything spends the whole backoff
-// schedule re-failing after ctx is canceled. That delay is paid on leader
-// handover: controller-runtime releases the Lease only once every runnable has
-// returned. CreateOrPatch returns the client's Get/Patch error unchanged, and
-// client-go reports a canceled request as the context error (wrapped), so
-// errors.Is matches.
-func retriablePublishError(err error) bool {
-	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
 
 // publishResult maps CreateOrPatch's OperationResult onto the bounded result

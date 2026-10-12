@@ -58,8 +58,19 @@ push against the 30 second precondition.
 ## Decision
 
 Set `LeaderElectionReleaseOnCancel: true` in `managerOptions`, and make the
-publisher's retry predicate stop on a canceled context
-(`!errors.Is(err, context.Canceled)`, and `context.DeadlineExceeded`).
+publisher's retry predicate stop once its context is done
+(`func(error) bool { return ctx.Err() == nil }`).
+
+**The predicate is keyed on the context, not on the error.** Matching the error
+against `context.Canceled` and `context.DeadlineExceeded` looks equivalent and
+is not: a transport or per-request deadline surfaces as an error wrapping
+`context.DeadlineExceeded` while the publisher's context is still live, so an
+error-keyed predicate abandons the publish after a single attempt against a slow
+API server. That leaves the ClusterTrustBundle stale until the next
+`ctbDriftRepairInterval` tick, with readiness failing in the meantime, and it
+does so worst right after a CA rotation — exactly when the bundle most needs to
+be current. The publisher's own context ending is the only condition that makes
+a further attempt pointless, so it is the only condition the predicate tests.
 
 Two preconditions come with it, and they are the durable part of this record:
 
@@ -102,8 +113,11 @@ more poll.
 before — the previous `false` was not just undocumented but unpinned.
 `TestReconcileStopsRetryingOnCancel` runs inside a `testing/synctest` bubble
 with the production backoff and asserts the publisher's reconcile returns well
-inside the first backoff step after cancellation, so a predicate that retried
-the context error again would fail it.
+inside the first backoff step after cancellation, so a predicate that retried a
+dead context would fail it. `TestReconcileRetriesTimeoutWhileContextIsLive`
+pins the other side: a `Get` failing twice with an error wrapping
+`context.DeadlineExceeded` on a live context must still be retried to success,
+which is what an error-keyed predicate gets wrong.
 
 ## Alternatives Considered
 
@@ -113,6 +127,12 @@ signing latency rather than housekeeping.
 **Shorten `LeaseDuration` instead.** Rejected: it trades the same window for
 more renewal traffic and a higher chance of a spurious failover under API
 latency, and it does nothing for the voluntary case specifically.
+
+**An error-keyed retry predicate** (`!errors.Is(err, context.Canceled)`, and
+`context.DeadlineExceeded`). Rejected on review, after it was reproduced
+abandoning a publish after one attempt: a transport or per-request deadline
+wraps `context.DeadlineExceeded` on a live context, so the predicate turned the
+transient failure the backoff exists for into a terminal one. See the Decision.
 
 **Turn the option on without fixing the retry.** Rejected. It would still have
 been a net win — ~8s beats ~16s — but it leaves the one leader-guarded path
