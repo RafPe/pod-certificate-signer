@@ -319,8 +319,27 @@ func managerOptions(scheme *runtime.Scheme, cfg managerConfig) ctrl.Options {
 		LeaderElection:          cfg.leaderElection,
 		LeaderElectionID:        cfg.leaderElectionID,
 		LeaderElectionNamespace: cfg.leaderElectionNamespace,
-		BaseContext:             func() context.Context { return cfg.baseContext },
-		Metrics:                 metricsServerOptions(cfg),
+		// Release the Lease on a voluntary shutdown instead of leaving a
+		// follower to wait out the 15s LeaseDuration. Measured on a
+		// two-replica Kind deployment: median pod-delete handover 16.3s ->
+		// 1.2s, and a rolling upgrade's leaderless window ~15.2s -> ~1.9s.
+		// Both the ClusterTrustBundle publisher and the PodCertificateRequest
+		// reconciler are leader-gated, so that window is a signing-latency
+		// gap, not only a publishing one. Involuntary loss (node failure,
+		// SIGKILL) still falls back to Lease expiry.
+		//
+		// PRECONDITION: the process must exit as soon as the manager stops, so
+		// mgr.Start stays the last statement in main(). The release is
+		// deferred until every runnable has returned, but only within
+		// GracefulShutdownTimeout (30s default); past that deadline the Lease
+		// is released with leader-gated code possibly still live. So every
+		// leader-gated runnable's shutdown must be bounded by its context - an
+		// unbounded retry would break this silently.
+		//
+		// ADR-0006 (docs/adr/0006-release-leader-lease-on-cancel.md).
+		LeaderElectionReleaseOnCancel: true,
+		BaseContext:                   func() context.Context { return cfg.baseContext },
+		Metrics:                       metricsServerOptions(cfg),
 		Controller: config.Controller{
 			MaxConcurrentReconciles: cfg.maxConcurrentReconciles,
 			RecoverPanic:            new(true),
