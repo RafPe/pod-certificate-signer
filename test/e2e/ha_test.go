@@ -106,14 +106,19 @@ const (
 	// haLeaderHandoffTimeout bounds the wait for the Lease to move to another
 	// replica after the holder goes away.
 	//
-	// The floor is controller-runtime's default LeaseDuration of 15 seconds:
-	// the manager is built without LeaderElectionReleaseOnCancel, so a leader
-	// shutting down does not release the Lease and a follower must wait for it
-	// to expire. The bound here is generous over that floor because the
-	// follower then has to observe the expiry on its RetryPeriod, and a spec
-	// that asserted a tight bound would be measuring client-go's polling
-	// jitter rather than the product.
-	haLeaderHandoffTimeout = 90 * time.Second
+	// The manager is built with LeaderElectionReleaseOnCancel
+	// (cmd/podcertificate-signer/main.go,
+	// docs/adr/0006-release-leader-lease-on-cancel.md), so a leader shutting
+	// down voluntarily releases the Lease and the floor is no longer the 15
+	// second LeaseDuration: measured handover is ~1.2s, and the worst case is
+	// one jittered RetryPeriod plus the leader's shutdown.
+	//
+	// Not lower than this, for two reasons. currentLeaderPod uses the same
+	// bound for the *initial* election after installHighAvailability, which is
+	// a ~2.7s cold start rather than a handover. And a spec that asserted a
+	// tight bound would be measuring client-go's polling jitter rather than
+	// the product.
+	haLeaderHandoffTimeout = 30 * time.Second
 
 	// haReadinessTimeout bounds the wait for the deployment to present its
 	// full complement of Ready replicas.
@@ -915,6 +920,10 @@ func haControllerPods() []string {
 //
 // controller-runtime writes the holder identity as "<hostname>_<uuid>", and a
 // pod's hostname is its name, so the pod is the part before the underscore.
+//
+// A released Lease transiently reads an empty holder, so the non-empty
+// assertion can fire during a passing run; every caller wraps this in an
+// Eventually or Consistently, which absorbs it as one more poll.
 func haLeaseHolder(g Gomega) string {
 	cmd := exec.Command("kubectl", "get", "lease", releaseName, "-n", namespace,
 		"-o", "jsonpath={.spec.holderIdentity}")
