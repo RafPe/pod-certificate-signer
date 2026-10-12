@@ -1,0 +1,2 @@
+kind: Changed
+body: 'A leader shutting down now releases its leader-election Lease instead of leaving a standby to wait out the 15 second lease duration, so a rolling upgrade hands leadership over - and resumes signing, which is leader-gated - in about a second rather than about sixteen.'
