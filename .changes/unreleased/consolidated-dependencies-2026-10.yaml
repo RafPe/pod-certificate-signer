@@ -1,0 +1,2 @@
+kind: Dependencies
+body: Update Kubernetes libraries to 0.37.1, controller-runtime to 0.25.2, Gomega to 1.44.0, OpenTelemetry to 1.45.0 (fixes GO-2026-6505), and the codeql and release-drafter GitHub Actions.
