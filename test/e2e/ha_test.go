@@ -916,6 +916,24 @@ func haControllerPods() []string {
 	return utils.GetNonEmptyLines(output)
 }
 
+// haAllControllerPods lists every controller replica, terminating ones included.
+//
+// The counterpart to haControllerPods, which filters terminating pods out. A pod
+// on its way out is not a replica most assertions are about, but it is still
+// running and can still reconcile until it is gone, so a caller that needs the
+// controller to be genuinely absent has to consult this list as well.
+func haAllControllerPods() []string {
+	cmd := exec.Command("kubectl", "get", "pods",
+		"-l", fmt.Sprintf("app.kubernetes.io/instance=%s", releaseName),
+		"-n", namespace,
+		"-o", "go-template={{ range .items }}{{ .metadata.name }}{{ \"\\n\" }}{{ end }}")
+	output, err := utils.Run(cmd)
+	if err != nil {
+		return nil
+	}
+	return utils.GetNonEmptyLines(output)
+}
+
 // haLeaseHolder returns the pod holding the leader-election Lease.
 //
 // controller-runtime writes the holder identity as "<hostname>_<uuid>", and a
@@ -1109,6 +1127,13 @@ func scaleController(replicas int) {
 	Expect(err).NotTo(HaveOccurred(), "Failed to scale the controller: %s", output)
 
 	Eventually(func(g Gomega) {
+		// Both lists are consulted. haControllerPods filters out terminating
+		// pods, so on its own it reports the target count while a scaled-down
+		// replica is still inside its grace period - still running, and still
+		// able to reconcile. Requiring the unfiltered list to match too means
+		// this returns only once the old replicas are really gone.
+		g.Expect(haAllControllerPods()).To(HaveLen(replicas),
+			"a controller pod is still terminating, and can still reconcile until it is gone")
 		pods := haControllerPods()
 		g.Expect(pods).To(HaveLen(replicas))
 		for _, pod := range pods {
