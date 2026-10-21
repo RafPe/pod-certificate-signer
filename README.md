@@ -122,5 +122,5 @@ steps.
 ## Contributing
 
 Contributions are welcome — issues and pull requests both. Building requires Go
-1.26; see [CONTRIBUTING.md](./CONTRIBUTING.md) for the development workflow and
+1.27; see [CONTRIBUTING.md](./CONTRIBUTING.md) for the development workflow and
 the checks to run before opening a PR, and [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).

@@ -32,10 +32,10 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # go.mod declares the 1.26 language floor and the release image builds
-          # with golang:1.26 (its latest patch). Scan with the latest 1.26.x so
+          # go.mod declares the 1.27 language floor and the release image builds
+          # with golang:1.27 (its latest patch). Scan with the latest 1.27.x so
           # standard-library advisories track the toolchain that actually ships.
-          go-version: '1.26'
+          go-version: '1.27'
           check-latest: true
 
       - name: Run govulncheck

@@ -5,7 +5,7 @@ pull requests are all welcome.
 
 ## Prerequisites
 
-- **Go 1.26+** (see `go.mod` for the exact version)
+- **Go 1.27+** (see `go.mod` for the exact version)
 - **Docker** (or another container tool via `CONTAINER_TOOL=podman`)
 - **make**
 
