@@ -1,2 +1,0 @@
-kind: Dependencies
-body: Update controller-runtime, Prometheus client, Ginkgo, Gomega, Go container builds to 1.27.0, and the distroless runtime image.

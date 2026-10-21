@@ -1,2 +1,0 @@
-kind: Security
-body: Build the signer with Go 1.27.3, which fixes CVE-2026-111943 in crypto/x509 (golang/go#82345).
