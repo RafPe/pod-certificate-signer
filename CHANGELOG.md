@@ -5,6 +5,18 @@ request is prepared. This file follows Keep a Changelog and Semantic Versioning.
 
 <!-- next-release -->
 
+## [3.0.1] - 2026-10-21
+
+- A leader shutting down now releases its leader-election Lease instead of leaving a standby to wait out the 15 second lease duration, so a rolling upgrade hands leadership over - and resumes signing, which is leader-gated - in about a second rather than about sixteen.
+- Update controller-runtime to 0.25.1, Ginkgo to 2.33.0, Gomega to 1.43.1, the Go container builds to 1.27.1, and the docker and codeql GitHub Actions.
+- Update Kubernetes libraries to 0.37.1, controller-runtime to 0.25.2, Gomega to 1.44.0, OpenTelemetry to 1.45.0 (fixes GO-2026-6505), golang.org/x/net to 0.60.0 (fixes GO-2026-6610 through GO-2026-6617), and the codeql and release-drafter GitHub Actions.
+- Update controller-runtime, Prometheus client, Ginkgo, Gomega, Go container builds to 1.27.0, and the distroless runtime image.
+- Update google.golang.org/grpc to 1.83.1, which fixes GO-2026-6348.
+- `make dev-ca` generates the development CA with Go instead of openssl, so it works on macOS where LibreSSL silently produced an invalid key.
+- `Sign` and `CertificateNotAfter` no longer dereference the CA certificate without a nil guard. An authority that somehow holds no certificate - possible only through a construction path that defers the first load, since `New` fails closed - now refuses to sign with the same "CA unusable, requeue" classification as an expired signer, and reports its expiry as a zero timestamp instead of panicking. The second guard matters beyond signing: `CertificateNotAfter` runs on every metrics scrape, where a panic takes down the scrape rather than being recovered.
+- The signer now refuses a CA certificate whose `NotBefore` lies more than five minutes ahead of its clock, instead of loading it and signing certificates no peer can verify. A not-yet-valid CA - typically one minted by an external PKI whose clock runs ahead of the node's - previously passed validation, so the signer reported healthy while every leaf it issued failed chain verification on the peer side. Such material is now rejected at load like any other unusable CA: the last-good CA stays in place and keeps signing, the reload failure is logged as `CA certificate is not yet valid`, and the certificate is also kept out of the published ClusterTrustBundle, where the same check gates the previous-CA history. The five-minute tolerance is what keeps benign clock skew around a fresh rotation from turning into a reload failure.
+- Build the signer with Go 1.27.3, which fixes CVE-2026-111943 in crypto/x509 (golang/go#82345).
+
 ## [3.0.0] - 2026-08-27
 
 - The signer now speaks the GA `certificates.k8s.io/v1` API and requires Kubernetes 1.37 or newer; the chart's `kubeVersion` moves to `>= 1.37.0-0` and installs on older clusters are refused. Nothing needs enabling on the cluster any more: `PodCertificateRequest` and `ClusterTrustBundle` are served by default in 1.37, so the `PodCertificateRequest`, `ClusterTrustBundle` and `ClusterTrustBundleProjection` feature gates and the `certificates.k8s.io/v1beta1` runtime-config entry can all come out of your apiserver configuration. The GA type drops `spec.pkixPublicKey`, so the signer no longer honours it and reads the subject public key only from the PKCS#10 stub every 1.37 kubelet sends - a request that somehow carries neither is denied with `UnsupportedKeyType` rather than signed. The `-0` suffix on the version constraint is deliberate: it admits managed distributions whose version strings carry a suffix, such as `1.37.2-eks-abc123`, which semver reads as prereleases and a bare `>= 1.37.0` would reject.
