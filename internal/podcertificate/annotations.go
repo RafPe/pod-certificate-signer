@@ -240,28 +240,26 @@ func (r *annotationResolver) ipAddresses() ([]net.IP, error) {
 		return nil, err
 	}
 
-	var ips []net.IP
-	var attribute func(error) error
+	// No IP address is a verified pod identity, so the policy is checked
+	// before an annotation value is even parsed.
 	switch {
 	case fromAnnotation:
-		attribute = func(err error) error { return r.annotationError(AnnotationSuffixIPSAN, err) }
 		if !r.opts.AllowUnverifiedIdentities {
-			return nil, attribute(errUnverifiedIPSAN)
+			return nil, r.annotationError(AnnotationSuffixIPSAN, errUnverifiedIPSAN)
 		}
-		if ips, err = parseIPs(ipSAN); err != nil {
-			return nil, attribute(err)
+		ips, err := parseIPs(ipSAN)
+		if err != nil {
+			return nil, r.annotationError(AnnotationSuffixIPSAN, err)
 		}
+		return ips, nil
 	case r.opts.HonorCSRSANs && len(r.csr.IPAddresses) > 0:
-		attribute = func(err error) error { return fmt.Errorf("CSR %w", err) }
-		ips = r.csr.IPAddresses
+		if !r.opts.AllowUnverifiedIdentities {
+			return nil, fmt.Errorf("CSR IP addresses: %w", errUnverifiedIPSAN)
+		}
+		return r.csr.IPAddresses, nil
 	default:
 		return nil, nil
 	}
-
-	if !r.opts.AllowUnverifiedIdentities {
-		return nil, attribute(errUnverifiedIPSAN)
-	}
-	return ips, nil
 }
 
 // extKeyUsage resolves the eku annotation, if present, into ExtKeyUsage
