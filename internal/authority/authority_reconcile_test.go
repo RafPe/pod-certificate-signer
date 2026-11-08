@@ -48,8 +48,8 @@ func TestReconcileTickRecoversAFailedReloadWithoutAnEvent(t *testing.T) {
 		// The watch loop has not started yet, so this sleep crosses the grace
 		// period without firing any reconcile tick.
 		time.Sleep(reloadFailureGracePeriod)
-		if err := ca.Healthy(); err == nil {
-			t.Fatal("Healthy() = nil after an exhausted retry budget past the grace period, want an error")
+		if err := ca.HealthCheck(); err == nil {
+			t.Fatal("HealthCheck() = nil after an exhausted retry budget past the grace period, want an error")
 		}
 
 		// Good material lands on disk before the loop starts, so no event of
@@ -76,8 +76,8 @@ func TestReconcileTickRecoversAFailedReloadWithoutAnEvent(t *testing.T) {
 		// The streak is cleared by a successful reload, so the replica rejoins
 		// the Service without needing a restart. The clock is still well past
 		// the grace period, so this can only be the streak resetting.
-		if err := ca.Healthy(); err != nil {
-			t.Errorf("Healthy() after a successful reconcile tick = %v, want nil", err)
+		if err := ca.HealthCheck(); err != nil {
+			t.Errorf("HealthCheck() after a successful reconcile tick = %v, want nil", err)
 		}
 	})
 }
@@ -256,12 +256,12 @@ func TestTickOnlyFailuresCrossTheReadinessThreshold(t *testing.T) {
 		// replica stays ready; past it, readiness must fail. The sleep below
 		// fires further ticks, which is why the exact failure count is
 		// asserted above it.
-		if err := ca.Healthy(); err != nil {
-			t.Errorf("Healthy() inside the grace period = %v, want nil", err)
+		if err := ca.HealthCheck(); err != nil {
+			t.Errorf("HealthCheck() inside the grace period = %v, want nil", err)
 		}
 		time.Sleep(reloadFailureGracePeriod)
-		if err := ca.Healthy(); err == nil {
-			t.Error("Healthy() = nil after tick-only failures past the grace period, want an error")
+		if err := ca.HealthCheck(); err == nil {
+			t.Error("HealthCheck() = nil after tick-only failures past the grace period, want an error")
 		}
 	})
 }

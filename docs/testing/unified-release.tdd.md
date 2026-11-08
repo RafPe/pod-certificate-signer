@@ -19,7 +19,7 @@
 ## Coverage and E2E
 
 `make test` retained the repository's package coverage results, including 92.9%
-for `internal/controller` and 92.4% for `internal/kubernetes/podcertificate`.
+for `internal/controller` and 92.4% for `internal/podcertificate`.
 The full Kind E2E suite is intentionally a release gate in
 `release.yml`; it is also still exercised on pull requests. It was not started
 locally because it creates a cluster and the changed behavior is GitHub event

@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
 )
 
 // A CA-availability error surfaced by the signer must be classified TRANSIENT:
-// process() returns a plain error (so controller-runtime requeues) that still
+// signRequest() returns a plain error (so controller-runtime requeues) that still
 // carries authority.ErrCASignerUnusable. A request-specific signing error must
 // stay terminal (*TerminalError -> Failed/SigningFailed, recorded on the PCR).
 func TestProcessClassifiesSignerErrors(t *testing.T) {
@@ -40,18 +40,18 @@ func TestProcessClassifiesSignerErrors(t *testing.T) {
 			stub := &stubSigner{name: "example.org/signer", err: tc.signErr}
 			r, pcr, ctx := newSigningHarness(t, stub)
 
-			cert, err := r.process(ctx, pcr)
+			cert, err := r.signRequest(ctx, pcr)
 			if cert != nil {
-				t.Fatalf("process() cert = %v, want nil", cert)
+				t.Fatalf("signRequest() cert = %v, want nil", cert)
 			}
 			if !stub.called {
-				t.Fatal("process() did not reach SignPodCertificate")
+				t.Fatal("signRequest() did not reach SignPodCertificate")
 			}
 
 			var te *TerminalError
 			gotTerminal := errors.As(err, &te)
 			if gotTerminal != tc.wantTerminal {
-				t.Fatalf("process() terminal = %v (err = %v), want terminal = %v", gotTerminal, err, tc.wantTerminal)
+				t.Fatalf("signRequest() terminal = %v (err = %v), want terminal = %v", gotTerminal, err, tc.wantTerminal)
 			}
 			if !tc.wantTerminal && !errors.Is(err, authority.ErrCASignerUnusable) {
 				t.Fatalf("transient err = %v, want it to still wrap ErrCASignerUnusable", err)

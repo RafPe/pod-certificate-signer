@@ -1,4 +1,4 @@
-package main
+package trustbundle
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -17,16 +16,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
-	signermetrics "github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/signer"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
 )
 
-// newTestPublisher builds a ctbPublisher backed by a real CA and signer, and
-// the given client, with the production tick and retry settings. Tests that
-// hit a retry or a tick must run inside a synctest bubble.
-func newTestPublisher(t *testing.T, c client.Client) *ctbPublisher {
+const testSignerName = "example.org/signer"
+
+// newTestPublisher builds a Publisher backed by a real CA and signer, and the
+// given client, with the production tick and retry settings. Tests that hit a
+// retry or a tick must run inside a synctest bubble.
+func newTestPublisher(t *testing.T, c client.Client) *Publisher {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -46,19 +47,25 @@ func newTestPublisher(t *testing.T, c client.Client) *ctbPublisher {
 		t.Fatalf("signer.New: %v", err)
 	}
 
-	return &ctbPublisher{
-		client:   c,
-		signer:   s,
-		ca:       ca,
-		events:   make(chan struct{}),
-		interval: ctbDriftRepairInterval,
-		backoff:  ctbPublishBackoff,
-		// A throwaway vector rather than the package-level one, so each test
-		// counts only its own publishes.
-		publishes: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "test_clustertrustbundle_publish_attempts_total",
-		}, []string{"result"}),
+	_, p := NewRunnables(c, s, ca)
+	return p
+}
+
+// publishCounts snapshots the publish-attempt counter per result, so a test can
+// assert on the publishes it caused rather than on the package-level total.
+type publishCounts map[string]float64
+
+func snapshotPublishCounts() publishCounts {
+	counts := publishCounts{}
+	for _, result := range []string{metrics.ResultUnchanged, metrics.ResultCreated, metrics.ResultUpdated, metrics.ResultFailed} {
+		counts[result] = promtestutil.ToFloat64(metrics.ClusterTrustBundlePublishAttempts.WithLabelValues(result))
 	}
+	return counts
+}
+
+// delta reports how far the counter for result moved since the snapshot.
+func (before publishCounts) delta(result string) float64 {
+	return promtestutil.ToFloat64(metrics.ClusterTrustBundlePublishAttempts.WithLabelValues(result)) - before[result]
 }
 
 // A publish that fails transiently must be retried (with backoff) until it
@@ -79,6 +86,7 @@ func TestReconcileRetriesTransientFailure(t *testing.T) {
 			Build()
 
 		p := newTestPublisher(t, c)
+		before := snapshotPublishCounts()
 		ctx := t.Context()
 		if !p.reconcile(ctx, log.FromContext(ctx)) {
 			t.Fatal("reconcile should have run")
@@ -87,21 +95,16 @@ func TestReconcileRetriesTransientFailure(t *testing.T) {
 		if got := getCalls.Load(); got != 3 {
 			t.Errorf("Get was called %d times, want 3 (two transient failures, then success)", got)
 		}
-		if err := p.Healthy(); err != nil {
-			t.Errorf("Healthy = %v, want nil after a successful retry", err)
+		if err := p.HealthCheck(); err != nil {
+			t.Errorf("HealthCheck = %v, want nil after a successful retry", err)
 		}
-		if got := publishCount(p, signermetrics.ResultFailed); got != 0 {
+		if got := before.delta(metrics.ResultFailed); got != 0 {
 			t.Errorf("publish attempts {result=failed} = %v, want 0 after eventual success", got)
 		}
-		if got := publishCount(p, signermetrics.ResultCreated); got != 1 {
+		if got := before.delta(metrics.ResultCreated); got != 1 {
 			t.Errorf("publish attempts {result=created} = %v, want 1 after the first successful publish", got)
 		}
 	})
-}
-
-// publishCount reports the publisher's attempt counter for one result.
-func publishCount(p *ctbPublisher, result string) float64 {
-	return promtestutil.ToFloat64(p.publishes.WithLabelValues(result))
 }
 
 // The publisher must re-publish on a periodic tick, independent of any fsnotify
@@ -196,13 +199,14 @@ func TestReconcilePersistentFailureSurfaced(t *testing.T) {
 			Build()
 
 		p := newTestPublisher(t, c)
+		before := snapshotPublishCounts()
 		ctx := t.Context()
 		p.reconcile(ctx, log.FromContext(ctx))
 
-		if p.Healthy() == nil {
-			t.Error("Healthy must report an error after a persistent publish failure")
+		if p.HealthCheck() == nil {
+			t.Error("HealthCheck must report an error after a persistent publish failure")
 		}
-		if got := publishCount(p, signermetrics.ResultFailed); got != 1 {
+		if got := before.delta(metrics.ResultFailed); got != 1 {
 			t.Errorf("publish attempts {result=failed} = %v, want 1 after the retry budget is exhausted", got)
 		}
 	})
@@ -215,14 +219,15 @@ func TestReconcileCountsUnchangedPublish(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).Build()
 
 	p := newTestPublisher(t, c)
+	before := snapshotPublishCounts()
 	ctx := context.Background()
 	p.reconcile(ctx, log.FromContext(ctx))
 	p.reconcile(ctx, log.FromContext(ctx))
 
-	if got := publishCount(p, signermetrics.ResultCreated); got != 1 {
+	if got := before.delta(metrics.ResultCreated); got != 1 {
 		t.Errorf("publish attempts {result=created} = %v, want 1", got)
 	}
-	if got := publishCount(p, signermetrics.ResultUnchanged); got != 1 {
+	if got := before.delta(metrics.ResultUnchanged); got != 1 {
 		t.Errorf("publish attempts {result=unchanged} = %v, want 1 on a republish of the same bundle", got)
 	}
 }
@@ -248,14 +253,14 @@ func TestReconcileClearsHealthOnSuccess(t *testing.T) {
 		ctx := t.Context()
 
 		p.reconcile(ctx, log.FromContext(ctx))
-		if p.Healthy() == nil {
-			t.Fatal("Healthy must report an error while publishing keeps failing")
+		if p.HealthCheck() == nil {
+			t.Fatal("HealthCheck must report an error while publishing keeps failing")
 		}
 
 		fail.Store(false)
 		p.reconcile(ctx, log.FromContext(ctx))
-		if err := p.Healthy(); err != nil {
-			t.Errorf("Healthy = %v, want nil after a successful publish", err)
+		if err := p.HealthCheck(); err != nil {
+			t.Errorf("HealthCheck = %v, want nil after a successful publish", err)
 		}
 	})
 }
@@ -281,6 +286,7 @@ func TestReconcileStopsRetryingOnCancel(t *testing.T) {
 			Build()
 
 		p := newTestPublisher(t, c)
+		before := snapshotPublishCounts()
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		done := make(chan struct{})
@@ -301,19 +307,19 @@ func TestReconcileStopsRetryingOnCancel(t *testing.T) {
 				ctxCancelReturnBound)
 		}
 
-		if p.Healthy() == nil {
-			t.Error("Healthy must report an error after a publish abandoned on cancellation")
+		if p.HealthCheck() == nil {
+			t.Error("HealthCheck must report an error after a publish abandoned on cancellation")
 		}
-		if got := publishCount(p, signermetrics.ResultFailed); got != 1 {
+		if got := before.delta(metrics.ResultFailed); got != 1 {
 			t.Errorf("publish attempts {result=failed} = %v, want 1", got)
 		}
 	})
 }
 
 // ctxCancelReturnBound is the budget a canceled reconcile has to return. It is
-// a fifth of ctbPublishBackoff's first step, so it is only satisfiable by
+// a fifth of apiRetryBackoff's first step, so it is only satisfiable by
 // returning without sleeping at all.
-var ctxCancelReturnBound = ctbPublishBackoff.Duration / 5
+var ctxCancelReturnBound = apiRetryBackoff.Duration / 5
 
 // A timeout that is not the publisher's own context ending must stay retriable.
 // A transport or per-request deadline surfaces as an error wrapping
@@ -343,8 +349,8 @@ func TestReconcileRetriesTimeoutWhileContextIsLive(t *testing.T) {
 		if got := getCalls.Load(); got != 3 {
 			t.Errorf("Get was called %d times, want 3 (two timeouts, then success)", got)
 		}
-		if err := p.Healthy(); err != nil {
-			t.Errorf("Healthy = %v, want nil: a timeout on a live context is transient", err)
+		if err := p.HealthCheck(); err != nil {
+			t.Errorf("HealthCheck = %v, want nil: a timeout on a live context is transient", err)
 		}
 	})
 }

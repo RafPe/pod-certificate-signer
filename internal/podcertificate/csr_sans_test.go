@@ -1,6 +1,7 @@
 package podcertificate
 
 import (
+	"context"
 	"net"
 	"testing"
 )
@@ -11,14 +12,10 @@ import (
 // AllowUnverifiedIdentities opt-in; under the default constraints these same
 // values are denied (see TestCSRSANsIdentityConstraint).
 func TestCSRSANsHonoredWhenEnabled(t *testing.T) {
-	opts := Options{
-		HonorCSRSANs:              true,
-		CSRDNSNames:               []string{"csr.example.org"},
-		CSRIPAddresses:            []net.IP{net.ParseIP("10.1.2.3")},
-		AllowUnverifiedIdentities: true,
-	}
+	csr := &CSR{DNSNames: []string{"csr.example.org"}, IPAddresses: []net.IP{net.ParseIP("10.1.2.3")}}
+	opts := Options{HonorCSRSANs: true, AllowUnverifiedIdentities: true}
 
-	config, err := NewPodCertificateConfig(testPCR(nil), testPod(nil), opts, nil, 0)
+	config, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(nil), csr, opts)
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}
@@ -38,17 +35,18 @@ func TestCSRSANsHonoredWhenEnabled(t *testing.T) {
 func TestCSRSANsIdentityConstraint(t *testing.T) {
 	// Emitted by the signer itself for testPod, so it is a verified identity.
 	const verifiedDNS = "mypod.myns.pod.cluster.local"
+	honor := Options{HonorCSRSANs: true}
 
 	t.Run("unverified CSR DNS name denied", func(t *testing.T) {
-		opts := Options{HonorCSRSANs: true, CSRDNSNames: []string{"csr.attacker.example"}}
-		if _, err := NewPodCertificateConfig(testPCR(nil), testPod(nil), opts, nil, 0); err == nil {
+		csr := &CSR{DNSNames: []string{"csr.attacker.example"}}
+		if _, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(nil), csr, honor); err == nil {
 			t.Fatal("want denial for an unverified CSR DNS name, got nil")
 		}
 	})
 
 	t.Run("verified CSR DNS name honored", func(t *testing.T) {
-		opts := Options{HonorCSRSANs: true, CSRDNSNames: []string{verifiedDNS}}
-		config, err := NewPodCertificateConfig(testPCR(nil), testPod(nil), opts, nil, 0)
+		csr := &CSR{DNSNames: []string{verifiedDNS}}
+		config, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(nil), csr, honor)
 		if err != nil {
 			t.Fatalf("want the verified CSR DNS name honored, got error: %v", err)
 		}
@@ -58,20 +56,16 @@ func TestCSRSANsIdentityConstraint(t *testing.T) {
 	})
 
 	t.Run("CSR IP SAN denied", func(t *testing.T) {
-		opts := Options{HonorCSRSANs: true, CSRIPAddresses: []net.IP{net.ParseIP("10.1.2.3")}}
-		if _, err := NewPodCertificateConfig(testPCR(nil), testPod(nil), opts, nil, 0); err == nil {
+		csr := &CSR{IPAddresses: []net.IP{net.ParseIP("10.1.2.3")}}
+		if _, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(nil), csr, honor); err == nil {
 			t.Fatal("want denial for a CSR IP SAN under identity constraints, got nil")
 		}
 	})
 
 	t.Run("unverified CSR SANs allowed with opt-in", func(t *testing.T) {
-		opts := Options{
-			HonorCSRSANs:              true,
-			CSRDNSNames:               []string{"csr.attacker.example"},
-			CSRIPAddresses:            []net.IP{net.ParseIP("10.1.2.3")},
-			AllowUnverifiedIdentities: true,
-		}
-		if _, err := NewPodCertificateConfig(testPCR(nil), testPod(nil), opts, nil, 0); err != nil {
+		csr := &CSR{DNSNames: []string{"csr.attacker.example"}, IPAddresses: []net.IP{net.ParseIP("10.1.2.3")}}
+		opts := Options{HonorCSRSANs: true, AllowUnverifiedIdentities: true}
+		if _, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(nil), csr, opts); err != nil {
 			t.Fatalf("want CSR SANs honored with --allow-unverified-identities, got error: %v", err)
 		}
 	})
@@ -80,13 +74,10 @@ func TestCSRSANsIdentityConstraint(t *testing.T) {
 // The san annotation takes precedence over CSR-requested DNS names.
 func TestCSRSANsAnnotationTakesPrecedence(t *testing.T) {
 	pcr := testPCR(map[string]string{testSignerName + "-san": "annotated.example.org"})
-	opts := Options{
-		HonorCSRSANs:              true,
-		CSRDNSNames:               []string{"csr.example.org"},
-		AllowUnverifiedIdentities: true, // literal annotation value
-	}
+	csr := &CSR{DNSNames: []string{"csr.example.org"}}
+	opts := Options{HonorCSRSANs: true, AllowUnverifiedIdentities: true} // literal annotation value
 
-	config, err := NewPodCertificateConfig(pcr, testPod(nil), opts, nil, 0)
+	config, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), csr, opts)
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}
@@ -98,12 +89,9 @@ func TestCSRSANsAnnotationTakesPrecedence(t *testing.T) {
 // With the feature disabled (default), CSR SANs are ignored - the API
 // contract explicitly allows signers to ignore CSR contents.
 func TestCSRSANsIgnoredWhenDisabled(t *testing.T) {
-	opts := Options{
-		CSRDNSNames:    []string{"csr.example.org"},
-		CSRIPAddresses: []net.IP{net.ParseIP("10.1.2.3")},
-	}
+	csr := &CSR{DNSNames: []string{"csr.example.org"}, IPAddresses: []net.IP{net.ParseIP("10.1.2.3")}}
 
-	config, err := NewPodCertificateConfig(testPCR(nil), testPod(nil), opts, nil, 0)
+	config, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(nil), csr, Options{})
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}
@@ -118,13 +106,10 @@ func TestCSRSANsIgnoredWhenDisabled(t *testing.T) {
 // The ip-san annotation sets IP SANs and takes precedence over CSR IPs.
 func TestIPSANAnnotation(t *testing.T) {
 	pcr := testPCR(map[string]string{testSignerName + "-ip-san": "10.0.0.1, 2001:db8::1"})
-	opts := Options{
-		HonorCSRSANs:              true,
-		CSRIPAddresses:            []net.IP{net.ParseIP("192.168.0.1")},
-		AllowUnverifiedIdentities: true, // annotation IP SANs need the opt-in
-	}
+	csr := &CSR{IPAddresses: []net.IP{net.ParseIP("192.168.0.1")}}
+	opts := Options{HonorCSRSANs: true, AllowUnverifiedIdentities: true} // annotation IP SANs need the opt-in
 
-	config, err := NewPodCertificateConfig(pcr, testPod(nil), opts, nil, 0)
+	config, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), csr, opts)
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}
@@ -146,7 +131,7 @@ func TestIPSANAnnotationInvalid(t *testing.T) {
 			// Opt in to unverified identities so the parse error is exercised
 			// rather than the blanket IP-SAN denial.
 			pcr := testPCR(map[string]string{testSignerName + "-ip-san": value})
-			if _, err := NewPodCertificateConfig(pcr, testPod(nil), Options{AllowUnverifiedIdentities: true}, nil, 0); err == nil {
+			if _, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{AllowUnverifiedIdentities: true}); err == nil {
 				t.Fatalf("want error for ip-san %q, got nil", value)
 			}
 		})
@@ -155,7 +140,7 @@ func TestIPSANAnnotationInvalid(t *testing.T) {
 
 // Enabled but with an empty CSR (kubelet today): defaults still apply.
 func TestCSRSANsEmptyCSRKeepsDefaults(t *testing.T) {
-	config, err := NewPodCertificateConfig(testPCR(nil), testPod(nil), Options{HonorCSRSANs: true}, nil, 0)
+	config, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(nil), &CSR{}, Options{HonorCSRSANs: true})
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}

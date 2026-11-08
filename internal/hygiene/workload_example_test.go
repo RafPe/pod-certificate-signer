@@ -1,6 +1,7 @@
 package hygiene
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,7 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
 )
 
 // exampleWorkloadPod is the flagship example manifest: operators copy it
@@ -91,8 +92,8 @@ func TestWorkloadPodExampleIssuesUnderIdentityConstraints(t *testing.T) {
 			// property under test. EnableInterpolation is on because the
 			// example is written in ${...}; the chart shipping it on is what
 			// the cmd-side test named above asserts.
-			config, err := podcertificate.NewPodCertificateConfig(pcr, workload,
-				podcertificate.Options{EnableInterpolation: true}, nil, 0)
+			config, err := podcertificate.NewPodCertificateConfig(context.Background(), pcr, workload, nil,
+				podcertificate.Options{EnableInterpolation: true})
 			if err != nil {
 				t.Fatalf("%s requests an identity the signer does not grant: %v\n"+
 					"every live value must resolve to a verified pod identity; move anything needing "+

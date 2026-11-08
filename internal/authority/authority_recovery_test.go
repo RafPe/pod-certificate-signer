@@ -180,7 +180,7 @@ func TestWatchLoopReturnsOnClosedEventsChannel(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("watchLoop spun on a closed events channel instead of returning")
 	}
-	if ca.Healthy() == nil {
+	if ca.HealthCheck() == nil {
 		t.Error("Healthy must report the failure after the watch loop dies")
 	}
 }
@@ -220,7 +220,7 @@ func TestHealthyReportsNilForLiveCA(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if err := ca.Healthy(); err != nil {
+	if err := ca.HealthCheck(); err != nil {
 		t.Errorf("Healthy = %v, want nil for a freshly-loaded CA", err)
 	}
 }

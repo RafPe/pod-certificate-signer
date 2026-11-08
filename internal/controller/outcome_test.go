@@ -16,7 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
 )
 
 // newTestScheme builds a scheme with the types the controller tests need.
@@ -116,15 +116,13 @@ func TestRecordIssued(t *testing.T) {
 	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: rec}
 
 	now := time.Now()
-	cert := podcertificate.NewPodCertificate(
-		nil,
-		"pem-chain",
+	cert := podcertificate.NewPodCertificate("pem-chain",
 		&podcertificate.PodCertificateConfig{Duration: time.Hour, RefreshBefore: 15 * time.Minute},
 		now,
 		now.Add(time.Hour),
 	)
 
-	if err := r.recordIssued(context.Background(), pcr, cert); err != nil {
+	if _, err := r.recordIssued(context.Background(), pcr, cert); err != nil {
 		t.Fatalf("recordIssued: %v", err)
 	}
 

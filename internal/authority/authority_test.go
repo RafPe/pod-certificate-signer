@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
 )
 
@@ -32,6 +32,15 @@ func writeCA(t *testing.T, dir, commonName string, lifetime time.Duration) *test
 		t.Fatalf("write CA files: %v", err)
 	}
 	return kp
+}
+
+// rewriteCA writes kp's files into dir again, byte for byte, so a watcher
+// that missed an earlier write sees a fresh event for the same material.
+func rewriteCA(t *testing.T, dir string, kp *testutil.KeyPair) {
+	t.Helper()
+	if _, _, err := kp.WriteFiles(dir); err != nil {
+		t.Fatalf("rewrite CA files: %v", err)
+	}
 }
 
 func testConfig(t *testing.T) *podcertificate.PodCertificateConfig {
@@ -252,8 +261,9 @@ func TestSignIssuesCertificateChain(t *testing.T) {
 	if got := leaf.NotAfter.Sub(leaf.NotBefore); got != config.Duration {
 		t.Errorf("lifetime = %v, want %v", got, config.Duration)
 	}
-	if !pc.IsValid() {
-		t.Error("freshly issued certificate must be valid")
+	now := time.Now()
+	if !now.After(pc.NotBefore()) || !now.Before(pc.NotAfter()) {
+		t.Errorf("freshly issued certificate validity [%v, %v] must include now", pc.NotBefore(), pc.NotAfter())
 	}
 }
 
@@ -277,10 +287,7 @@ func TestSignAssertsBasicConstraintsCAFalse(t *testing.T) {
 		t.Fatalf("Sign: %v", err)
 	}
 
-	leaf, err := x509.ParseCertificate(pc.Certificate())
-	if err != nil {
-		t.Fatalf("parse issued certificate: %v", err)
-	}
+	leaf := parseChain(t, []byte(pc.CertificateChain()))[0]
 
 	if !leaf.BasicConstraintsValid {
 		t.Error("issued leaf must carry the basicConstraints extension")
@@ -502,15 +509,25 @@ func TestWatchReloadsCA(t *testing.T) {
 		watchDone <- ca.Watch(ctx, notify)
 	}()
 
-	// Give the watcher a moment to register the directory watch before
-	// rotating the files.
-	time.Sleep(300 * time.Millisecond)
+	// There is no signal for "the directory watch is registered", so rather
+	// than guess at a delay, keep rewriting the rotated material until the
+	// watcher reports a change: a write that lands before the watch exists
+	// produces no event, the next one does. The files are identical on every
+	// pass, so whichever write is observed loads the same certificate.
 	rotated := writeCA(t, dir, "ca-2.example.org", 24*time.Hour)
-
-	select {
-	case <-notify:
-	case <-time.After(15 * time.Second):
-		t.Fatal("timed out waiting for the CA reload notification")
+	deadline := time.After(15 * time.Second)
+	retry := time.NewTicker(50 * time.Millisecond)
+	defer retry.Stop()
+waitForReload:
+	for {
+		select {
+		case <-notify:
+			break waitForReload
+		case <-retry.C:
+			rewriteCA(t, dir, rotated)
+		case <-deadline:
+			t.Fatal("timed out waiting for the CA reload notification")
+		}
 	}
 
 	bundle := parseChain(t, ca.TrustBundlePEM())

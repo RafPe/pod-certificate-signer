@@ -1,6 +1,7 @@
 package podcertificate
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -34,7 +35,7 @@ func testPCR(userAnnotations map[string]string) *certificatesv1.PodCertificateRe
 }
 
 func TestNewPodCertificateConfigDefaults(t *testing.T) {
-	config, err := NewPodCertificateConfig(testPCR(nil), testPod(nil), Options{}, nil, 0)
+	config, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(nil), nil, Options{})
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}
@@ -56,7 +57,7 @@ func TestNewPodCertificateConfigDefaults(t *testing.T) {
 
 // The -cluster-fqdn flag must be honored in the default DNS names.
 func TestNewPodCertificateConfigClusterFQDN(t *testing.T) {
-	config, err := NewPodCertificateConfig(testPCR(nil), testPod(nil), Options{ClusterFQDN: "corp.example.com"}, nil, 0)
+	config, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(nil), nil, Options{ClusterFQDN: "corp.example.com"})
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestNewPodCertificateConfigUserAnnotationsPrecedence(t *testing.T) {
 	pcr := testPCR(map[string]string{testSignerName + "-cn": "from-pcr"})
 
 	// Literal values require the unverified-identities opt-in.
-	config, err := NewPodCertificateConfig(pcr, pod, Options{AllowUnverifiedIdentities: true}, nil, 0)
+	config, err := NewPodCertificateConfig(context.Background(), pcr, pod, nil, Options{AllowUnverifiedIdentities: true})
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}
@@ -91,7 +92,7 @@ func TestNewPodCertificateConfigPodAnnotationFallback(t *testing.T) {
 	})
 
 	// These are literal (non-derived) values, allowed only with the opt-in.
-	config, err := NewPodCertificateConfig(testPCR(nil), pod, Options{AllowUnverifiedIdentities: true}, nil, 0)
+	config, err := NewPodCertificateConfig(context.Background(), testPCR(nil), pod, nil, Options{AllowUnverifiedIdentities: true})
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}
@@ -127,7 +128,7 @@ func TestNewPodCertificateConfigMalformedValues(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := NewPodCertificateConfig(testPCR(tc.annotations), testPod(nil), Options{}, nil, 0); err == nil {
+			if _, err := NewPodCertificateConfig(context.Background(), testPCR(tc.annotations), testPod(nil), nil, Options{}); err == nil {
 				t.Fatalf("want error for %v, got nil", tc.annotations)
 			}
 		})
@@ -139,7 +140,7 @@ func TestNewPodCertificateConfigMalformedValues(t *testing.T) {
 func TestNewPodCertificateConfigUnrecognizedUserAnnotation(t *testing.T) {
 	pcr := testPCR(map[string]string{testSignerName + "-bogus": "value"})
 
-	_, err := NewPodCertificateConfig(pcr, testPod(nil), Options{}, nil, 0)
+	_, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{})
 	if err == nil || !strings.Contains(err.Error(), "unrecognized") {
 		t.Fatalf("err = %v, want unrecognized key error", err)
 	}
@@ -152,7 +153,7 @@ func TestNewPodCertificateConfigMaxExpirationClampsDefault(t *testing.T) {
 	maxExpirationSeconds := int32(7200)
 	pcr.Spec.MaxExpirationSeconds = &maxExpirationSeconds
 
-	config, err := NewPodCertificateConfig(pcr, testPod(nil), Options{}, nil, 0)
+	config, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{})
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}
@@ -171,7 +172,7 @@ func TestValidateDurationExceedingMaxExpiration(t *testing.T) {
 	maxExpirationSeconds := int32(7200)
 	pcr.Spec.MaxExpirationSeconds = &maxExpirationSeconds
 
-	config, err := NewPodCertificateConfig(pcr, testPod(nil), Options{}, nil, 0)
+	config, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{})
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}

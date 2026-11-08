@@ -1,6 +1,7 @@
 package podcertificate
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -10,6 +11,7 @@ func TestDNSNamesRejectMalformedValuesFromEverySource(t *testing.T) {
 	tests := []struct {
 		name string
 		pcr  func() map[string]string
+		csr  *CSR
 		opts Options
 	}{
 		{
@@ -29,11 +31,8 @@ func TestDNSNamesRejectMalformedValuesFromEverySource(t *testing.T) {
 		{
 			name: "CSR with unverified identities allowed",
 			pcr:  func() map[string]string { return nil },
-			opts: Options{
-				HonorCSRSANs:              true,
-				AllowUnverifiedIdentities: true,
-				CSRDNSNames:               []string{invalidName},
-			},
+			csr:  &CSR{DNSNames: []string{invalidName}},
+			opts: Options{HonorCSRSANs: true, AllowUnverifiedIdentities: true},
 		},
 	}
 
@@ -46,7 +45,7 @@ func TestDNSNamesRejectMalformedValuesFromEverySource(t *testing.T) {
 				pod.Name = pcr.Spec.PodName
 			}
 
-			_, err := NewPodCertificateConfig(pcr, pod, tt.opts, nil, 0)
+			_, err := NewPodCertificateConfig(context.Background(), pcr, pod, tt.csr, tt.opts)
 			if err == nil {
 				t.Fatalf("NewPodCertificateConfig(DNS SAN %q) error = nil, want invalid DNS name error", invalidName)
 			}
@@ -76,11 +75,11 @@ func TestDNSNameValidationBoundaries(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pcr := testPCR(map[string]string{testSignerName + "-san": tt.dnsName})
 			_, err := NewPodCertificateConfig(
+				context.Background(),
 				pcr,
 				testPod(nil),
-				Options{AllowUnverifiedIdentities: true},
 				nil,
-				0,
+				Options{AllowUnverifiedIdentities: true},
 			)
 			if gotErr := err != nil; gotErr != tt.wantErr {
 				t.Errorf("NewPodCertificateConfig(DNS SAN %q) error = %v, want error = %t", tt.dnsName, err, tt.wantErr)
@@ -96,11 +95,11 @@ func TestDNSNameValidationRejectsOneInvalidNameInList(t *testing.T) {
 	})
 
 	_, err := NewPodCertificateConfig(
+		context.Background(),
 		pcr,
 		testPod(nil),
-		Options{AllowUnverifiedIdentities: true},
 		nil,
-		0,
+		Options{AllowUnverifiedIdentities: true},
 	)
 	if err == nil || !strings.Contains(err.Error(), invalidName) {
 		t.Fatalf("NewPodCertificateConfig(DNS SAN list containing %q) error = %v, want offending name", invalidName, err)

@@ -11,7 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
 )
 
 // stubSigner is a test double for the podSigner seam on the reconciler. It
@@ -38,9 +38,9 @@ func (s *stubSigner) IsSignerNameMatching(n string) bool { return s.name == n }
 func (s *stubSigner) Name() string { return s.name }
 
 // newSigningHarness wires a reconciler to the given stub with a pod present and
-// a PCR carrying a valid stub CSR, so process() runs the full pipeline
+// a PCR carrying a valid stub CSR, so signRequest() runs the full pipeline
 // and reaches SignPodCertificate. The returned context carries a discard logger
-// (pcConfig.LogConfiguration reads it off the context on this path).
+// for the config resolver.
 func newSigningHarness(t *testing.T, stub *stubSigner) (*PodCertificateRequestReconciler, *certificatesv1.PodCertificateRequest, context.Context) {
 	t.Helper()
 
@@ -63,25 +63,24 @@ func newSigningHarness(t *testing.T, stub *stubSigner) (*PodCertificateRequestRe
 }
 
 // The reconciler's Signer field must be a consumer-side interface so tests can
-// substitute a stub. With a stub returning a certificate, process() runs the
+// substitute a stub. With a stub returning a certificate, signRequest() runs the
 // full pipeline and hands back exactly that certificate.
 func TestProcessReachesSigner(t *testing.T) {
-	want := podcertificate.NewPodCertificate(
-		nil, "pem-chain",
+	want := podcertificate.NewPodCertificate("pem-chain",
 		&podcertificate.PodCertificateConfig{},
 		time.Now(), time.Now().Add(time.Hour),
 	)
 	stub := &stubSigner{name: "example.org/signer", cert: want}
 	r, pcr, ctx := newSigningHarness(t, stub)
 
-	got, err := r.process(ctx, pcr)
+	got, err := r.signRequest(ctx, pcr)
 	if err != nil {
-		t.Fatalf("process() error = %v, want nil", err)
+		t.Fatalf("signRequest() error = %v, want nil", err)
 	}
 	if !stub.called {
-		t.Fatal("process() did not reach SignPodCertificate")
+		t.Fatal("signRequest() did not reach SignPodCertificate")
 	}
 	if got != want {
-		t.Fatalf("process() cert = %v, want %v", got, want)
+		t.Fatalf("signRequest() cert = %v, want %v", got, want)
 	}
 }

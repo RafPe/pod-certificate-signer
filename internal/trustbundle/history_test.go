@@ -1,4 +1,4 @@
-package main
+package trustbundle
 
 import (
 	"context"
@@ -15,22 +15,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/signer"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
 )
-
-const testSignerName = "example.org/signer"
 
 // A missing ClusterTrustBundle must be reported as absence, distinctly from a
 // failed read and distinctly from an empty history: retrying cannot make an
 // absent object appear, and what absence means is a policy decision taken once,
-// by loadPreviousCAHistory.
+// by LoadPreviousCAHistory.
 func TestFetchPreviousCAsNotFoundReportsAbsence(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).Build()
 
 	certs, err := fetchPreviousCAs(context.Background(), c, testSignerName)
-	if !errors.Is(err, errCAHistoryBundleAbsent) {
-		t.Fatalf("fetchPreviousCAs err = %v, want it to wrap errCAHistoryBundleAbsent", err)
+	if !errors.Is(err, ErrHistoryBundleAbsent) {
+		t.Fatalf("fetchPreviousCAs err = %v, want it to wrap ErrHistoryBundleAbsent", err)
 	}
 	if len(certs) != 0 {
 		t.Fatalf("history = %d certs, want 0 for a missing bundle", len(certs))
@@ -53,9 +51,9 @@ func TestLoadPreviousCAHistoryAbsentBundleStartsEmpty(t *testing.T) {
 		}).
 		Build()
 
-	certs, err := loadPreviousCAHistory(context.Background(), c, testSignerName, false)
+	certs, err := LoadPreviousCAHistory(context.Background(), c, testSignerName, false)
 	if err != nil {
-		t.Fatalf("loadPreviousCAHistory err = %v, want nil so a first install can start", err)
+		t.Fatalf("LoadPreviousCAHistory err = %v, want nil so a first install can start", err)
 	}
 	if len(certs) != 0 {
 		t.Fatalf("history = %d certs, want 0", len(certs))
@@ -72,9 +70,9 @@ func TestLoadPreviousCAHistoryAbsentBundleStartsEmpty(t *testing.T) {
 func TestLoadPreviousCAHistoryAbsentBundleIsFatalWhenRequired(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).Build()
 
-	certs, err := loadPreviousCAHistory(context.Background(), c, testSignerName, true)
-	if !errors.Is(err, errCAHistoryBundleAbsent) {
-		t.Fatalf("loadPreviousCAHistory err = %v, want it to wrap errCAHistoryBundleAbsent", err)
+	certs, err := LoadPreviousCAHistory(context.Background(), c, testSignerName, true)
+	if !errors.Is(err, ErrHistoryBundleAbsent) {
+		t.Fatalf("LoadPreviousCAHistory err = %v, want it to wrap ErrHistoryBundleAbsent", err)
 	}
 	if certs != nil {
 		t.Fatalf("history = %v, want nil when startup fails closed", certs)
@@ -97,11 +95,11 @@ func TestLoadPreviousCAHistoryTransientErrorFailsClosed(t *testing.T) {
 			}).
 			Build()
 
-		if _, err := loadPreviousCAHistory(t.Context(), c, testSignerName, false); err == nil {
-			t.Fatal("loadPreviousCAHistory err = nil, want the read failure so startup fails closed")
+		if _, err := LoadPreviousCAHistory(t.Context(), c, testSignerName, false); err == nil {
+			t.Fatal("LoadPreviousCAHistory err = nil, want the read failure so startup fails closed")
 		}
-		if reads != bootstrapBackoff.Steps {
-			t.Errorf("read the bundle %d times, want %d retries before failing closed", reads, bootstrapBackoff.Steps)
+		if reads != apiRetryBackoff.Steps {
+			t.Errorf("read the bundle %d times, want %d retries before failing closed", reads, apiRetryBackoff.Steps)
 		}
 	})
 }
@@ -158,5 +156,30 @@ func TestFetchPreviousCAsParsesExistingBundle(t *testing.T) {
 	}
 	if len(certs) != 1 || !certs[0].Equal(ca.Cert) {
 		t.Fatalf("history = %v, want the single seeded CA", certs)
+	}
+}
+
+// A CERTIFICATE block that does not parse must fail the read rather than be
+// skipped: the bundle is the controller's only record of its history, so a
+// silently shortened history would be written back on the next publish.
+func TestFetchPreviousCAsCorruptCertificateFailsClosed(t *testing.T) {
+	bundle := &certificatesv1.ClusterTrustBundle{
+		ObjectMeta: metav1.ObjectMeta{Name: signer.ClusterTrustBundleName(testSignerName)},
+		Spec: certificatesv1.ClusterTrustBundleSpec{
+			SignerName:  testSignerName,
+			TrustBundle: "-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n",
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(clientgoscheme.Scheme).
+		WithObjects(bundle).
+		Build()
+
+	certs, err := fetchPreviousCAs(context.Background(), c, testSignerName)
+	if err == nil {
+		t.Fatal("fetchPreviousCAs err = nil, want a parse error so startup fails closed")
+	}
+	if certs != nil {
+		t.Fatalf("history = %v, want nil on a corrupt bundle", certs)
 	}
 }

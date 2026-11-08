@@ -13,7 +13,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
 )
 
 // livePCR returns a PCR carrying a valid stub CSR that expects the pod
@@ -36,8 +36,7 @@ func livePCR(t *testing.T, requestUID, podUID types.UID) (*certificatesv1.PodCer
 }
 
 func stubCert() *podcertificate.PodCertificate {
-	return podcertificate.NewPodCertificate(
-		nil, "pem-chain",
+	return podcertificate.NewPodCertificate("pem-chain",
 		&podcertificate.PodCertificateConfig{},
 		time.Now(), time.Now().Add(time.Hour),
 	)
@@ -54,15 +53,15 @@ func TestProcessCacheMissReadsLive(t *testing.T) {
 	r := &PodCertificateRequestReconciler{Client: cache, APIReader: live, Log: logr.Discard(), Signer: stub}
 	ctx := logr.NewContext(context.Background(), logr.Discard())
 
-	cert, err := r.process(ctx, pcr)
+	cert, err := r.signRequest(ctx, pcr)
 	if err != nil {
-		t.Fatalf("process() error = %v, want nil (live read should find the pod)", err)
+		t.Fatalf("signRequest() error = %v, want nil (live read should find the pod)", err)
 	}
 	if !stub.called {
-		t.Fatal("process() did not reach the signer after the live re-read")
+		t.Fatal("signRequest() did not reach the signer after the live re-read")
 	}
 	if cert == nil {
-		t.Fatal("process() cert = nil, want the signed certificate")
+		t.Fatal("signRequest() cert = nil, want the signed certificate")
 	}
 	// The config must be built from the pod found on the live read.
 	if stub.gotConfig == nil || stub.gotConfig.CommonName != "mypod" {
@@ -84,7 +83,7 @@ func TestProcessStalePodUIDDropped(t *testing.T) {
 	}
 	ctx := logr.NewContext(context.Background(), logr.Discard())
 
-	cert, err := r.process(ctx, pcr)
+	cert, err := r.signRequest(ctx, pcr)
 	if cert != nil || err != nil {
 		t.Fatalf("got (%v, %v), want (nil, nil) drop for a UID-mismatched pod", cert, err)
 	}

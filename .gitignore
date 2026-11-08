@@ -47,3 +47,6 @@ ca-key*
 .claude/worktrees/
 .codegraph/
 .ecc/
+
+# desloppify local state
+.desloppify/

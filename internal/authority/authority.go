@@ -21,8 +21,8 @@ import (
 	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
 )
 
 // The CA state the metrics collector reads at scrape time. Compile-time, so a
@@ -75,7 +75,7 @@ type CertificateAuthority struct {
 
 	// health tracks the recent reload outcomes and whether the watcher has
 	// exited unrecoverably. It is guarded by its own mutex (separate from mu)
-	// so a readiness probe can poll Healthy without contending with a reload
+	// so a readiness probe can poll HealthCheck without contending with a reload
 	// in progress.
 	healthMu         sync.Mutex
 	lastReloadErr    error
@@ -113,22 +113,10 @@ const (
 // reloadFailureThreshold ticks to become eligible for a readiness failure.
 // Raising the interval past reloadFailureGracePeriod / reloadFailureThreshold
 // (3m20s) would make the threshold rather than the grace period the binding
-// constraint in Healthy, so the signer would report NotReady *later* than it
+// constraint in HealthCheck, so the signer would report NotReady *later* than it
 // does today - a slower reconcile delaying the alarm rather than only the
 // repair. At 60s there is ~3.3x of margin.
 const caReconcileInterval = 60 * time.Second
-
-// WithBackDate is an [Option], which configures the [CertificateAuthority] to
-// use the given backdate when signing certificate requests.
-func WithBackDate(val time.Duration) Option {
-	opt := func(ca *CertificateAuthority) error {
-		ca.backDate = val
-
-		return nil
-	}
-
-	return opt
-}
 
 // WithPreviousCABundle is an [Option], which seeds the [CertificateAuthority]
 // with previously known CA certificates. This is useful for bootstrapping the
@@ -262,15 +250,15 @@ func (ca *CertificateAuthority) load() (bool, error) {
 	}
 
 	// Rotate: the outgoing certificate becomes the most recently active entry
-	// in the history. It is appended unconditionally; normalization below
-	// collapses it onto any earlier occurrence of the same certificate, so a
-	// CA that is rotated back in and out again keeps one slot rather than
-	// accumulating one per flap.
-	if ca.certificate != nil && !ca.certificate.Equal(caX509Cert) {
+	// in the history. The fingerprint check above already established that the
+	// material differs, so there is no second case to test for. It is appended
+	// unconditionally; normalization below collapses it onto any earlier
+	// occurrence of the same certificate, so a CA that is rotated back in and
+	// out again keeps one slot rather than accumulating one per flap.
+	if ca.certificate != nil {
 		ca.previousCertificates = append(ca.previousCertificates, ca.certificate)
 	}
 
-	// Set new cert and signer
 	ca.certificate = caX509Cert
 	ca.signer = signer
 	ca.fingerprint = fingerprint
@@ -330,7 +318,7 @@ func validateCACertificate(cert *x509.Certificate, now time.Time) error {
 // fingerprint expresses, so "the same CA" means the same certificate rather
 // than the same position in a slice.
 func (ca *CertificateAuthority) normalizePreviousCertificates() {
-	now := ca.now()
+	now := time.Now()
 
 	kept := make([]*x509.Certificate, 0, len(ca.previousCertificates))
 	for i, cert := range ca.previousCertificates {
@@ -368,7 +356,14 @@ func (ca *CertificateAuthority) normalizePreviousCertificates() {
 	ca.previousCertificates = kept
 }
 
-// Sign is responsible for signing our certificate request configuration.
+// Sign issues a certificate for pcConfig under the current CA and returns it
+// together with the PEM chain (leaf, then CA).
+//
+// Failures caused by the CA itself - none loaded, an expired signer, or a
+// pcConfig.Duration that does not fit inside the remaining CA validity - wrap
+// [ErrCASignerUnusable] and are transient: a CA rotation can make an identical
+// request succeed, so callers requeue rather than record a terminal outcome.
+// Any other error is a fault of the request and is terminal.
 func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConfig) (*podcertificate.PodCertificate, error) {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
@@ -383,7 +378,7 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 		return nil, fmt.Errorf("no CA certificate loaded: %w", ErrCASignerUnusable)
 	}
 
-	now := ca.now()
+	now := time.Now()
 
 	nbf := now.Add(-ca.backDate)
 	if !nbf.Before(ca.certificate.NotAfter) {
@@ -434,40 +429,15 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 		return nil, fmt.Errorf("failed to create certificate for public key type %T: %w", pcConfig.PublicKey, err)
 	}
 
-	caCertPEM := ca.certificateToPEM()
-	issuedCertificatePEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: issuedCertificate,
-	})
-
 	// Certificate chain: issued cert + CA cert
-	certificateChain := string(issuedCertificatePEM) + string(caCertPEM)
+	certificateChain := string(certificatePEM(issuedCertificate)) + string(certificatePEM(ca.certificate.Raw))
 
-	return podcertificate.NewPodCertificate(
-		issuedCertificate,
-		certificateChain,
-		pcConfig,
-		nbf,
-		naf,
-	), nil
+	return podcertificate.NewPodCertificate(certificateChain, pcConfig, nbf, naf), nil
 }
 
-// certificateToPEM returns the CA certificate in PEM format. This method is not
-// safe to be called concurrently. Callers should ensure to acquire the lock
-// before calling this method.
-func (ca *CertificateAuthority) certificateToPEM() []byte {
-	return pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: ca.certificate.Raw,
-	})
-}
-
-// CertificateToPEM returns the CA certificate in PEM format.
-func (ca *CertificateAuthority) CertificateToPEM() []byte {
-	ca.mu.Lock()
-	defer ca.mu.Unlock()
-
-	return ca.certificateToPEM()
+// certificatePEM encodes a DER certificate as a PEM CERTIFICATE block.
+func certificatePEM(der []byte) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
 // TrustBundlePEM returns the current CA certificate followed by any previous
@@ -478,13 +448,9 @@ func (ca *CertificateAuthority) TrustBundlePEM() []byte {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 
-	var bundle []byte // nolint:prealloc
-	bundle = append(bundle, ca.certificateToPEM()...)
-	for _, prevBundle := range ca.previousCertificates {
-		bundle = append(bundle, pem.EncodeToMemory(&pem.Block{
-			Type:  "CERTIFICATE",
-			Bytes: prevBundle.Raw,
-		})...)
+	bundle := certificatePEM(ca.certificate.Raw)
+	for _, cert := range ca.previousCertificates {
+		bundle = append(bundle, certificatePEM(cert.Raw)...)
 	}
 
 	return bundle
@@ -503,15 +469,15 @@ var errWatchChannelClosed = errors.New("ca-watcher: fsnotify channel closed unex
 //
 // This method blocks until the given [context.Context] is canceled. It returns
 // nil on a clean shutdown and a non-nil error if the watch cannot be
-// established or fsnotify closes a channel; in the latter case [Healthy] also
-// reports the failure so a readiness probe can surface it.
+// established or fsnotify closes a channel; in the latter case [HealthCheck]
+// also reports the failure so a readiness probe can surface it.
 func (ca *CertificateAuthority) Watch(ctx context.Context, notify chan<- struct{}) error {
 	logger := log.FromContext(ctx).WithName("ca-watcher")
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return ca.failWatcher(fmt.Errorf("ca-watcher: unable to create fsnotify.Watcher: %w", err))
 	}
-	defer watcher.Close() // nolint:errcheck
+	defer watcher.Close() //nolint:errcheck // nothing to do with a Close error on shutdown
 
 	paths := []string{
 		filepath.Dir(ca.certFile),
@@ -591,33 +557,7 @@ func (ca *CertificateAuthority) watchLoop(
 			// success.
 			wasFailing := ca.reloadFailing()
 			changed, err := ca.reloadWithRetry(ctx, logger)
-			if err != nil {
-				// The last-good CA is retained, so signing keeps working.
-				// Stay watching so a later good write - or the next tick -
-				// recovers; readiness is only affected once the failures
-				// persist (see Healthy).
-				logger.Error(err, "failed to reload CA certificate after retries")
-				continue
-			}
-			if !changed {
-				// A single rotation can drive more than one reload: two
-				// watched directories, events arriving after the drain window,
-				// or a tick that already picked the material up. Only the one
-				// that actually changed the CA is worth publishing.
-				//
-				// Recovery is the exception worth announcing: correcting a
-				// mismatched pair restores the same certificate, so nothing
-				// changed, but "the CA is loadable again" is exactly what an
-				// operator who just fixed it is watching for.
-				if wasFailing {
-					logger.Info("CA certificate reloaded successfully", "recovered", true)
-					continue
-				}
-				logger.V(1).Info("CA certificate on disk is unchanged, nothing to publish")
-				continue
-			}
-			logger.Info("CA certificate reloaded successfully")
-			notifyChanged(notify)
+			ca.reportReload(logger, notify, "filesystem event", wasFailing, changed, err)
 		case err, ok := <-errs:
 			if !ok {
 				return ca.failWatcher(errWatchChannelClosed)
@@ -668,8 +608,18 @@ func (ca *CertificateAuthority) reconcileOnce(logger logr.Logger, notify chan<- 
 	ca.recordReloadResult(err)
 	metrics.CAReloadAttempts.WithLabelValues(reloadResult(changed, err)).Inc()
 
+	ca.reportReload(logger, notify, cause, wasFailing, changed, err)
+}
+
+// reportReload announces the outcome of one reload - failed, changed,
+// recovered or unchanged - and notifies consumers when the material actually
+// changed. It is the single place the four outcomes are told apart, whether the
+// reload was driven by a filesystem event or by the periodic tick.
+func (ca *CertificateAuthority) reportReload(logger logr.Logger, notify chan<- struct{}, cause string, wasFailing, changed bool, err error) {
 	switch {
 	case err != nil:
+		// The last-good CA is retained, so signing keeps working. Readiness is
+		// only affected once the failures persist (see HealthCheck).
 		logger.Error(err, "failed to reload CA certificate; retaining the last-good CA", "cause", cause)
 	case changed:
 		logger.Info("CA certificate reloaded successfully", "cause", cause)
@@ -683,6 +633,10 @@ func (ca *CertificateAuthority) reconcileOnce(logger logr.Logger, notify chan<- 
 		// republishing.
 		logger.Info("CA certificate reloaded successfully", "cause", cause, "recovered", true)
 	default:
+		// A single rotation can drive more than one reload: two watched
+		// directories, events arriving after the drain window, or a tick that
+		// already picked the material up. Only the one that actually changed
+		// the CA is worth publishing.
 		logger.V(1).Info("CA certificate on disk is unchanged", "cause", cause)
 	}
 }
@@ -703,7 +657,7 @@ func notifyChanged(notify chan<- struct{}) {
 // reloadWithRetry attempts to reload the CA, retrying on a bounded linear
 // backoff. A failed attempt leaves the last-good CA in place (see load), so
 // callers keep signing with the previous material until a good reload succeeds.
-// Every attempt is recorded for the readiness probe (see Healthy).
+// Every attempt is recorded for the readiness probe (see HealthCheck).
 // It reports whether the reload changed the CA material, so callers only
 // republish on a real rotation. It returns nil on the first successful reload,
 // ctx.Err() if ctx is canceled, or the final error once the attempt budget is
@@ -768,13 +722,13 @@ func (ca *CertificateAuthority) recordReloadResult(err error) int {
 	if err == nil {
 		ca.reloadFailures = 0
 		ca.firstFailureTime = time.Time{}
-		ca.lastSuccessTime = ca.now()
+		ca.lastSuccessTime = time.Now()
 
 		return 0
 	}
 
 	if ca.reloadFailures == 0 {
-		ca.firstFailureTime = ca.now()
+		ca.firstFailureTime = time.Now()
 	}
 	ca.reloadFailures++
 
@@ -797,7 +751,7 @@ func reloadResult(changed bool, err error) string {
 
 // ReloadHealth reports the consecutive-failure streak and when the CA was last
 // read successfully. It is safe for concurrent use, and takes healthMu rather
-// than mu for the same reason Healthy does: a poller must not contend with a
+// than mu for the same reason HealthCheck does: a poller must not contend with a
 // reload, nor with a signing operation.
 func (ca *CertificateAuthority) ReloadHealth() (int, time.Time) {
 	ca.healthMu.Lock()
@@ -836,13 +790,6 @@ func (ca *CertificateAuthority) TrustBundleSize() int {
 	return 1 + len(ca.previousCertificates)
 }
 
-// now reads the wall clock. Tests that need time to pass run inside a
-// testing/synctest bubble, where time.Now is fake, so no injection point is
-// needed.
-func (ca *CertificateAuthority) now() time.Time {
-	return time.Now()
-}
-
 // failWatcher records the watcher's terminal error and returns it, so a caller
 // can surface health and fail its runnable in a single step.
 func (ca *CertificateAuthority) failWatcher(err error) error {
@@ -852,14 +799,14 @@ func (ca *CertificateAuthority) failWatcher(err error) error {
 	return err
 }
 
-// Healthy reports whether the CA is still tracking its on-disk material. It
-// returns a non-nil error if the file watcher has exited unrecoverably, or if
+// HealthCheck reports whether the CA is still tracking its on-disk material.
+// It returns a non-nil error if the file watcher has exited unrecoverably, or if
 // reloads have been failing persistently: at least reloadFailureThreshold
 // consecutive attempts spanning at least reloadFailureGracePeriod. Reload
 // failures within that grace period are reported as healthy, because the
 // last-good CA is retained and signing keeps working. It is safe for concurrent
 // use and is intended to back a readiness probe.
-func (ca *CertificateAuthority) Healthy() error {
+func (ca *CertificateAuthority) HealthCheck() error {
 	ca.healthMu.Lock()
 	defer ca.healthMu.Unlock()
 
@@ -871,7 +818,7 @@ func (ca *CertificateAuthority) Healthy() error {
 	if ca.lastReloadErr == nil || ca.reloadFailures < reloadFailureThreshold {
 		return nil
 	}
-	failingFor := ca.now().Sub(ca.firstFailureTime)
+	failingFor := time.Since(ca.firstFailureTime)
 	if failingFor < reloadFailureGracePeriod {
 		return nil
 	}

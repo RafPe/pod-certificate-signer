@@ -15,7 +15,7 @@ import (
 // DNS SANs, because truncating would let two pods sharing a prefix impersonate
 // each other. The drop is not fatal - at 64 characters the common name still
 // carries the identity, so the certificate issues - but the operator must be
-// told, so process() emits a Warning event explaining why the default SAN was
+// told, so signRequest() emits a Warning event explaining why the default SAN was
 // dropped.
 func TestProcessLongPodNameEmitsDefaultSANWarning(t *testing.T) {
 	pcr, pod := livePCR(t, "uid-long", "uid-long")
@@ -31,12 +31,12 @@ func TestProcessLongPodNameEmitsDefaultSANWarning(t *testing.T) {
 	}
 	ctx := logr.NewContext(context.Background(), logr.Discard())
 
-	cert, err := r.process(ctx, pcr)
+	cert, err := r.signRequest(ctx, pcr)
 	if err != nil {
-		t.Fatalf("process() error = %v, want nil (the CN carries the identity)", err)
+		t.Fatalf("signRequest() error = %v, want nil (the CN carries the identity)", err)
 	}
 	if cert == nil {
-		t.Fatal("process() cert = nil, want the signed certificate")
+		t.Fatal("signRequest() cert = nil, want the signed certificate")
 	}
 
 	select {

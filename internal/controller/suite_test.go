@@ -1,19 +1,3 @@
-/*
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package controller
 
 import (
@@ -37,8 +21,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/signer"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
 	// +kubebuilder:scaffold:imports
 )
@@ -164,16 +149,10 @@ func startTestManager() {
 	})
 	Expect(err).NotTo(HaveOccurred())
 
-	err = (&PodCertificateRequestReconciler{
-		Client:        mgr.GetClient(),
-		APIReader:     mgr.GetAPIReader(),
-		Log:           ctrl.Log.WithName("envtest"),
-		Scheme:        mgr.GetScheme(),
-		Signer:        pcrSigner,
-		ClusterFqdn:   "cluster.local",
-		EventRecorder: mgr.GetEventRecorder("podcertificate-signer"),
-	}).SetupWithManager(mgr)
+	reconciler, err := NewPodCertificateRequestReconciler(mgr, "envtest", pcrSigner,
+		podcertificate.Options{ClusterFQDN: "cluster.local"})
 	Expect(err).NotTo(HaveOccurred())
+	Expect(reconciler.SetupWithManager(mgr)).To(Succeed())
 
 	go func() {
 		defer GinkgoRecover()

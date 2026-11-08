@@ -17,7 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
 )
 
 const caUnusableSignerName = "example.org/signer"

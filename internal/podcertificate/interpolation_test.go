@@ -1,6 +1,7 @@
 package podcertificate
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -18,7 +19,7 @@ func TestInterpolationResolvesFromPCR(t *testing.T) {
 	pcr.Spec.PodUID = types.UID("abc-123")
 	pcr.Spec.NodeName = types.NodeName("node-1")
 
-	config, err := NewPodCertificateConfig(pcr, testPod(nil), Options{EnableInterpolation: true}, nil, 0)
+	config, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true})
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestInterpolationDisabledRejectsPlaceholders(t *testing.T) {
 		testSignerName + "-cn": "${pod.name}.${pod.namespace}",
 	})
 
-	_, err := NewPodCertificateConfig(pcr, testPod(nil), Options{}, nil, 0)
+	_, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{})
 	if err == nil || !strings.Contains(err.Error(), "disabled") {
 		t.Fatalf("err = %v, want interpolation-disabled error", err)
 	}
@@ -55,7 +56,7 @@ func TestInterpolationDisabledPassesPlainValues(t *testing.T) {
 	})
 
 	// A plain literal value requires the unverified-identities opt-in.
-	config, err := NewPodCertificateConfig(pcr, testPod(nil), Options{AllowUnverifiedIdentities: true}, nil, 0)
+	config, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{AllowUnverifiedIdentities: true})
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}

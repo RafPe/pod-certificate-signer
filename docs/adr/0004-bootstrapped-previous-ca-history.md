@@ -138,7 +138,7 @@ its first minute.
 
 ## More Information
 
-- `internal/kubernetes/authority/authority.go` — `normalizePreviousCertificates`,
+- `internal/authority/authority.go` — `normalizePreviousCertificates`,
   `validateCACertificate`, `WithPreviousCABundle`.
 - `cmd/podcertificate-signer/main.go` — `loadPreviousCAHistory`,
   `errCAHistoryBundleAbsent`, `--require-ca-history`.

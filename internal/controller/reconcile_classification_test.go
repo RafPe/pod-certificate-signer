@@ -24,7 +24,7 @@ func testPCR() *certificatesv1.PodCertificateRequest {
 	}
 }
 
-// process() must drop (nil, nil) when the pod is absent from both the cache and
+// signRequest() must drop (nil, nil) when the pod is absent from both the cache and
 // a live read: the request is stale, not a terminal failure to sign.
 func TestProcessPodNotFoundDropsAsStale(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
@@ -33,13 +33,13 @@ func TestProcessPodNotFoundDropsAsStale(t *testing.T) {
 		Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10),
 	}
 
-	cert, err := r.process(context.Background(), testPCR())
+	cert, err := r.signRequest(context.Background(), testPCR())
 	if cert != nil || err != nil {
 		t.Fatalf("got (%v, %v), want (nil, nil) drop for a stale request", cert, err)
 	}
 }
 
-// process() must treat a non-NotFound pod GET error as transient (not terminal).
+// signRequest() must treat a non-NotFound pod GET error as transient (not terminal).
 func TestProcessPodGetErrorIsTransient(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(newTestScheme(t)).
@@ -51,7 +51,7 @@ func TestProcessPodGetErrorIsTransient(t *testing.T) {
 		Build()
 	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard()}
 
-	cert, err := r.process(context.Background(), testPCR())
+	cert, err := r.signRequest(context.Background(), testPCR())
 	if cert != nil {
 		t.Fatalf("cert = %v, want nil", cert)
 	}
@@ -64,7 +64,7 @@ func TestProcessPodGetErrorIsTransient(t *testing.T) {
 	}
 }
 
-// process() must skip (nil, nil) when the associated pod is being deleted.
+// signRequest() must skip (nil, nil) when the associated pod is being deleted.
 func TestProcessPodBeingDeletedSkips(t *testing.T) {
 	now := metav1.Now()
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
@@ -76,7 +76,7 @@ func TestProcessPodBeingDeletedSkips(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(pod).Build()
 	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard()}
 
-	cert, err := r.process(context.Background(), testPCR())
+	cert, err := r.signRequest(context.Background(), testPCR())
 	if cert != nil || err != nil {
 		t.Fatalf("got (%v, %v), want (nil, nil)", cert, err)
 	}

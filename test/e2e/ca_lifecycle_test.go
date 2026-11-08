@@ -1,22 +1,6 @@
 //go:build e2e
 // +build e2e
 
-/*
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package e2e
 
 import (
@@ -173,13 +157,15 @@ const shortCAValidity = 30 * time.Minute
 //     is non-empty, but the spec's claim is provenance - that it came from the
 //     published ClusterTrustBundle - and only the log line carries that.
 const (
-	// caReloadFailedLine is logged by authority.watchLoop once a reload has
-	// exhausted its retry budget. The error it carries names why, which is what
+	// caReloadFailedLine is logged by authority.reportReload once a reload has
+	// failed - after the retry budget on the event path, or on a single
+	// periodic attempt. The error it carries names why, which is what
 	// distinguishes the invalid-material cases from each other.
-	caReloadFailedLine = "failed to reload CA certificate after retries"
+	caReloadFailedLine = "failed to reload CA certificate; retaining the last-good CA"
 
-	// caBootstrapLine is logged by fetchPreviousCAs when a starting process
-	// seeds its previous-CA history from the published ClusterTrustBundle.
+	// caBootstrapLine is logged by trustbundle.LoadPreviousCAHistory when a
+	// starting process seeds its previous-CA history from the published
+	// ClusterTrustBundle.
 	caBootstrapLine = "bootstrapped previous CA certificates from ClusterTrustBundle"
 )
 

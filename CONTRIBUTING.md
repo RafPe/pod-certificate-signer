@@ -9,7 +9,7 @@ pull requests are all welcome.
 - **Docker** (or another container tool via `CONTAINER_TOOL=podman`)
 - **make**
 
-All other tooling — `controller-gen`, `golangci-lint`, `kind`, `helm`,
+All other tooling — `golangci-lint`, `kind`, `helm`,
 `setup-envtest` — is pinned in `internal/tools/go.mod` and invoked through
 `go tool` by the Makefile. You do not need to install anything else manually.
 

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
 )
 

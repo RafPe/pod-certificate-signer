@@ -4,17 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
 // An empty --signer-name must be rejected fast, before the controller attempts
@@ -44,41 +42,6 @@ func TestValidateFlagsRejectsInvalidClusterFQDN(t *testing.T) {
 			}
 		})
 	}
-}
-
-// The rendered Deployment must pass --cluster-fqdn and
-// --health-probe-bind-address to the manager, so the corresponding chart
-// values actually reach the controller instead of silently falling back to the
-// binary defaults.
-func TestDeploymentRendersConfiguredFlags(t *testing.T) {
-	if _, err := exec.LookPath("helm"); err != nil {
-		t.Skipf("helm not installed: %v", err)
-	}
-
-	out, err := exec.Command(
-		"helm", "template", "pod-certificate-signer", chartDir(t),
-		"--kube-version", "1.37.0",
-		// A CA source is required (the chart fails fast otherwise).
-		"--set", "signer.ca.secretRef.name=test-ca",
-	).CombinedOutput()
-	if err != nil {
-		t.Fatalf("helm template: %v\n%s", err, out)
-	}
-
-	for _, want := range []string{"--cluster-fqdn=", "--health-probe-bind-address="} {
-		if !strings.Contains(string(out), want) {
-			t.Errorf("rendered Deployment is missing flag %q", want)
-		}
-	}
-}
-
-func chartDir(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	return filepath.Join(filepath.Dir(file), "..", "..", "charts", "pod-certificate-signer")
 }
 
 // The manager must bypass the cache for Pods: the controller only does point
@@ -153,57 +116,22 @@ func TestManagerOptionsInsecureMetricsEscapeHatch(t *testing.T) {
 	}
 }
 
-// Compile-time guarantees that both CA runnables opt into controller-runtime's
-// leader-election routing explicitly, rather than relying on the implicit
-// "not a LeaderElectionRunnable ⇒ leader-gated" fallback.
-var (
-	_ manager.Runnable               = (*caWatchRunnable)(nil)
-	_ manager.Runnable               = (*ctbPublisher)(nil)
-	_ manager.LeaderElectionRunnable = (*caWatchRunnable)(nil)
-	_ manager.LeaderElectionRunnable = (*ctbPublisher)(nil)
-)
-
-// leaderGated mirrors how controller-runtime's runnable group routes a
-// Runnable: a runnable that does not implement LeaderElectionRunnable, or that
-// reports NeedLeaderElection() == true, is confined to the leader-election
-// group. Encoding the real rule here means the test guards the behaviour, not
-// just a literal return value.
-func leaderGated(r manager.Runnable) bool {
-	ler, ok := r.(manager.LeaderElectionRunnable)
-	return !ok || ler.NeedLeaderElection()
-}
-
-// TestCARunnablesLeaderElection asserts that the CA file watcher runs on every
-// replica (so standby replicas keep their in-memory CA current and never sign
-// or publish with a stale CA after promotion), while the ClusterTrustBundle
-// publisher remains restricted to the elected leader.
-func TestCARunnablesLeaderElection(t *testing.T) {
-	watcher, publisher := newCARunnables(nil, nil, nil)
-
-	if leaderGated(watcher) {
-		t.Error("caWatchRunnable is leader-gated; want it to run on every replica so standby CAs stay current")
-	}
-	if !leaderGated(publisher) {
-		t.Error("ctbPublisher is not leader-gated; want ClusterTrustBundle writes confined to the leader")
-	}
-}
-
-// stubHealth is a test double for the CA health surface consumed by the readyz
+// stubHealth is a test double for the health surface consumed by the readyz
 // check.
 type stubHealth struct{ err error }
 
-func (s stubHealth) Healthy() error { return s.err }
+func (s stubHealth) HealthCheck() error { return s.err }
 
-// TestCAReadyzCheck asserts that the readiness check passes when the CA reports
+// TestReadyzCheck asserts that the readiness check passes when the CA reports
 // healthy and fails when it reports a watcher/reload problem, so a replica that
 // can no longer track CA rotations is removed from readiness.
-func TestCAReadyzCheck(t *testing.T) {
-	if err := caReadyzCheck(stubHealth{err: nil})(nil); err != nil {
+func TestReadyzCheck(t *testing.T) {
+	if err := readyzCheck(stubHealth{err: nil})(nil); err != nil {
 		t.Errorf("readyz check = %v, want nil when the CA is healthy", err)
 	}
 
 	want := errors.New("ca watcher is down")
-	if err := caReadyzCheck(stubHealth{err: want})(nil); err == nil {
+	if err := readyzCheck(stubHealth{err: want})(nil); err == nil {
 		t.Error("readyz check must fail when the CA reports unhealthy")
 	}
 }
@@ -229,11 +157,12 @@ func TestAnnotationInterpolationEnabledByDefault(t *testing.T) {
 	}
 }
 
-// The binary default and the chart default are two independent copies of one
-// decision. Almost nobody runs the binary directly - the chart is the shipped
-// interface - so a flip that lands on only one side ships a posture the docs do
-// not describe, and does it silently.
-func TestChartInterpolationDefaultMatchesBinary(t *testing.T) {
+// The binary defaults and the chart defaults are independent copies of the
+// same decisions. Almost nobody runs the binary directly - the chart is the
+// shipped interface - so a flip that lands on only one side ships a posture
+// the docs do not describe, and does it silently. Every security-relevant
+// default is pinned here against its named binary constant.
+func TestChartSecurityDefaultsMatchBinary(t *testing.T) {
 	path := filepath.Join(chartDir(t), "values.yaml")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -243,20 +172,69 @@ func TestChartInterpolationDefaultMatchesBinary(t *testing.T) {
 	var values struct {
 		Signer struct {
 			EnableAnnotationInterpolation *bool `json:"enable_annotation_interpolation"`
+			AllowUnverifiedIdentities     *bool `json:"allow_unverified_identities"`
 		} `json:"signer"`
+		Metrics struct {
+			Insecure *bool `json:"insecure"`
+		} `json:"metrics"`
 	}
 	if err := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096).Decode(&values); err != nil {
 		t.Fatalf("decoding %s: %v", path, err)
 	}
 
-	got := values.Signer.EnableAnnotationInterpolation
-	if got == nil {
-		t.Fatalf("%s does not set signer.enable_annotation_interpolation; the chart would fall back to "+
-			"the Go zero value and render --enable-annotation-interpolation=false", path)
+	cases := []struct {
+		value  string
+		got    *bool
+		binary bool
+	}{
+		{"signer.enable_annotation_interpolation", values.Signer.EnableAnnotationInterpolation, defaultEnableAnnotationInterpolation},
+		{"signer.allow_unverified_identities", values.Signer.AllowUnverifiedIdentities, defaultAllowUnverifiedIdentities},
+		// metrics.insecure is the inverse of --metrics-secure.
+		{"metrics.insecure", values.Metrics.Insecure, !defaultMetricsSecure},
 	}
-	if *got != defaultEnableAnnotationInterpolation {
-		t.Errorf("chart signer.enable_annotation_interpolation = %t, binary "+
-			"defaultEnableAnnotationInterpolation = %t; the two must agree",
-			*got, defaultEnableAnnotationInterpolation)
+	for _, tc := range cases {
+		if tc.got == nil {
+			t.Errorf("%s does not set %s; the chart would fall back to the Go zero value", path, tc.value)
+			continue
+		}
+		if *tc.got != tc.binary {
+			t.Errorf("chart %s = %t, binary default = %t; the two must agree", tc.value, *tc.got, tc.binary)
+		}
+	}
+}
+
+// Flag defaults are registered on a private FlagSet here, so the shipped
+// defaults and the help text are asserted against the real registration
+// rather than against a side-channel constant.
+func TestRegisterFlagsDefaults(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	f := registerFlags(fs)
+	if err := fs.Parse(nil); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	defaults := []struct {
+		flag string
+		got  bool
+		want bool
+	}{
+		{"enable-annotation-interpolation", f.certificate.EnableInterpolation, defaultEnableAnnotationInterpolation},
+		{"allow-unverified-identities", f.certificate.AllowUnverifiedIdentities, defaultAllowUnverifiedIdentities},
+		{"metrics-secure", f.metricsSecure, defaultMetricsSecure},
+		// Kubelet CSR SANs are opt-in.
+		{"honor-csr-sans", f.certificate.HonorCSRSANs, false},
+	}
+	for _, d := range defaults {
+		if d.got != d.want {
+			t.Errorf("--%s defaults to %t, want %t", d.flag, d.got, d.want)
+		}
+	}
+
+	// Leader election has used a Lease for as long as the chart has granted
+	// coordination.k8s.io RBAC; help text naming a ConfigMap sends an operator
+	// debugging a stuck election to the wrong object.
+	help := fs.Lookup("leader-election-id").Usage
+	if !strings.Contains(help, "Lease") || strings.Contains(strings.ToLower(help), "configmap") {
+		t.Errorf("--leader-election-id help = %q, want it to name the Lease", help)
 	}
 }

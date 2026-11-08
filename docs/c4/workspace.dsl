@@ -20,8 +20,8 @@ workspace "pod-certificate-signer" "Signer for the built-in PodCertificateReques
             controller = container "Controller" "Kubernetes controller (controller-runtime manager) that runs the reconciler, the CA watcher and the ClusterTrustBundle publisher as a single leader-elected deployment." "Go, distroless/static:nonroot" {
                 reconciler = component "PodCertificateRequest reconciler" "Watches PodCertificateRequests for the configured signer name; validates the request and its annotation configuration, then issues or denies." "Go, controller-runtime"
                 config = component "Certificate configuration" "Parses the annotation contract (cn/san/ip-san/eku/duration/refresh/uris), enforces identity constraints, resolves ${...} interpolation and validates against the apiserver status contract." "Go"
-                authority = component "Certificate authority" "Holds the in-memory CA, hot-reloads the cert/key on disk change via an fsnotify watcher, and retains previous CAs across rotation." "Go, fsnotify + crypto/x509"
-                signerCore = component "Signer" "Builds and signs the leaf certificate from the CSR and resolved configuration; assembles the trust bundle for the signer." "Go, crypto/x509"
+                authority = component "Certificate authority" "Holds the in-memory CA, hot-reloads the cert/key on disk change via an fsnotify watcher, fits requested lifetimes to the CA validity, builds and signs leaf certificates, and retains previous CAs across rotation as the trust bundle." "Go, fsnotify + crypto/x509"
+                signerCore = component "Signer" "Scopes signing to one signer name, parses the kubelet CSR, and names and assembles the ClusterTrustBundle object from the authority's trust bundle." "Go, crypto/x509"
                 ctbPublisher = component "ClusterTrustBundle publisher" "Leader-gated runnable that reconciles the signer's ClusterTrustBundle towards the current CA on reload events and a drift-repair tick." "Go, controller-runtime"
                 probes = component "Health & readiness" "Serves healthz/readyz; readiness is gated on CA watcher/reload health and on the ClusterTrustBundle publisher outcome." "Go, healthz"
                 metrics = component "Metrics" "Exposes Prometheus metrics, including ClusterTrustBundle publish failures." "Go, Prometheus"
@@ -44,12 +44,11 @@ workspace "pod-certificate-signer" "Signer for the built-in PodCertificateReques
         controller -> caSource "Reads and watches the CA files" "read-only mount"
 
         # Component level
+        reconciler -> signerCore "Parses the CSR; signs on success"
         reconciler -> config "Validates and resolves the requested configuration"
-        reconciler -> signerCore "Signs on success / records deny outcome"
-        config -> authority "Fits the certificate lifetime inside CA validity"
         signerCore -> authority "Signs the leaf with the current CA key"
         authority -> caSource "Watches and reloads the cert/key" "fsnotify"
-        ctbPublisher -> authority "Reads the current trust bundle PEM"
+        ctbPublisher -> signerCore "Reads the assembled ClusterTrustBundle"
         ctbPublisher -> apiServer "Creates/patches the ClusterTrustBundle" "HTTPS"
         probes -> authority "Polls CA watcher/reload health"
         probes -> ctbPublisher "Polls last publish outcome"

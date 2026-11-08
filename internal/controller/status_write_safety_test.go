@@ -41,7 +41,7 @@ func TestRecordOutcomeNoEventWhenStatusWriteFails(t *testing.T) {
 	rec := events.NewFakeRecorder(10)
 	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: rec}
 
-	err := r.recordOutcome(context.Background(), pcr,
+	_, err := r.recordOutcome(context.Background(), pcr,
 		certificatesv1.PodCertificateRequestConditionTypeIssued, ReasonCertificateIssued, "issued", corev1.EventTypeNormal)
 	if err == nil {
 		t.Fatal("recordOutcome() error = nil, want the status write error to propagate")
@@ -149,7 +149,7 @@ func TestReconcileConflictPreservesConcurrentTerminalOutcome(t *testing.T) {
 						Type:               certificatesv1.PodCertificateRequestConditionTypeDenied,
 						Status:             metav1.ConditionTrue,
 						LastTransitionTime: metav1.Now(),
-						Reason:             string(ReasonInvalidUserAnnotations),
+						Reason:             string(ReasonInvalidUserConfig),
 						Message:            "denied by a concurrent writer",
 					}}
 					if err := c.Status().Update(ctx, concurrent); err != nil {

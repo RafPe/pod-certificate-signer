@@ -102,9 +102,9 @@ func TestHealthyGracePeriodForReloadFailures(t *testing.T) {
 					ca.recordReloadResult(nil)
 				}
 
-				err := ca.Healthy()
+				err := ca.HealthCheck()
 				if gotHealthy := err == nil; gotHealthy != tt.wantHealthy {
-					t.Errorf("Healthy() after %d failure(s) over %v = %v, want healthy = %t",
+					t.Errorf("HealthCheck() after %d failure(s) over %v = %v, want healthy = %t",
 						tt.failures, tt.elapsed, err, tt.wantHealthy)
 				}
 			})
@@ -135,13 +135,13 @@ func TestPersistentlyUnloadableCAEventuallyFailsReadiness(t *testing.T) {
 
 		// Still inside the grace window: the last-good CA keeps signing, so the
 		// replica must stay ready.
-		if err := ca.Healthy(); err != nil {
-			t.Errorf("Healthy() immediately after a failed reload = %v, want nil", err)
+		if err := ca.HealthCheck(); err != nil {
+			t.Errorf("HealthCheck() immediately after a failed reload = %v, want nil", err)
 		}
 
 		time.Sleep(reloadFailureGracePeriod)
-		if err := ca.Healthy(); err == nil {
-			t.Error("Healthy() = nil after the grace period elapsed, want an error")
+		if err := ca.HealthCheck(); err == nil {
+			t.Error("HealthCheck() = nil after the grace period elapsed, want an error")
 		}
 	})
 }
@@ -171,7 +171,7 @@ func TestHealthyFailsImmediatelyOnWatcherExit(t *testing.T) {
 
 	// No time passes here: the watcher error is not subject to the grace
 	// period.
-	if err := ca.Healthy(); !errors.Is(err, errWatchChannelClosed) {
-		t.Errorf("Healthy() after the watcher exited = %v, want %v", err, errWatchChannelClosed)
+	if err := ca.HealthCheck(); !errors.Is(err, errWatchChannelClosed) {
+		t.Errorf("HealthCheck() after the watcher exited = %v, want %v", err, errWatchChannelClosed)
 	}
 }

@@ -1,0 +1,2 @@
+kind: Changed
+body: 'The deprecated pod-annotation configuration path is now validated like `spec.unverifiedUserAnnotations`: a pod annotation that carries the signer''s prefix but names no known item (a typo such as `<signer>-sna`) denies the request instead of silently falling back to the defaults, and every value the signer still reads from a pod annotation is logged so remaining users can be found. The fallback itself is removed in 4.0.0.'

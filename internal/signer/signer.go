@@ -8,14 +8,13 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 
 	certificatesv1 "k8s.io/api/certificates/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
 )
 
 // Signer signs pod certificate requests for a single signer name using a
@@ -44,10 +43,15 @@ func New(signerName string, ca *authority.CertificateAuthority) (*Signer, error)
 	return ret, nil
 }
 
-// SignPodCertificate signs a certificate for the given configuration. The
-// configuration should have already been validated before ending up here.
-func (s *Signer) SignPodCertificate(pcrConfig *podcertificate.PodCertificateConfig) (*podcertificate.PodCertificate, error) {
-	return s.certificateAuthority.Sign(pcrConfig)
+// SignPodCertificate issues a certificate for pcConfig under the current CA.
+// It does not validate pcConfig; callers run [podcertificate.PodCertificateConfig.Validate]
+// first, since a validation failure is the requester's fault and a terminal
+// denial, while the errors this method returns follow the
+// [authority.CertificateAuthority.Sign] contract: those wrapping
+// [authority.ErrCASignerUnusable] are transient, anything else is a fault of
+// the request.
+func (s *Signer) SignPodCertificate(pcConfig *podcertificate.PodCertificateConfig) (*podcertificate.PodCertificate, error) {
+	return s.certificateAuthority.Sign(pcConfig)
 }
 
 // IsSignerNameMatching reports whether the given signer name matches the one
@@ -61,25 +65,10 @@ func (s *Signer) Name() string {
 	return s.signerName
 }
 
-// CSRInfo holds the values extracted from a kubelet-generated PKCS#10
-// certificate request: the subject public key, and any requested subject
-// alternative names.
-//
-// Today kubelet generates completely empty CSRs, so the SAN slices are
-// always empty - the KEP plans for pod authors to request DNS and IP SANs
-// which kubelet will embed in the CSR, and extracting them now keeps the
-// signer ready for that.
-type CSRInfo struct {
-	PublicKey          crypto.PublicKey
-	PublicKeyAlgorithm x509.PublicKeyAlgorithm
-	DNSNames           []string
-	IPAddresses        []net.IP
-}
-
 // ParseCSR extracts and classifies the public key of a DER-encoded PKCS#10
 // certificate request, along with any SANs requested in it. The CSR signature
 // is already verified by the kube-apiserver during admission.
-func ParseCSR(csrDER []byte) (*CSRInfo, error) {
+func ParseCSR(csrDER []byte) (*podcertificate.CSR, error) {
 	csr, err := x509.ParseCertificateRequest(csrDER)
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse PKCS#10 CSR: %w", err)
@@ -90,7 +79,7 @@ func ParseCSR(csrDER []byte) (*CSRInfo, error) {
 		return nil, err
 	}
 
-	return &CSRInfo{
+	return &podcertificate.CSR{
 		PublicKey:          publicKey,
 		PublicKeyAlgorithm: publicKeyAlgorithm,
 		DNSNames:           csr.DNSNames,

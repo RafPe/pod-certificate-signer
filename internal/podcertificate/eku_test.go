@@ -1,6 +1,7 @@
 package podcertificate
 
 import (
+	"context"
 	"crypto/x509"
 	"reflect"
 	"testing"
@@ -20,7 +21,7 @@ func TestEKUAnnotation(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			pcr := testPCR(map[string]string{testSignerName + "-eku": tc.value})
-			config, err := NewPodCertificateConfig(pcr, testPod(nil), Options{}, nil, 0)
+			config, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{})
 			if err != nil {
 				t.Fatalf("NewPodCertificateConfig: %v", err)
 			}
@@ -38,7 +39,7 @@ func TestEKUAnnotationInvalid(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			pcr := testPCR(map[string]string{testSignerName + "-eku": value})
-			if _, err := NewPodCertificateConfig(pcr, testPod(nil), Options{}, nil, 0); err == nil {
+			if _, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{}); err == nil {
 				t.Fatalf("want error for eku %q, got nil", value)
 			}
 		})
@@ -46,7 +47,7 @@ func TestEKUAnnotationInvalid(t *testing.T) {
 }
 
 func TestEKUDefaultServerAuthOnly(t *testing.T) {
-	config, err := NewPodCertificateConfig(testPCR(nil), testPod(nil), Options{}, nil, 0)
+	config, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(nil), nil, Options{})
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}
@@ -69,7 +70,7 @@ func TestKeyUsagePerAlgorithm(t *testing.T) {
 		{x509.Ed25519, x509.KeyUsageDigitalSignature},
 	}
 	for _, tc := range cases {
-		config, err := NewPodCertificateConfig(testPCR(nil), testPod(nil), Options{}, nil, tc.alg)
+		config, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(nil), &CSR{PublicKeyAlgorithm: tc.alg}, Options{})
 		if err != nil {
 			t.Fatalf("NewPodCertificateConfig: %v", err)
 		}

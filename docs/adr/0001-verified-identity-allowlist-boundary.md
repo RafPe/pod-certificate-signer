@@ -13,7 +13,7 @@ Since [#26](https://github.com/RafPe/pod-certificate-signer/issues/26) /
 enforces a default-deny identity model. Every `cn`, `san` and `uris` value —
 literal or `${...}`-interpolated — must be an exact string member of the set
 returned by `verifiedIdentities`
-(`internal/kubernetes/podcertificate/podcertificate.go:505-548`), computed
+(`internal/podcertificate/podcertificate.go:505-548`), computed
 solely from the apiserver-verified fields of the `PodCertificateRequest`. The
 exact-equality check is what closes literal-injection loopholes such as
 `${pod.name}.attacker.com`.
@@ -142,11 +142,11 @@ its own issue and ADR.
 ## Implementation Plan
 
 * **Affected paths**:
-  * `internal/kubernetes/podcertificate/podcertificate.go` —
+  * `internal/podcertificate/podcertificate.go` —
     `verifiedIdentities` (`:505-548`) is the sole implementation of this
     decision. The "Deliberately excluded" comment on its `if sa != ""` branch
     names the excluded forms and cites this ADR.
-  * `internal/kubernetes/podcertificate/identity_constraints_test.go` — the
+  * `internal/podcertificate/identity_constraints_test.go` — the
     characterization tests that lock it.
 * **Dependencies**: none.
 * **Patterns to follow**: identity checks go through `assertVerifiedIdentity`
@@ -162,7 +162,7 @@ its own issue and ADR.
 
 - [x] `verifiedIdentities` contains no `<sa>.<ns>.svc` or `<sa>.<ns>.pod` entry,
       in either bare or FQDN-suffixed form.
-- [x] `go test ./internal/kubernetes/podcertificate/... -run ServiceAccount`
+- [x] `go test ./internal/podcertificate/... -run ServiceAccount`
       passes, covering both the denial of the four service-account Service/pod
       DNS forms and the acceptance of the service-account SPIFFE ID.
 - [x] The `if sa != ""` branch of `verifiedIdentities` carries a comment naming

@@ -129,8 +129,8 @@ flowchart TB
     subgraph controller["Controller [Container: Go]"]
         reconciler["PodCertificateRequest reconciler<br/><i>[Component]</i><br/>Validates the request, then issues or denies"]
         config["Certificate configuration<br/><i>[Component]</i><br/>Annotation contract, identity constraints,<br/>interpolation, status-contract validation"]
-        authority["Certificate authority<br/><i>[Component]</i><br/>In-memory CA, fsnotify hot-reload,<br/>retains previous CAs across rotation"]
-        signerCore["Signer<br/><i>[Component]</i><br/>Builds &amp; signs the leaf certificate;<br/>assembles the trust bundle"]
+        authority["Certificate authority<br/><i>[Component]</i><br/>In-memory CA, fsnotify hot-reload,<br/>fits lifetimes to CA validity, signs leaves,<br/>retains previous CAs across rotation"]
+        signerCore["Signer<br/><i>[Component]</i><br/>Scopes signing to one signer name, parses<br/>the kubelet CSR, names &amp; assembles the<br/>ClusterTrustBundle object"]
         ctb["ClusterTrustBundle publisher<br/><i>[Component]</i><br/>Leader-gated; reconciles the bundle<br/>towards the current CA"]
         probes["Health &amp; readiness<br/><i>[Component]</i><br/>healthz/readyz gated on CA and<br/>publisher health"]
         metrics["Metrics<br/><i>[Component]</i><br/>Prometheus, incl. publish failures"]
@@ -138,12 +138,11 @@ flowchart TB
 
     api -->|PodCertificateRequest events| reconciler
     reconciler -->|Reads requesting pod, updates status| api
-    reconciler -->|Resolves configuration| config
+    reconciler -->|Parses the CSR, resolves configuration| config
     reconciler -->|Signs on success| signerCore
-    config -->|Fits lifetime to CA validity| authority
     signerCore -->|Signs with current CA key| authority
     authority -->|Watches &amp; reloads cert/key| ca
-    ctb -->|Reads current trust bundle PEM| authority
+    ctb -->|Reads the assembled ClusterTrustBundle| signerCore
     ctb -->|Creates/patches ClusterTrustBundle| api
     probes -->|Polls watcher/reload health| authority
     probes -->|Polls last publish outcome| ctb
@@ -155,8 +154,8 @@ flowchart TB
 | --- | --- | --- |
 | **PodCertificateRequest reconciler** | Watches `PodCertificateRequest`s for the configured signer name, reads the requesting pod (uncached `get`), drives validation and records the `Issued`/`Denied`/`Failed` outcome. | No — runs on every replica |
 | **Certificate configuration** | Parses the annotation contract, enforces identity constraints, resolves `${...}` interpolation, and validates duration/refresh/EKU against the apiserver status contract. | No |
-| **Certificate authority** | Holds the in-memory CA, hot-reloads the cert/key when the mounted files change (fsnotify), and retains up to `--max-previous-ca-certs` previous CAs across rotation. | No — every replica keeps its CA current |
-| **Signer** | Builds and signs the leaf certificate from the CSR and resolved configuration; assembles the trust bundle PEM. | No |
+| **Certificate authority** | Holds the in-memory CA, hot-reloads the cert/key when the mounted files change (fsnotify), fits the requested lifetime inside the CA validity, builds and signs the leaf certificate, and retains up to `--max-previous-ca-certs` previous CAs across rotation as the trust bundle PEM. | No — every replica keeps its CA current |
+| **Signer** | Scopes signing to one signer name, parses the kubelet-generated CSR, and names and assembles the `ClusterTrustBundle` object from the authority's trust bundle. | No |
 | **ClusterTrustBundle publisher** | Reconciles the signer's `ClusterTrustBundle` towards the current CA on reload events and a 10-minute drift-repair tick, with single-flight retries. | **Yes** — only the elected leader writes the shared resource |
 | **Health & readiness** | Serves `healthz`/`readyz`; readiness is gated on CA watcher/reload health and the publisher's last outcome. | No |
 | **Metrics** | Exposes Prometheus metrics under the `podcertificatesigner_` prefix, alongside controller-runtime's. The surface is bounded by [ADR-0005](adr/0005-bounded-metrics-surface.md): no label carries a pod, request or certificate identity. | No |
