@@ -1,0 +1,2 @@
+kind: Changed
+body: 'The denial for an IP address requested in the CSR under `--honor-csr-sans`, without `--allow-unverified-identities`, now starts with `CSR IP addresses:`, matching the `CSR DNS names:` prefix on the DNS path.'
