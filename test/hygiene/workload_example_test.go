@@ -92,7 +92,7 @@ func TestWorkloadPodExampleIssuesUnderIdentityConstraints(t *testing.T) {
 			// property under test. EnableInterpolation is on because the
 			// example is written in ${...}; the chart shipping it on is what
 			// the cmd-side test named above asserts.
-			config, err := podcertificate.NewPodCertificateConfig(context.Background(), pcr, workload, nil,
+			config, err := podcertificate.NewConfig(context.Background(), pcr, workload, nil,
 				podcertificate.Options{EnableInterpolation: true})
 			if err != nil {
 				t.Fatalf("%s requests an identity the signer does not grant: %v\n"+

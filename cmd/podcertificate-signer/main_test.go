@@ -216,15 +216,15 @@ func TestRegisterFlagsDefaults(t *testing.T) {
 		got  bool
 		want bool
 	}{
-		{"enable-annotation-interpolation", f.certificate.EnableInterpolation, defaultEnableAnnotationInterpolation},
-		{"allow-unverified-identities", f.certificate.AllowUnverifiedIdentities, defaultAllowUnverifiedIdentities},
+		{"enable-annotation-interpolation", f.certOpts.EnableInterpolation, defaultEnableAnnotationInterpolation},
+		{"allow-unverified-identities", f.certOpts.AllowUnverifiedIdentities, defaultAllowUnverifiedIdentities},
 		{"metrics-secure", f.manager.metricsSecure, defaultMetricsSecure},
-		{"allow-pod-annotations", f.certificate.AllowPodAnnotations, defaultAllowPodAnnotations},
+		{"allow-pod-annotations", f.certOpts.AllowPodAnnotations, defaultAllowPodAnnotations},
 		// Kubelet CSR SANs are opt-in.
-		{"honor-csr-sans", f.certificate.HonorCSRSANs, false},
+		{"honor-csr-sans", f.certOpts.HonorCSRSANs, false},
 	}
-	if f.certificate.ClusterFQDN != podcertificate.DefaultClusterFQDN {
-		t.Errorf("--cluster-fqdn defaults to %q, want %q", f.certificate.ClusterFQDN, podcertificate.DefaultClusterFQDN)
+	if f.certOpts.ClusterFQDN != podcertificate.DefaultClusterFQDN {
+		t.Errorf("--cluster-fqdn defaults to %q, want %q", f.certOpts.ClusterFQDN, podcertificate.DefaultClusterFQDN)
 	}
 	for _, d := range defaults {
 		if d.got != d.want {

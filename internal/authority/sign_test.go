@@ -17,13 +17,13 @@ import (
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
 )
 
-func testConfig(t *testing.T) *podcertificate.PodCertificateConfig {
+func testConfig(t *testing.T) *podcertificate.Config {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate leaf key: %v", err)
 	}
-	return &podcertificate.PodCertificateConfig{
+	return &podcertificate.Config{
 		CommonName:         "mypod",
 		DNSNames:           []string{"mypod.myns.svc.cluster.local"},
 		Duration:           time.Hour,

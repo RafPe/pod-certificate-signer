@@ -32,7 +32,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/outcome"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -54,7 +54,7 @@ var _ = Describe("PodCertificateRequest Controller", func() {
 
 			By("waiting for the controller to record the Issued condition")
 			issued := waitForCondition(pcr, certificatesv1.PodCertificateRequestConditionTypeIssued)
-			Expect(issued.Reason).To(Equal(string(metrics.ReasonCertificateIssued)))
+			Expect(issued.Reason).To(Equal(string(outcome.CertificateIssued)))
 
 			By("reading back the status the API server persisted")
 			// Getting the object back with these fields set is the assertion
@@ -107,7 +107,7 @@ var _ = Describe("PodCertificateRequest Controller", func() {
 
 			By("waiting for the controller to record the Denied condition")
 			denied := waitForCondition(pcr, certificatesv1.PodCertificateRequestConditionTypeDenied)
-			Expect(denied.Reason).To(Equal(string(metrics.ReasonInvalidUserConfig)))
+			Expect(denied.Reason).To(Equal(string(outcome.InvalidUserConfig)))
 
 			By("checking the API server accepted the terminal write with cleared certificate fields")
 			var got certificatesv1.PodCertificateRequest
@@ -145,7 +145,7 @@ var _ = Describe("PodCertificateRequest Controller", func() {
 				Type:               certificatesv1.PodCertificateRequestConditionTypeIssued,
 				Status:             metav1.ConditionTrue,
 				LastTransitionTime: metav1.Now(),
-				Reason:             string(metrics.ReasonCertificateIssued),
+				Reason:             string(outcome.CertificateIssued),
 				Message:            "Certificate successfully issued",
 			}}
 			pcr.Status.CertificateChain = "not a PEM certificate"
@@ -227,7 +227,7 @@ func issuedEventsFor(g Gomega, pcr *certificatesv1.PodCertificateRequest) []core
 
 	var out []corev1.Event
 	for _, e := range list.Items {
-		if e.InvolvedObject.Name == pcr.Name && e.Reason == string(metrics.ReasonCertificateIssued) {
+		if e.InvolvedObject.Name == pcr.Name && e.Reason == string(outcome.CertificateIssued) {
 			out = append(out, e)
 		}
 	}

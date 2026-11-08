@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/outcome"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
 )
 
@@ -30,14 +31,14 @@ import (
 // name is the signer name the reconciler built around it answers for.
 type stubSigner struct {
 	name      string
-	cert      *podcertificate.PodCertificate
+	cert      *podcertificate.Certificate
 	err       error
 	called    bool
 	signings  int
-	gotConfig *podcertificate.PodCertificateConfig
+	gotConfig *podcertificate.Config
 }
 
-func (s *stubSigner) Sign(cfg *podcertificate.PodCertificateConfig) (*podcertificate.PodCertificate, error) {
+func (s *stubSigner) Sign(cfg *podcertificate.Config) (*podcertificate.Certificate, error) {
 	s.called = true
 	s.signings++
 	s.gotConfig = cfg
@@ -73,7 +74,7 @@ func newSigningHarness(t *testing.T, stub *stubSigner) (*PodCertificateRequestRe
 // substitute a stub. With a stub returning a certificate, signRequest() runs the
 // full pipeline and hands back exactly that certificate.
 func TestProcessReachesSigner(t *testing.T) {
-	want := &podcertificate.PodCertificate{CertificateChain: "pem-chain", Config: &podcertificate.PodCertificateConfig{}, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour)}
+	want := &podcertificate.Certificate{CertificateChain: "pem-chain", Config: &podcertificate.Config{}, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour)}
 	stub := &stubSigner{name: "example.org/signer", cert: want}
 	r, pcr, ctx := newSigningHarness(t, stub)
 
@@ -122,8 +123,8 @@ func TestProcessLongPodNameEmitsDefaultSANWarning(t *testing.T) {
 		if !strings.Contains(e, corev1.EventTypeWarning) {
 			t.Errorf("event = %q, want a %s event", e, corev1.EventTypeWarning)
 		}
-		if !strings.Contains(e, string(ReasonDefaultSANSkipped)) {
-			t.Errorf("event = %q, want reason %s", e, ReasonDefaultSANSkipped)
+		if !strings.Contains(e, string(outcome.DefaultSANSkipped)) {
+			t.Errorf("event = %q, want reason %s", e, outcome.DefaultSANSkipped)
 		}
 		if !strings.Contains(e, "DNS label limit") {
 			t.Errorf("event = %q, want it to explain the DNS label limit", e)
@@ -204,8 +205,8 @@ func livePCR(t *testing.T, requestUID, podUID types.UID) (*certificatesv1.PodCer
 	return pcr, pod
 }
 
-func stubCert() *podcertificate.PodCertificate {
-	return &podcertificate.PodCertificate{CertificateChain: "pem-chain", Config: &podcertificate.PodCertificateConfig{}, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour)}
+func stubCert() *podcertificate.Certificate {
+	return &podcertificate.Certificate{CertificateChain: "pem-chain", Config: &podcertificate.Config{}, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour)}
 }
 
 // When the manager cache misses but the pod exists on a live read, the
@@ -236,7 +237,7 @@ func TestProcessCacheMissReadsLive(t *testing.T) {
 }
 
 // When the pod that exists has a UID different from the request's PodUID, the
-// request is stale: the controller must drop it (nil, nil) and must NOT sign
+// request is stale: the controller must drop it (errDropRequest) and must NOT sign
 // with the wrong pod's identity.
 func TestProcessStalePodUIDDropped(t *testing.T) {
 	pcr, stalePod := livePCR(t, "uid-1", "uid-stale")
@@ -250,8 +251,8 @@ func TestProcessStalePodUIDDropped(t *testing.T) {
 	ctx := logr.NewContext(context.Background(), logr.Discard())
 
 	cert, err := r.signRequest(ctx, pcr)
-	if cert != nil || err != nil {
-		t.Fatalf("got (%v, %v), want (nil, nil) drop for a UID-mismatched pod", cert, err)
+	if cert != nil || !errors.Is(err, errDropRequest) {
+		t.Fatalf("got (%v, %v), want (nil, errDropRequest) for a UID-mismatched pod", cert, err)
 	}
 	if stub.called {
 		t.Fatal("signer must not run for a UID-mismatched (stale) pod")
@@ -265,7 +266,7 @@ func testPCR() *certificatesv1.PodCertificateRequest {
 	}
 }
 
-// signRequest() must drop (nil, nil) when the pod is absent from both the cache and
+// signRequest() must drop (errDropRequest) when the pod is absent from both the cache and
 // a live read: the request is stale, not a terminal failure to sign.
 func TestProcessPodNotFoundDropsAsStale(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
@@ -275,8 +276,8 @@ func TestProcessPodNotFoundDropsAsStale(t *testing.T) {
 	}
 
 	cert, err := r.signRequest(context.Background(), testPCR())
-	if cert != nil || err != nil {
-		t.Fatalf("got (%v, %v), want (nil, nil) drop for a stale request", cert, err)
+	if cert != nil || !errors.Is(err, errDropRequest) {
+		t.Fatalf("got (%v, %v), want (nil, errDropRequest) for a stale request", cert, err)
 	}
 }
 
@@ -305,7 +306,7 @@ func TestProcessPodGetErrorIsTransient(t *testing.T) {
 	}
 }
 
-// signRequest() must skip (nil, nil) when the associated pod is being deleted.
+// signRequest() must drop (errDropRequest) when the associated pod is being deleted.
 func TestProcessPodBeingDeletedSkips(t *testing.T) {
 	now := metav1.Now()
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
@@ -318,8 +319,8 @@ func TestProcessPodBeingDeletedSkips(t *testing.T) {
 	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard()}
 
 	cert, err := r.signRequest(context.Background(), testPCR())
-	if cert != nil || err != nil {
-		t.Fatalf("got (%v, %v), want (nil, nil)", cert, err)
+	if cert != nil || !errors.Is(err, errDropRequest) {
+		t.Fatalf("got (%v, %v), want (nil, errDropRequest)", cert, err)
 	}
 }
 

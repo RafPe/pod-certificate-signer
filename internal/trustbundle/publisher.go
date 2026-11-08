@@ -1,8 +1,3 @@
-// Package trustbundle keeps the signer's ClusterTrustBundle in step with the
-// certificate authority: a runnable that reloads the CA when its files change,
-// a leader-gated runnable that publishes the resulting trust bundle, and the
-// startup read that seeds the previous-CA history from the bundle a prior
-// process published.
 package trustbundle
 
 import (
@@ -40,67 +35,48 @@ var apiRetryBackoff = wait.Backoff{
 // (e.g. a manual edit or a lost event).
 const DriftRepairInterval = 10 * time.Minute
 
-// CAWatcher reloads the in-memory CA whenever the mounted certificate or key
-// files change. It runs on every replica, independent of leader election, so
-// that a standby replica keeps its CA current and never signs or publishes
-// with stale material immediately after being promoted to leader.
-type CAWatcher struct {
-	ca     *authority.CertificateAuthority
-	notify chan<- struct{}
-}
-
-// Start blocks watching the CA files until ctx is canceled. A failed watch is
-// fatal: without it CA rotations would silently never be observed.
-func (w *CAWatcher) Start(ctx context.Context) error {
-	if err := w.ca.Watch(ctx, w.notify); err != nil {
-		return fmt.Errorf("ca-watcher failed: %w", err)
-	}
-	return nil
-}
-
-// NeedLeaderElection reports false so the CA watcher runs on every replica.
-func (*CAWatcher) NeedLeaderElection() bool { return false }
-
-// Publisher reconciles the signer's ClusterTrustBundle towards the current CA.
-// It publishes when it starts, on every CA reload event, and on a periodic
-// drift-repair tick. Publishes are retried with exponential backoff and are
-// single-flight (a reconcile triggered while one is in flight is coalesced). It
-// is leader-gated so only the elected leader writes the shared resource.
+// Publisher keeps the signer's ClusterTrustBundle in step with the current CA.
+// It publishes when it starts, whenever the CA watcher reports a change, and
+// on a periodic drift-repair tick. Publishes are retried with exponential
+// backoff. One goroutine runs them all, in order; change notifications that
+// arrive while a publish runs wait in a small buffer, and any beyond it are
+// dropped, which is safe because the next publish reads the CA as it is then.
+// It is leader-gated so only the elected leader writes the shared resource.
 type Publisher struct {
 	client     client.Client
 	signerName string
 	ca         *authority.CertificateAuthority
-	events     <-chan struct{}
+	events     chan struct{}
 	interval   time.Duration
-
-	// runMu is a single-flight guard: TryLock lets a reconcile skip when
-	// another is already publishing.
-	runMu sync.Mutex
 
 	// healthMu guards the most recent publish outcome, polled by readiness.
 	healthMu       sync.Mutex
 	lastPublishErr error
 }
 
-// NewRunnables wires the CA file watcher and the ClusterTrustBundle publisher
-// so that CA reload events flow from the watcher to the publisher over a shared
-// channel. The watcher runs on every replica; the publisher is leader-gated.
-func NewRunnables(c client.Client, signerName string, ca *authority.CertificateAuthority) (*CAWatcher, *Publisher) {
-	events := make(chan struct{}, 2)
-	watcher := &CAWatcher{ca: ca, notify: events}
-	publisher := &Publisher{
+// NewPublisher returns the runnable that publishes ca's trust bundle as the
+// ClusterTrustBundle for signerName.
+func NewPublisher(c client.Client, signerName string, ca *authority.CertificateAuthority) *Publisher {
+	return &Publisher{
 		client:     c,
 		signerName: signerName,
 		ca:         ca,
-		events:     events,
-		interval:   DriftRepairInterval,
+		// Two slots: one for the change being published, one for a change
+		// that lands meanwhile. A third would publish the same CA state again.
+		events:   make(chan struct{}, 2),
+		interval: DriftRepairInterval,
 	}
-	return watcher, publisher
+}
+
+// Notify is the channel the CA watcher signals a changed CA on (see
+// authority.NewWatcher). Sends must not block; the watcher's do not.
+func (p *Publisher) Notify() chan<- struct{} {
+	return p.events
 }
 
 // Start publishes the ClusterTrustBundle on startup, so a newly-elected leader
-// publishes from the current in-memory CA, then on every CA reload event and on
-// a periodic drift-repair tick, until ctx is canceled.
+// publishes from the current in-memory CA, then on every CA change and on a
+// periodic drift-repair tick, until ctx is canceled.
 func (p *Publisher) Start(ctx context.Context) error {
 	logger := log.FromContext(ctx).WithName("cluster-trust-bundle")
 	logger.Info("starting ClusterTrustBundle publisher", "driftRepairInterval", p.interval)
@@ -116,7 +92,7 @@ func (p *Publisher) Start(ctx context.Context) error {
 		case <-p.events:
 			p.publish(ctx, logger)
 		case <-ticker.C:
-			// Periodic drift repair, independent of fsnotify events.
+			// Periodic drift repair, independent of CA changes.
 			p.publish(ctx, logger)
 		}
 	}
@@ -127,17 +103,9 @@ func (p *Publisher) Start(ctx context.Context) error {
 func (*Publisher) NeedLeaderElection() bool { return true }
 
 // publish writes the current CA trust bundle to the ClusterTrustBundle,
-// retrying with exponential backoff. It is single-flight: if a publish is
-// already in flight the call is skipped, since the in-flight publish will use
-// the latest in-memory CA state anyway. It returns true if a publish ran and
-// false if it was skipped.
-func (p *Publisher) publish(ctx context.Context, logger logr.Logger) bool {
-	if !p.runMu.TryLock() {
-		logger.V(1).Info("ClusterTrustBundle publish already in progress, skipping")
-		return false
-	}
-	defer p.runMu.Unlock()
-
+// retrying with exponential backoff, and records the outcome for readiness and
+// the publish counter.
+func (p *Publisher) publish(ctx context.Context, logger logr.Logger) {
 	var op controllerutil.OperationResult
 	// The retriable predicate is keyed on ctx, not on the error. retry.OnError
 	// takes no context and sleeps between attempts with a bare time.Sleep, so a
@@ -157,16 +125,15 @@ func (p *Publisher) publish(ctx context.Context, logger logr.Logger) bool {
 		// Shutting down: the publish was abandoned, not failed. Recording it
 		// as a failure would flip readiness and count a failed publish for a
 		// process that is exiting anyway.
-		return true
+		return
 	}
 	p.recordPublishResult(err)
 	if err != nil {
-		metrics.ClusterTrustBundlePublishAttempts.WithLabelValues(string(metrics.ResultFailed)).Inc()
-		logger.Error(err, "unable to update ClusterTrustBundle after retries")
-		return true
+		metrics.ClusterTrustBundlePublishAttempts.WithLabelValues(string(metrics.PublishFailed)).Inc()
+		logger.Error(err, "ClusterTrustBundle publish failed after retries")
+		return
 	}
 	metrics.ClusterTrustBundlePublishAttempts.WithLabelValues(string(publishResult(op))).Inc()
-	return true
 }
 
 // publishResult maps CreateOrPatch's OperationResult onto the bounded result
@@ -174,14 +141,14 @@ func (p *Publisher) publish(ctx context.Context, logger logr.Logger) bool {
 // function touches only .spec, so the status results cannot occur; they are
 // folded into "updated" rather than minting a label value the surface does not
 // budget for.
-func publishResult(op controllerutil.OperationResult) metrics.Result {
+func publishResult(op controllerutil.OperationResult) metrics.PublishResult {
 	switch op {
 	case controllerutil.OperationResultNone:
-		return metrics.ResultUnchanged
+		return metrics.PublishUnchanged
 	case controllerutil.OperationResultCreated:
-		return metrics.ResultCreated
+		return metrics.PublishCreated
 	default:
-		return metrics.ResultUpdated
+		return metrics.PublishUpdated
 	}
 }
 
@@ -191,7 +158,7 @@ func publishResult(op controllerutil.OperationResult) metrics.Result {
 // all describe the same CA state. The mutate function overwrites (never merges)
 // the spec, so CA pruning in the rolling window is preserved.
 func (p *Publisher) publishOnce(ctx context.Context, logger logr.Logger) (controllerutil.OperationResult, error) {
-	desired := desired(p.signerName, p.ca)
+	desired := desiredBundle(p.signerName, p.ca)
 	bundle := &certificatesv1.ClusterTrustBundle{ObjectMeta: metav1.ObjectMeta{Name: desired.Name}}
 	// Use the direct API client: reading through the manager's cache-backed
 	// client would start an informer for ClusterTrustBundles, which requires
@@ -201,13 +168,13 @@ func (p *Publisher) publishOnce(ctx context.Context, logger logr.Logger) (contro
 		return nil
 	})
 	if err != nil {
-		return op, err
+		return op, fmt.Errorf("publish ClusterTrustBundle %q: %w", bundle.Name, err)
 	}
-	logger.Info("reconciled ClusterTrustBundle", "name", bundle.Name, "operation", op)
+	logger.Info("published ClusterTrustBundle", "name", bundle.Name, "operation", op)
 	return op, nil
 }
 
-// recordPublishResult stores the outcome of the most recent reconcile.
+// recordPublishResult stores the outcome of the most recent publish.
 func (p *Publisher) recordPublishResult(err error) {
 	p.healthMu.Lock()
 	defer p.healthMu.Unlock()

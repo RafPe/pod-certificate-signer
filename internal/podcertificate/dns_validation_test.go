@@ -45,12 +45,12 @@ func TestDNSNamesRejectMalformedValuesFromEverySource(t *testing.T) {
 				pod.Name = pcr.Spec.PodName
 			}
 
-			_, err := NewPodCertificateConfig(context.Background(), pcr, pod, tt.csr, tt.opts)
+			_, err := NewConfig(context.Background(), pcr, pod, tt.csr, tt.opts)
 			if err == nil {
-				t.Fatalf("NewPodCertificateConfig(DNS SAN %q) error = nil, want invalid DNS name error", invalidName)
+				t.Fatalf("NewConfig(DNS SAN %q) error = nil, want invalid DNS name error", invalidName)
 			}
 			if !strings.Contains(err.Error(), "DNS name") || !strings.Contains(err.Error(), "63") {
-				t.Errorf("NewPodCertificateConfig(DNS SAN %q) error = %q, want DNS label limit detail", invalidName, err)
+				t.Errorf("NewConfig(DNS SAN %q) error = %q, want DNS label limit detail", invalidName, err)
 			}
 		})
 	}
@@ -74,7 +74,7 @@ func TestDNSNameValidationBoundaries(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pcr := testPCR(map[string]string{testSignerName + "-san": tt.dnsName})
-			_, err := NewPodCertificateConfig(
+			_, err := NewConfig(
 				context.Background(),
 				pcr,
 				testPod(nil),
@@ -82,7 +82,7 @@ func TestDNSNameValidationBoundaries(t *testing.T) {
 				Options{AllowUnverifiedIdentities: true},
 			)
 			if gotErr := err != nil; gotErr != tt.wantErr {
-				t.Errorf("NewPodCertificateConfig(DNS SAN %q) error = %v, want error = %t", tt.dnsName, err, tt.wantErr)
+				t.Errorf("NewConfig(DNS SAN %q) error = %v, want error = %t", tt.dnsName, err, tt.wantErr)
 			}
 		})
 	}
@@ -94,7 +94,7 @@ func TestDNSNameValidationRejectsOneInvalidNameInList(t *testing.T) {
 		testSignerName + "-san": "valid.example.org," + invalidName + ",also-valid.example.org",
 	})
 
-	_, err := NewPodCertificateConfig(
+	_, err := NewConfig(
 		context.Background(),
 		pcr,
 		testPod(nil),
@@ -102,6 +102,6 @@ func TestDNSNameValidationRejectsOneInvalidNameInList(t *testing.T) {
 		Options{AllowUnverifiedIdentities: true},
 	)
 	if err == nil || !strings.Contains(err.Error(), invalidName) {
-		t.Fatalf("NewPodCertificateConfig(DNS SAN list containing %q) error = %v, want offending name", invalidName, err)
+		t.Fatalf("NewConfig(DNS SAN list containing %q) error = %v, want offending name", invalidName, err)
 	}
 }

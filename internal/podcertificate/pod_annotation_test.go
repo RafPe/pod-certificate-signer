@@ -21,8 +21,8 @@ func TestPodAnnotationsUnknownKeysIgnored(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(tc.annotations), nil, Options{AllowPodAnnotations: true}); err != nil {
-				t.Fatalf("NewPodCertificateConfig(pod annotations %v) error = %v, want nil", tc.annotations, err)
+			if _, err := NewConfig(context.Background(), testPCR(nil), testPod(tc.annotations), nil, Options{AllowPodAnnotations: true}); err != nil {
+				t.Fatalf("NewConfig(pod annotations %v) error = %v, want nil", tc.annotations, err)
 			}
 		})
 	}
@@ -31,20 +31,20 @@ func TestPodAnnotationsUnknownKeysIgnored(t *testing.T) {
 // A value read from a pod annotation still configures the certificate, with
 // the request annotation winning when both are set.
 func TestPodAnnotationFallbackAndPrecedence(t *testing.T) {
-	podOnly, err := NewPodCertificateConfig(context.Background(), testPCR(nil),
+	podOnly, err := NewConfig(context.Background(), testPCR(nil),
 		testPod(map[string]string{testSignerName + "-duration": "2h"}), nil, Options{AllowPodAnnotations: true})
 	if err != nil {
-		t.Fatalf("NewPodCertificateConfig: %v", err)
+		t.Fatalf("NewConfig: %v", err)
 	}
 	if podOnly.Duration.Hours() != 2 {
 		t.Errorf("Duration = %v, want 2h from the pod annotation", podOnly.Duration)
 	}
 
-	both, err := NewPodCertificateConfig(context.Background(),
+	both, err := NewConfig(context.Background(),
 		testPCR(map[string]string{testSignerName + "-duration": "3h"}),
 		testPod(map[string]string{testSignerName + "-duration": "2h"}), nil, Options{AllowPodAnnotations: true})
 	if err != nil {
-		t.Fatalf("NewPodCertificateConfig: %v", err)
+		t.Fatalf("NewConfig: %v", err)
 	}
 	if both.Duration.Hours() != 3 {
 		t.Errorf("Duration = %v, want 3h: the request annotation takes precedence", both.Duration)
@@ -60,15 +60,15 @@ func TestDurationAnnotationsInterpolate(t *testing.T) {
 	pod := testPod(nil)
 	pod.Name = "4h"
 
-	config, err := NewPodCertificateConfig(context.Background(), pcr, pod, nil, Options{EnableInterpolation: true})
+	config, err := NewConfig(context.Background(), pcr, pod, nil, Options{EnableInterpolation: true})
 	if err != nil {
-		t.Fatalf("NewPodCertificateConfig: %v", err)
+		t.Fatalf("NewConfig: %v", err)
 	}
 	if config.Duration.Hours() != 4 {
 		t.Errorf("Duration = %v, want the interpolated 4h", config.Duration)
 	}
 
-	_, err = NewPodCertificateConfig(context.Background(), pcr, pod, nil, Options{})
+	_, err = NewConfig(context.Background(), pcr, pod, nil, Options{})
 	if err == nil {
 		t.Fatal("want a denial for a ${...} duration with interpolation disabled, got nil")
 	}
@@ -81,9 +81,9 @@ func TestPodAnnotationsIgnoredWhenFallbackDisabled(t *testing.T) {
 		testSignerName + "-duration": "2h",
 		testSignerName + "-sna":      "a typo that would deny with the fallback on",
 	})
-	config, err := NewPodCertificateConfig(context.Background(), testPCR(nil), pod, nil, Options{})
+	config, err := NewConfig(context.Background(), testPCR(nil), pod, nil, Options{})
 	if err != nil {
-		t.Fatalf("NewPodCertificateConfig: %v", err)
+		t.Fatalf("NewConfig: %v", err)
 	}
 	if config.Duration != DefaultDuration {
 		t.Errorf("Duration = %v, want the default: pod annotations must be ignored", config.Duration)
@@ -95,7 +95,7 @@ func TestPodAnnotationsIgnoredWhenFallbackDisabled(t *testing.T) {
 func TestEmptyRequestAnnotationDenied(t *testing.T) {
 	pcr := testPCR(map[string]string{testSignerName + "-duration": ""})
 	pod := testPod(map[string]string{testSignerName + "-duration": "2h"})
-	_, err := NewPodCertificateConfig(context.Background(), pcr, pod, nil, Options{AllowPodAnnotations: true})
+	_, err := NewConfig(context.Background(), pcr, pod, nil, Options{AllowPodAnnotations: true})
 	if err == nil {
 		t.Fatal("want a denial for an empty request annotation, got nil")
 	}
@@ -104,7 +104,16 @@ func TestEmptyRequestAnnotationDenied(t *testing.T) {
 // A nil pod is a programming error at the boundary and is reported, not
 // dereferenced.
 func TestNilPodRejected(t *testing.T) {
-	if _, err := NewPodCertificateConfig(context.Background(), testPCR(nil), nil, nil, Options{}); err == nil {
+	if _, err := NewConfig(context.Background(), testPCR(nil), nil, nil, Options{}); err == nil {
 		t.Fatal("want an error for a nil pod, got nil")
+	}
+}
+
+// An empty value is a misconfiguration on the deprecated pod path too: it is
+// denied, as it is on the request, rather than treated as absent.
+func TestEmptyPodAnnotationDenied(t *testing.T) {
+	pod := testPod(map[string]string{testSignerName + "-duration": ""})
+	if _, err := NewConfig(context.Background(), testPCR(nil), pod, nil, Options{AllowPodAnnotations: true}); err == nil {
+		t.Fatal("want a denial for an empty pod annotation, got nil")
 	}
 }

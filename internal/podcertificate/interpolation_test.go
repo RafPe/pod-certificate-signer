@@ -19,9 +19,9 @@ func TestInterpolationResolvesFromPCR(t *testing.T) {
 	pcr.Spec.PodUID = types.UID("abc-123")
 	pcr.Spec.NodeName = types.NodeName("node-1")
 
-	config, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true})
+	config, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true})
 	if err != nil {
-		t.Fatalf("NewPodCertificateConfig: %v", err)
+		t.Fatalf("NewConfig: %v", err)
 	}
 
 	if config.CommonName != "mypod.myns.svc.cluster.local" {
@@ -43,7 +43,7 @@ func TestInterpolationDisabledRejectsPlaceholders(t *testing.T) {
 		testSignerName + "-cn": "${pod.name}.${pod.namespace}",
 	})
 
-	_, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{})
+	_, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{})
 	if err == nil || !strings.Contains(err.Error(), "disabled") {
 		t.Fatalf("err = %v, want interpolation-disabled error", err)
 	}
@@ -56,9 +56,9 @@ func TestInterpolationDisabledPassesPlainValues(t *testing.T) {
 	})
 
 	// A plain literal value requires the unverified-identities opt-in.
-	config, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{AllowUnverifiedIdentities: true})
+	config, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{AllowUnverifiedIdentities: true})
 	if err != nil {
-		t.Fatalf("NewPodCertificateConfig: %v", err)
+		t.Fatalf("NewConfig: %v", err)
 	}
 	if config.CommonName != "plain-name.example.com" {
 		t.Errorf("CommonName = %q, want plain value untouched", config.CommonName)
@@ -110,7 +110,7 @@ func TestInterpolate(t *testing.T) {
 // The 64 character RFC 5280 common name limit must be enforced, since
 // interpolated pod names can easily exceed it.
 func TestValidateCommonNameLength(t *testing.T) {
-	config := PodCertificateConfig{
+	config := Config{
 		CommonName:    strings.Repeat("a", 65),
 		Duration:      DefaultDuration,
 		RefreshBefore: DefaultRefreshBefore,

@@ -207,10 +207,10 @@ func defineHAReconciliationLifecycleTests() {
 			// was written for and wrong for an issued request, whose
 			// certificate and timestamps must survive.
 			focusControllerOnLeader()
-			immutableLines := controllerLogLineCount(before.Name, "PodCertificateRequest is immutable")
+			immutableLines := controllerLogLineCount(before.Name, terminalRequestLine)
 			annotateReconcileNudge(pod.namespace, before.Name)
 			Eventually(func() int {
-				return controllerLogLineCount(before.Name, "PodCertificateRequest is immutable")
+				return controllerLogLineCount(before.Name, terminalRequestLine)
 			}, time.Minute).Should(BeNumerically(">", immutableLines),
 				"the restarted controller must reconcile request %s and decline to touch it", before.Name)
 

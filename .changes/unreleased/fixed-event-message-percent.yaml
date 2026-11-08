@@ -1,0 +1,2 @@
+kind: Fixed
+body: 'A Denied or Failed event now carries its message verbatim. The message was used as a format string, so a `%` in a rejected annotation value came out garbled in `kubectl describe` (for example `%!d(MISSING)`).'

@@ -174,6 +174,15 @@ const (
 	// starting process seeds its previous-CA history from the published
 	// ClusterTrustBundle.
 	caBootstrapLine = "bootstrapped previous CA certificates from ClusterTrustBundle"
+
+	// terminalRequestLine is logged by the reconciler for every reconcile of a
+	// request that already carries a terminal condition. Counting it is how a
+	// spec proves the controller looked at the request and left it alone.
+	terminalRequestLine = "request is already terminal"
+
+	// publishedBundleLine is logged by trustbundle.Publisher after each
+	// successful ClusterTrustBundle write.
+	publishedBundleLine = "published ClusterTrustBundle"
 )
 
 // defineCALifecycleTests is called from the top-level Manager container, after

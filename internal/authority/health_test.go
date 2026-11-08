@@ -92,14 +92,14 @@ func TestHealthyGracePeriodForReloadFailures(t *testing.T) {
 				// remaining ones: the elapsed guard must be measured from the
 				// first failure and must not be reset by later failures.
 				if tt.failures > 0 {
-					ca.recordReloadResult(reloadErr)
+					ca.health.record(reloadErr)
 					time.Sleep(tt.elapsed)
 					for i := 1; i < tt.failures; i++ {
-						ca.recordReloadResult(reloadErr)
+						ca.health.record(reloadErr)
 					}
 				}
 				if tt.thenSucceeds {
-					ca.recordReloadResult(nil)
+					ca.health.record(nil)
 				}
 
 				err := ca.HealthCheck()
@@ -129,8 +129,8 @@ func TestPersistentlyUnloadableCAEventuallyFailsReadiness(t *testing.T) {
 			t.Fatalf("write non-CA files: %v", err)
 		}
 
-		if _, err := ca.reloadWithRetry(t.Context(), log.FromContext(t.Context())); err == nil {
-			t.Fatal("reloadWithRetry() = nil, want error for a permanently unloadable CA")
+		if _, err := ca.loadWithRetry(t.Context(), log.FromContext(t.Context()), ca.reloadAttempts); err == nil {
+			t.Fatal("loadWithRetry() = nil, want error for a permanently unloadable CA")
 		}
 
 		// Still inside the grace window: the last-good CA keeps signing, so the

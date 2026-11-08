@@ -26,10 +26,12 @@
 #   - the exemption label key
 #
 # Certificate configuration can also be supplied through the deprecated pod
-# `annotations` path, which the signer still honours and which no flag turns
-# off. Rule 1 therefore covers both paths - policing only userAnnotations would
-# leave a pod author free to claim an identity from `metadata.annotations`
-# instead, which under --allow-unverified-identities is a complete bypass.
+# `annotations` path, which the signer honours by default until 4.0.0
+# (--allow-pod-annotations=false, Helm signer.allow_pod_annotations: false,
+# turns it off). Rule 1 therefore covers both paths - policing only
+# userAnnotations would leave a pod author free to claim an identity from
+# `metadata.annotations` instead, which under --allow-unverified-identities is a
+# complete bypass on clusters that keep the default.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:

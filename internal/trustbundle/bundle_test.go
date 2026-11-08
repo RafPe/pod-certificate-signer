@@ -18,7 +18,7 @@ func TestName(t *testing.T) {
 	}
 }
 
-// desired must derive the resource from the signer name and embed the full CA
+// desiredBundle must derive the resource from the signer name and embed the full CA
 // trust bundle, including previously known CAs.
 func TestDesiredBundle(t *testing.T) {
 	dir := t.TempDir()
@@ -35,7 +35,7 @@ func TestDesiredBundle(t *testing.T) {
 		t.Fatalf("authority.New: %v", err)
 	}
 
-	bundle := desired("example.org/signer", ca)
+	bundle := desiredBundle("example.org/signer", ca)
 	if bundle.Name != "example.org:signer:bundle" {
 		t.Errorf("Name = %q, want example.org:signer:bundle", bundle.Name)
 	}

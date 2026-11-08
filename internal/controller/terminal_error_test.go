@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/outcome"
 	certificatesv1 "k8s.io/api/certificates/v1"
 )
 
@@ -23,11 +23,11 @@ func TestTerminalError(t *testing.T) {
 	if !errors.As(err, &te) {
 		t.Fatal("errors.As should match *TerminalError")
 	}
-	if te.Reason != metrics.ReasonSigningFailed {
-		t.Fatalf("metrics.Reason = %q, want %q", te.Reason, metrics.ReasonSigningFailed)
+	if te.Reason != outcome.SigningFailed {
+		t.Fatalf("Reason = %q, want %q", te.Reason, outcome.SigningFailed)
 	}
-	if te.ConditionType != certificatesv1.PodCertificateRequestConditionTypeFailed {
-		t.Fatalf("ConditionType = %q, want Failed", te.ConditionType)
+	if te.conditionType() != certificatesv1.PodCertificateRequestConditionTypeFailed {
+		t.Fatalf("ConditionType = %q, want Failed", te.conditionType())
 	}
 
 	var none *TerminalError
@@ -38,13 +38,13 @@ func TestTerminalError(t *testing.T) {
 
 func TestDeniedConditionType(t *testing.T) {
 	var te *TerminalError
-	if !errors.As(denied(metrics.ReasonUnsupportedKeyType, errors.New("bad key")), &te) {
+	if !errors.As(denied(outcome.UnsupportedKeyType, errors.New("bad key")), &te) {
 		t.Fatal("errors.As should match *TerminalError")
 	}
-	if te.ConditionType != certificatesv1.PodCertificateRequestConditionTypeDenied {
-		t.Fatalf("ConditionType = %q, want Denied", te.ConditionType)
+	if te.conditionType() != certificatesv1.PodCertificateRequestConditionTypeDenied {
+		t.Fatalf("ConditionType = %q, want Denied", te.conditionType())
 	}
-	if te.Reason != metrics.ReasonUnsupportedKeyType {
-		t.Fatalf("metrics.Reason = %q, want %q", te.Reason, metrics.ReasonUnsupportedKeyType)
+	if te.Reason != outcome.UnsupportedKeyType {
+		t.Fatalf("Reason = %q, want %q", te.Reason, outcome.UnsupportedKeyType)
 	}
 }

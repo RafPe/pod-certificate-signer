@@ -68,11 +68,7 @@ func annotationKey(signerName string, suffix AnnotationSuffix) string {
 // legacy path calls.
 func podAnnotation(pod *corev1.Pod, key string) (string, bool) {
 	value, ok := pod.Annotations[key]
-	if !ok || value == "" {
-		return "", false
-	}
-
-	return value, true
+	return value, ok
 }
 
 // validateAnnotationKeys rejects unverifiedUserAnnotations keys the signer
@@ -131,30 +127,29 @@ type annotationResolver struct {
 
 // rawValue resolves a configuration value before interpolation: the request
 // spec.unverifiedUserAnnotations first, then - while Options.AllowPodAnnotations
-// is set - the pod's own annotations. A key that is present on the request
-// with an empty value is an error rather than a fallback: an explicitly empty
-// value is a misconfiguration, and treating it as absent would route it
-// silently onto the deprecated pod path.
+// is set - the pod's own annotations. A key that is present with an empty value
+// is an error rather than a fallback, from either source: an explicitly empty
+// value is a misconfiguration, and treating it as absent would silently route
+// it onto the deprecated pod path or the default.
 //
 // The pod-annotation fallback is deprecated and removed in 4.0.0. Every value
 // still taken from it is logged so remaining users can be found before then.
 func (r *annotationResolver) rawValue(suffix AnnotationSuffix) (string, bool, error) {
 	key := annotationKey(r.signerName, suffix)
-	if value, ok := r.pcr.Spec.UnverifiedUserAnnotations[key]; ok {
-		if value == "" {
-			return "", true, r.annotationError(suffix, errors.New("must not be empty"))
+	value, ok := r.pcr.Spec.UnverifiedUserAnnotations[key]
+	if !ok && r.opts.AllowPodAnnotations {
+		if value, ok = podAnnotation(r.pod, key); ok {
+			r.logger.Info("certificate configuration read from a pod annotation, which is deprecated and will be removed in 4.0.0; "+
+				"move it to spec.unverifiedUserAnnotations", "annotation", key)
 		}
-		return value, true, nil
 	}
-	if !r.opts.AllowPodAnnotations {
+	if !ok {
 		return "", false, nil
 	}
-	value, ok := podAnnotation(r.pod, key)
-	if ok {
-		r.logger.Info("certificate configuration read from a pod annotation, which is deprecated and will be removed in 4.0.0; "+
-			"move it to spec.unverifiedUserAnnotations", "annotation", key)
+	if value == "" {
+		return "", true, r.annotationError(suffix, errors.New("must not be empty"))
 	}
-	return value, ok, nil
+	return value, true, nil
 }
 
 // value resolves a configuration value and expands ${...} placeholders in it
@@ -193,36 +188,39 @@ func (r *annotationResolver) commonName(def string) (string, error) {
 // DNS SANs, validates the selected names, and, when identity constraints are
 // enforced, verifies each name against the pod's identity.
 func (r *annotationResolver) dnsNames(defaults []string) ([]string, error) {
-	san, ok, err := r.value(AnnotationSuffixSAN)
+	san, fromAnnotation, err := r.value(AnnotationSuffixSAN)
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		if r.opts.HonorCSRSANs && len(r.csr.DNSNames) > 0 {
-			if err := validateDNSNames(r.csr.DNSNames); err != nil {
-				return nil, err
-			}
-			// CSR-requested SANs are attacker-influenced just like annotation
-			// values, so they must clear the same verified-identity allowlist.
-			if err := validateVerifiedIdentities("CSR DNS name", r.csr.DNSNames, r.verified); err != nil {
-				return nil, err
-			}
-			return r.csr.DNSNames, nil
+
+	// Select the source, then hold every source to the same two checks. Each
+	// source labels its errors so a denial names what the requester must fix.
+	var names []string
+	var attribute func(error) error
+	switch {
+	case fromAnnotation:
+		names = splitAndTrim(san)
+		attribute = func(err error) error { return r.annotationError(AnnotationSuffixSAN, err) }
+		if len(names) == 0 {
+			return nil, attribute(errors.New("contains no DNS names"))
 		}
-		if err := validateDNSNames(defaults); err != nil {
-			return nil, err
-		}
-		return defaults, nil
+	case r.opts.HonorCSRSANs && len(r.csr.DNSNames) > 0:
+		// CSR-requested SANs are attacker-influenced just like annotation
+		// values, so they clear the same verified-identity allowlist.
+		names = r.csr.DNSNames
+		attribute = func(err error) error { return fmt.Errorf("CSR DNS names: %w", err) }
+	default:
+		// The defaults are the signer's own verified forms, so they always
+		// clear the allowlist; the syntax check still applies.
+		names = defaults
+		attribute = func(err error) error { return err }
 	}
-	names := splitAndTrim(san)
-	if len(names) == 0 {
-		return nil, r.annotationError(AnnotationSuffixSAN, errors.New("contains no DNS names"))
-	}
+
 	if err := validateDNSNames(names); err != nil {
-		return nil, r.annotationError(AnnotationSuffixSAN, err)
+		return nil, attribute(err)
 	}
 	if err := validateVerifiedIdentities("DNS name", names, r.verified); err != nil {
-		return nil, r.annotationError(AnnotationSuffixSAN, err)
+		return nil, attribute(err)
 	}
 	return names, nil
 }

@@ -16,10 +16,10 @@ import (
 // failureCount reads the reload failure streak under the health mutex, so tests
 // can poll it without racing the watch loop.
 func (ca *CertificateAuthority) failureCount() int {
-	ca.healthMu.Lock()
-	defer ca.healthMu.Unlock()
+	ca.health.mu.Lock()
+	defer ca.health.mu.Unlock()
 
-	return ca.reloadFailures
+	return ca.health.failures
 }
 
 // The reload burst a rotation produces is consumed before the retries run, so
@@ -42,8 +42,8 @@ func TestReconcileTickRecoversAFailedReloadWithoutAnEvent(t *testing.T) {
 		if _, _, err := nonCA.WriteFiles(dir); err != nil {
 			t.Fatalf("write non-CA files: %v", err)
 		}
-		if _, err := ca.reloadWithRetry(t.Context(), log.FromContext(t.Context())); err == nil {
-			t.Fatal("reloadWithRetry() = nil, want error for a permanently unloadable CA")
+		if _, err := ca.loadWithRetry(t.Context(), log.FromContext(t.Context()), ca.reloadAttempts); err == nil {
+			t.Fatal("loadWithRetry() = nil, want error for a permanently unloadable CA")
 		}
 		// The watch loop has not started yet, so this sleep crosses the grace
 		// period without firing any reconcile tick.
@@ -222,7 +222,7 @@ func TestReconcileOnceRecordsASingleFailure(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ca.reloadOnce(log.FromContext(ctx), nil, "test")
+	ca.reload(context.Background(), log.FromContext(ctx), nil, "test", 1)
 
 	if got := ca.failureCount(); got != 1 {
 		t.Errorf("reload failures after one reconcile pass = %d, want 1 (a single attempt, not a retry burst)", got)

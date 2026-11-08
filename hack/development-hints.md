@@ -78,7 +78,7 @@ template := &x509.Certificate{
 
 Could build functions around it like 
 ```
-func buildKubernetesSubject(config *podcertificate.PodCertificateConfig) pkix.Name {
+func buildKubernetesSubject(config *podcertificate.Config) pkix.Name {
     return pkix.Name{
         // Primary identity - follows Kubernetes naming conventions
         CommonName: fmt.Sprintf("%s.%s.svc.cluster.local", 
@@ -104,7 +104,7 @@ func buildKubernetesSubject(config *podcertificate.PodCertificateConfig) pkix.Na
     }
 }
 
-func (ca *CertificateAuthority) buildEnhancedSubject(config *podcertificate.PodCertificateConfig) pkix.Name {
+func (ca *CertificateAuthority) buildEnhancedSubject(config *podcertificate.Config) pkix.Name {
     // Build comprehensive subject information
     subject := pkix.Name{
         CommonName: ca.buildCommonName(config),
@@ -120,7 +120,7 @@ func (ca *CertificateAuthority) buildEnhancedSubject(config *podcertificate.PodC
     return subject
 }
 
-func (ca *CertificateAuthority) buildCommonName(config *podcertificate.PodCertificateConfig) string {
+func (ca *CertificateAuthority) buildCommonName(config *podcertificate.Config) string {
     // Priority order for CommonName
     if config.ServiceName != "" {
         return fmt.Sprintf("%s.%s.svc.cluster.local", 
@@ -130,7 +130,7 @@ func (ca *CertificateAuthority) buildCommonName(config *podcertificate.PodCertif
         config.PodName, config.Namespace)
 }
 
-func (ca *CertificateAuthority) buildOrganizations(config *podcertificate.PodCertificateConfig) []string {
+func (ca *CertificateAuthority) buildOrganizations(config *podcertificate.Config) []string {
     orgs := []string{"kubernetes.io"}
     
     // Add cluster-specific organization
@@ -146,7 +146,7 @@ func (ca *CertificateAuthority) buildOrganizations(config *podcertificate.PodCer
     return orgs
 }
 
-func (ca *CertificateAuthority) buildOrganizationalUnits(config *podcertificate.PodCertificateConfig) []string {
+func (ca *CertificateAuthority) buildOrganizationalUnits(config *podcertificate.Config) []string {
     ous := []string{"pods"}
     
     // Add namespace as OU
@@ -172,7 +172,7 @@ func (ca *CertificateAuthority) buildOrganizationalUnits(config *podcertificate.
     return ous
 }
 
-func (ca *CertificateAuthority) buildCountries(config *podcertificate.PodCertificateConfig) []string {
+func (ca *CertificateAuthority) buildCountries(config *podcertificate.Config) []string {
     countries := []string{"K8S"} // Kubernetes identifier
     
     // Add environment as country code
@@ -183,7 +183,7 @@ func (ca *CertificateAuthority) buildCountries(config *podcertificate.PodCertifi
     return countries
 }
 
-func (ca *CertificateAuthority) buildProvinces(config *podcertificate.PodCertificateConfig) []string {
+func (ca *CertificateAuthority) buildProvinces(config *podcertificate.Config) []string {
     provinces := []string{config.Namespace}
     
     // Add zone/region information
@@ -194,7 +194,7 @@ func (ca *CertificateAuthority) buildProvinces(config *podcertificate.PodCertifi
     return provinces
 }
 
-func (ca *CertificateAuthority) buildLocalities(config *podcertificate.PodCertificateConfig) []string {
+func (ca *CertificateAuthority) buildLocalities(config *podcertificate.Config) []string {
     localities := []string{config.NodeName}
     
     // Add node zone information
@@ -205,7 +205,7 @@ func (ca *CertificateAuthority) buildLocalities(config *podcertificate.PodCertif
     return localities
 }
 
-func (ca *CertificateAuthority) buildStreetAddresses(config *podcertificate.PodCertificateConfig) []string {
+func (ca *CertificateAuthority) buildStreetAddresses(config *podcertificate.Config) []string {
     addresses := []string{config.PodIP}
     
     // Add service IP if available
@@ -216,7 +216,7 @@ func (ca *CertificateAuthority) buildStreetAddresses(config *podcertificate.PodC
     return addresses
 }
 
-func (ca *CertificateAuthority) buildPostalCodes(config *podcertificate.PodCertificateConfig) []string {
+func (ca *CertificateAuthority) buildPostalCodes(config *podcertificate.Config) []string {
     codes := []string{config.UID}
     
     // Add pod creation timestamp as postal code

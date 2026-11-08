@@ -22,7 +22,7 @@ func subjects(certs []*x509.Certificate) []string {
 func wantHistory(t *testing.T, ca *CertificateAuthority, want ...string) {
 	t.Helper()
 
-	got := subjects(ca.previousCertificates)
+	got := subjects(ca.previousCAs)
 	if len(got) != len(want) {
 		t.Fatalf("history = %v, want %v", got, want)
 	}
@@ -79,8 +79,8 @@ func TestBootstrappedHistoryIsTrimmedToTheConfiguredMaximum(t *testing.T) {
 	ca, err := New(dir+"/tls.crt", dir+"/tls.key",
 		// The bundle as published: current CA first, then the history from
 		// least to most recently active.
-		WithPreviousCABundle([]*x509.Certificate{current.Cert, older.Cert, old.Cert, recent.Cert}),
-		WithMaxPreviousCertificates(2),
+		WithPreviousCAs([]*x509.Certificate{current.Cert, older.Cert, old.Cert, recent.Cert}),
+		WithMaxPreviousCAs(2),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -118,8 +118,8 @@ func TestBootstrappedHistoryDropsUnusableEntries(t *testing.T) {
 	kept := newCA(t, "kept")
 
 	ca, err := New(dir+"/tls.crt", dir+"/tls.key",
-		WithPreviousCABundle([]*x509.Certificate{notACA.Cert, expired.Cert, notYetValid.Cert, kept.Cert}),
-		WithMaxPreviousCertificates(4),
+		WithPreviousCAs([]*x509.Certificate{notACA.Cert, expired.Cert, notYetValid.Cert, kept.Cert}),
+		WithMaxPreviousCAs(4),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -141,8 +141,8 @@ func TestBootstrappedHistoryDropsTheCurrentCA(t *testing.T) {
 	previous := newCA(t, "previous")
 
 	ca, err := New(dir+"/tls.crt", dir+"/tls.key",
-		WithPreviousCABundle([]*x509.Certificate{current.Cert, previous.Cert}),
-		WithMaxPreviousCertificates(2),
+		WithPreviousCAs([]*x509.Certificate{current.Cert, previous.Cert}),
+		WithMaxPreviousCAs(2),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -167,7 +167,7 @@ func TestFlappingRotationDoesNotEvictAStillNeededCA(t *testing.T) {
 		t.Fatalf("write CA files: %v", err)
 	}
 
-	ca, err := New(dir+"/tls.crt", dir+"/tls.key", WithMaxPreviousCertificates(2))
+	ca, err := New(dir+"/tls.crt", dir+"/tls.key", WithMaxPreviousCAs(2))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -197,8 +197,8 @@ func TestHistoryHoldsEachCertificateOnce(t *testing.T) {
 	previous, other := newCA(t, "previous"), newCA(t, "other")
 
 	ca, err := New(dir+"/tls.crt", dir+"/tls.key",
-		WithPreviousCABundle([]*x509.Certificate{previous.Cert, other.Cert, previous.Cert}),
-		WithMaxPreviousCertificates(3),
+		WithPreviousCAs([]*x509.Certificate{previous.Cert, other.Cert, previous.Cert}),
+		WithMaxPreviousCAs(3),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)

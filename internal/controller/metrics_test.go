@@ -22,6 +22,7 @@ import (
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/outcome"
 )
 
 // A terminal outcome must be counted once, under the outcome and reason the
@@ -30,12 +31,12 @@ func TestTerminalOutcomesAreCounted(t *testing.T) {
 	cases := []struct {
 		name          string
 		conditionType string
-		reason        metrics.Reason
-		wantOutcome   metrics.Outcome
+		reason        outcome.ConditionReason
+		wantOutcome   outcome.Kind
 	}{
-		{"issued", certificatesv1.PodCertificateRequestConditionTypeIssued, metrics.ReasonCertificateIssued, metrics.OutcomeIssued},
-		{"denied", certificatesv1.PodCertificateRequestConditionTypeDenied, metrics.ReasonUnsupportedKeyType, metrics.OutcomeDenied},
-		{"failed", certificatesv1.PodCertificateRequestConditionTypeFailed, metrics.ReasonSigningFailed, metrics.OutcomeFailed},
+		{"issued", certificatesv1.PodCertificateRequestConditionTypeIssued, outcome.CertificateIssued, outcome.Issued},
+		{"denied", certificatesv1.PodCertificateRequestConditionTypeDenied, outcome.UnsupportedKeyType, outcome.Denied},
+		{"failed", certificatesv1.PodCertificateRequestConditionTypeFailed, outcome.SigningFailed, outcome.Failed},
 	}
 
 	for _, tc := range cases {
@@ -91,7 +92,7 @@ func TestOutcomeNotCountedWhenStatusWriteIsLost(t *testing.T) {
 						Type:               certificatesv1.PodCertificateRequestConditionTypeDenied,
 						Status:             metav1.ConditionTrue,
 						LastTransitionTime: metav1.Now(),
-						Reason:             string(metrics.ReasonInvalidUserConfig),
+						Reason:             string(outcome.InvalidUserConfig),
 						Message:            "denied by a concurrent writer",
 					}}
 					if err := c.Status().Update(ctx, concurrent); err != nil {
@@ -107,12 +108,12 @@ func TestOutcomeNotCountedWhenStatusWriteIsLost(t *testing.T) {
 		Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10),
 	}
 
-	before := outcomeCount(metrics.OutcomeIssued, metrics.ReasonCertificateIssued)
+	before := outcomeCount(outcome.Issued, outcome.CertificateIssued)
 	if _, err := r.recordOutcome(context.Background(), pcr,
-		certificatesv1.PodCertificateRequestConditionTypeIssued, metrics.ReasonCertificateIssued, "issued", corev1.EventTypeNormal); err != nil {
+		certificatesv1.PodCertificateRequestConditionTypeIssued, outcome.CertificateIssued, "issued", corev1.EventTypeNormal); err != nil {
 		t.Fatalf("recordOutcome: %v", err)
 	}
-	if got := outcomeCount(metrics.OutcomeIssued, metrics.ReasonCertificateIssued) - before; got != 0 {
+	if got := outcomeCount(outcome.Issued, outcome.CertificateIssued) - before; got != 0 {
 		t.Errorf("issued counter moved by %v on a discarded status write, want 0", got)
 	}
 }
@@ -123,10 +124,10 @@ func TestRequeuesAreClassified(t *testing.T) {
 	cases := []struct {
 		name       string
 		err        error
-		wantReason metrics.Reason
+		wantReason outcome.EventReason
 	}{
-		{"ca unusable", fmt.Errorf("cannot sign: %w", authority.ErrCASignerUnusable), metrics.ReasonCASignerUnusable},
-		{"anything else", errors.New("etcdserver: request timed out"), metrics.ReasonTransient},
+		{"ca unusable", fmt.Errorf("cannot sign: %w", authority.ErrCASignerUnusable), outcome.CASignerUnusable},
+		{"anything else", errors.New("etcdserver: request timed out"), outcome.Transient},
 	}
 
 	for _, tc := range cases {
@@ -171,9 +172,9 @@ func TestSeriesCountDoesNotGrowWithRequests(t *testing.T) {
 	}
 
 	before := seriesCount(t, reg)
-	issuedBefore := outcomeCount(metrics.OutcomeIssued, metrics.ReasonCertificateIssued)
-	deniedBefore := outcomeCount(metrics.OutcomeDenied, metrics.ReasonUnsupportedKeyType)
-	requeuedBefore := requeueCount(metrics.ReasonCASignerUnusable)
+	issuedBefore := outcomeCount(outcome.Issued, outcome.CertificateIssued)
+	deniedBefore := outcomeCount(outcome.Denied, outcome.UnsupportedKeyType)
+	requeuedBefore := requeueCount(outcome.CASignerUnusable)
 	droppedBefore := dropCount()
 
 	for i := range 50 {
@@ -187,9 +188,9 @@ func TestSeriesCountDoesNotGrowWithRequests(t *testing.T) {
 		what  string
 		delta float64
 	}{
-		{"issued", outcomeCount(metrics.OutcomeIssued, metrics.ReasonCertificateIssued) - issuedBefore},
-		{"denied", outcomeCount(metrics.OutcomeDenied, metrics.ReasonUnsupportedKeyType) - deniedBefore},
-		{"requeued", requeueCount(metrics.ReasonCASignerUnusable) - requeuedBefore},
+		{"issued", outcomeCount(outcome.Issued, outcome.CertificateIssued) - issuedBefore},
+		{"denied", outcomeCount(outcome.Denied, outcome.UnsupportedKeyType) - deniedBefore},
+		{"requeued", requeueCount(outcome.CASignerUnusable) - requeuedBefore},
 		{"dropped", dropCount() - droppedBefore},
 	} {
 		if moved.delta == 0 {
@@ -259,16 +260,16 @@ func reconcileDistinctRequest(t *testing.T, i int) {
 	}
 }
 
-func outcomeCount(outcome metrics.Outcome, reason metrics.Reason) float64 {
-	return promtestutil.ToFloat64(metrics.PodCertificateRequests.WithLabelValues(string(outcome), string(reason)))
+func outcomeCount(kind outcome.Kind, reason outcome.ConditionReason) float64 {
+	return promtestutil.ToFloat64(metrics.PodCertificateRequests.WithLabelValues(string(kind), string(reason)))
 }
 
-func requeueCount(reason metrics.Reason) float64 {
+func requeueCount(reason outcome.EventReason) float64 {
 	return promtestutil.ToFloat64(metrics.PodCertificateRequestRequeues.WithLabelValues(string(reason)))
 }
 
 func dropCount() float64 {
-	return promtestutil.ToFloat64(metrics.PodCertificateRequestDrops.WithLabelValues(string(metrics.ReasonAssociatedPodGone)))
+	return promtestutil.ToFloat64(metrics.PodCertificateRequestDrops.WithLabelValues(string(outcome.AssociatedPodGone)))
 }
 
 // seriesCount reports how many time series reg currently exposes.

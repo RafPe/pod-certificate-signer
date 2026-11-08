@@ -39,34 +39,35 @@ var serialNumberLimit = new(big.Int).Lsh(big.NewInt(1), 128)
 // a terminal outcome. Callers match it with errors.Is.
 var ErrCASignerUnusable = errors.New("ca signer unusable")
 
-// Option is a function which configures the [CertificateAuthority]. The CA is
-// the one component with several independent, individually-optional settings
-// (seed history, retention bound, logger), which is why it takes options where
-// the rest of the codebase takes a flat struct.
+// Option is a function which configures the [CertificateAuthority]. The CA
+// takes options where the rest of the codebase takes a flat struct because one
+// of its settings has no usable zero value: a retention bound of 0 ("keep no
+// previous CAs") is meaningful, so a zero-valued struct field could not also
+// mean "use the default of 1". Each option states its own default.
 type Option func(ca *CertificateAuthority) error
 
 // CertificateAuthority is a CA which signs Pod Certificate Requests.
 type CertificateAuthority struct {
-	certFile    string
-	privKeyFile string
+	caCertFile string
+	caKeyFile  string
 	// certificate is the loaded CA certificate. New fails closed, so it is
-	// non-nil once New has returned and load never clears it; the accessors
-	// still guard it, because CertificateNotAfter runs on every metrics scrape
-	// where a panic takes down the scrape rather than being recovered, and
-	// one stance for all of them is easier to trust than a per-method one.
+	// non-nil once New has returned and load never clears it. Every accessor
+	// still guards it, because CertificateNotAfter runs on every metrics scrape
+	// where a panic takes down the scrape rather than being recovered, and one
+	// stance for all of them is easier to trust than a per-method one.
 	certificate *x509.Certificate
 	signer      crypto.Signer
-	// previousCertificates is the retained history of CAs that were current
-	// before the one loaded now. It is ordered by how recently each was
-	// current, least recent first, and keyed by certificate identity: a
-	// certificate appears at most once, and re-observing it moves it rather
-	// than adding a second entry. Eviction therefore drops the CA least likely
-	// to still have certificates in the field, instead of whichever entry
-	// happened to be inserted first.
-	previousCertificates []*x509.Certificate
-	maxPreviousCerts     int
-	backDate             time.Duration
-	logger               logr.Logger
+	// previousCAs is the retained history of CAs that were current before the
+	// one loaded now. It is ordered by how recently each was current, least
+	// recent first, and keyed by certificate identity: a certificate appears at
+	// most once, and re-observing it moves it rather than adding a second
+	// entry. Eviction therefore drops the CA least likely to still have
+	// certificates in the field, instead of whichever entry happened to be
+	// inserted first.
+	previousCAs    []*x509.Certificate
+	maxPreviousCAs int
+	backDate       time.Duration
+	logger         logr.Logger
 	// fingerprint is the SHA-256 of the loaded certificate's DER, used by load
 	// to tell a reload that changed the material from one that did not. It is
 	// content-based rather than file metadata, so a rotation that preserves
@@ -76,35 +77,28 @@ type CertificateAuthority struct {
 
 	// Watch/reload tuning. Set to sane defaults in New; overridable in tests.
 	drainWindow    time.Duration // coalesce window for a burst of fs events
-	reloadAttempts int           // bounded retries for a single reload
+	reloadAttempts int           // bounded retries for an event-driven reload
 	reloadBackoff  time.Duration // base delay between reload attempts
 	reloadInterval time.Duration // periodic reload, independent of events
 
 	// health tracks the recent reload outcomes and whether the watcher has
-	// exited unrecoverably. It is guarded by its own mutex (separate from mu)
-	// so a readiness probe can poll HealthCheck without contending with a reload
-	// in progress.
-	healthMu         sync.Mutex
-	lastReloadErr    error
-	reloadFailures   int       // consecutive failed reload attempts
-	firstFailureTime time.Time // when the current failure streak started
-	lastSuccessTime  time.Time // when the CA was last read successfully
-	watcherErr       error
+	// exited unrecoverably, under its own lock (see reloadHealth).
+	health reloadHealth
 }
 
-// WithPreviousCABundle is an [Option], which seeds the [CertificateAuthority]
-// with previously known CA certificates. This is useful for bootstrapping the
-// trust bundle from an external source (e.g. an existing ClusterTrustBundle)
-// so that previous CAs are retained across process restarts.
+// WithPreviousCAs is an [Option], which seeds the [CertificateAuthority] with
+// previously known CA certificates. This is useful for bootstrapping the trust
+// bundle from an external source (e.g. an existing ClusterTrustBundle) so that
+// previous CAs are retained across process restarts.
 //
 // The seed is not taken on trust: [New] normalizes it like any other history
-// (see normalizePreviousCertificates), so entries that are not usable CA
-// certificates, entries that have expired, duplicates and anything beyond
-// WithMaxPreviousCertificates are dropped rather than adopted and republished.
+// (see normalizePreviousCAs), so entries that are not usable CA certificates,
+// entries that have expired, duplicates and anything beyond WithMaxPreviousCAs
+// are dropped rather than adopted and republished.
 // See docs/adr/0004-bootstrapped-previous-ca-history.md.
-func WithPreviousCABundle(certs []*x509.Certificate) Option {
+func WithPreviousCAs(certs []*x509.Certificate) Option {
 	opt := func(ca *CertificateAuthority) error {
-		ca.previousCertificates = certs
+		ca.previousCAs = certs
 
 		return nil
 	}
@@ -127,14 +121,14 @@ func WithLogger(logger logr.Logger) Option {
 	return opt
 }
 
-// WithMaxPreviousCertificates is an [Option], which configures how many
-// previous CA certificates to retain in the rolling window. Defaults to 1.
-func WithMaxPreviousCertificates(n int) Option {
+// WithMaxPreviousCAs is an [Option], which configures how many previous CA
+// certificates to retain in the rolling window. Defaults to 1; 0 keeps none.
+func WithMaxPreviousCAs(n int) Option {
 	opt := func(ca *CertificateAuthority) error {
 		if n < 0 {
-			return errors.New("max previous certificates must be non-negative")
+			return errors.New("max previous CAs must be non-negative")
 		}
-		ca.maxPreviousCerts = n
+		ca.maxPreviousCAs = n
 
 		return nil
 	}
@@ -142,9 +136,10 @@ func WithMaxPreviousCertificates(n int) Option {
 	return opt
 }
 
-// New creates a new [CertificateAuthority].
-func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error) {
-	if caFile == "" {
+// New creates a [CertificateAuthority] from the CA certificate and key files
+// and loads them; it fails if the material is not a usable signing CA.
+func New(caCertFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error) {
+	if caCertFile == "" {
 		return nil, errors.New("invalid CA certificate path specified")
 	}
 	if caKeyFile == "" {
@@ -152,19 +147,18 @@ func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error
 	}
 
 	ca := &CertificateAuthority{
-		certFile:             caFile,
-		privKeyFile:          caKeyFile,
-		backDate:             1 * time.Minute,
-		maxPreviousCerts:     1,
-		previousCertificates: make([]*x509.Certificate, 0),
-		logger:               logr.Discard(),
-		drainWindow:          500 * time.Millisecond,
-		reloadAttempts:       5,
-		reloadBackoff:        200 * time.Millisecond,
-		reloadInterval:       caReloadInterval,
+		caCertFile:     caCertFile,
+		caKeyFile:      caKeyFile,
+		backDate:       1 * time.Minute,
+		maxPreviousCAs: 1,
+		previousCAs:    make([]*x509.Certificate, 0),
+		logger:         logr.Discard(),
+		drainWindow:    500 * time.Millisecond,
+		reloadAttempts: 5,
+		reloadBackoff:  200 * time.Millisecond,
+		reloadInterval: caReloadInterval,
 	}
 
-	// Additional configuration of the CA with the given options.
 	for _, opt := range opts {
 		if err := opt(ca); err != nil {
 			return nil, err
@@ -175,12 +169,12 @@ func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error
 		return nil, err
 	}
 	// Seed the last-success clock from the load that just succeeded. Nothing
-	// else records a success until the watch startup reconcile, which runs
-	// after the manager starts and never at all if the watcher fails to
-	// establish - so without this the "reloads have stopped" gauge would report
-	// the epoch, and its alert would fire on every process start. Not counted
-	// as a reload attempt: this is the bootstrap load, not the reload loop.
-	ca.recordReloadResult(nil)
+	// else records a success until the watch startup reload, which runs after
+	// the manager starts and never at all if the watcher fails to establish -
+	// so without this the "reloads have stopped" gauge would report the epoch,
+	// and its alert would fire on every process start. Not counted as a reload
+	// attempt: this is the bootstrap load, not the reload loop.
+	ca.health.record(nil)
 
 	return ca, nil
 }
@@ -192,7 +186,7 @@ func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error
 // still counts as a successful reload: "the CA is readable" is the health
 // signal, "the CA changed" is not.
 func (ca *CertificateAuthority) load() (bool, error) {
-	keyPair, err := tls.LoadX509KeyPair(ca.certFile, ca.privKeyFile)
+	keyPair, err := tls.LoadX509KeyPair(ca.caCertFile, ca.caKeyFile)
 	if err != nil {
 		return false, fmt.Errorf("load key pair: %w", err)
 	}
@@ -230,7 +224,7 @@ func (ca *CertificateAuthority) load() (bool, error) {
 	// occurrence of the same certificate, so a CA that is rotated back in and
 	// out again keeps one slot rather than accumulating one per flap.
 	if ca.certificate != nil {
-		ca.previousCertificates = append(ca.previousCertificates, ca.certificate)
+		ca.previousCAs = append(ca.previousCAs, ca.certificate)
 	}
 
 	ca.certificate = caCert
@@ -240,7 +234,7 @@ func (ca *CertificateAuthority) load() (bool, error) {
 	// Runs on every load that changed the material, including the very first
 	// one: that is what subjects a bootstrapped history to the same rules as
 	// one this process built itself.
-	ca.normalizePreviousCertificates()
+	ca.normalizePreviousCAs()
 
 	return true, nil
 }
@@ -276,10 +270,10 @@ func validateCACertificate(cert *x509.Certificate, now time.Time) error {
 	return nil
 }
 
-// normalizePreviousCertificates enforces the invariants of the previous-CA
-// history: every entry is a usable CA certificate, no entry is the current CA,
-// no certificate appears twice, the order runs least-recently-active first, and
-// there are never more than maxPreviousCerts of them. Callers must hold ca.mu.
+// normalizePreviousCAs enforces the invariants of the previous-CA history:
+// every entry is a usable CA certificate, no entry is the current CA, no
+// certificate appears twice, the order runs least-recently-active first, and
+// there are never more than maxPreviousCAs of them. Callers must hold ca.mu.
 //
 // The order of the steps is the point. Dropping the current CA and the
 // unusable entries *before* trimming means a rotation back into a certificate
@@ -291,11 +285,11 @@ func validateCACertificate(cert *x509.Certificate, now time.Time) error {
 // Certificates are compared by their DER bytes, the same identity the
 // fingerprint expresses, so "the same CA" means the same certificate rather
 // than the same position in a slice.
-func (ca *CertificateAuthority) normalizePreviousCertificates() {
+func (ca *CertificateAuthority) normalizePreviousCAs() {
 	now := time.Now()
 
-	kept := make([]*x509.Certificate, 0, len(ca.previousCertificates))
-	for i, cert := range ca.previousCertificates {
+	kept := make([]*x509.Certificate, 0, len(ca.previousCAs))
+	for i, cert := range ca.previousCAs {
 		switch {
 		case cert == nil:
 			continue
@@ -304,7 +298,7 @@ func (ca *CertificateAuthority) normalizePreviousCertificates() {
 			// the history too would duplicate it in the trust bundle and spend
 			// a retention slot on it.
 			continue
-		case slices.ContainsFunc(ca.previousCertificates[i+1:], cert.Equal):
+		case slices.ContainsFunc(ca.previousCAs[i+1:], cert.Equal):
 			// A later occurrence is the more recent one; keep that instead.
 			continue
 		}
@@ -317,17 +311,17 @@ func (ca *CertificateAuthority) normalizePreviousCertificates() {
 		kept = append(kept, cert)
 	}
 
-	if len(kept) > ca.maxPreviousCerts {
-		dropped := kept[:len(kept)-ca.maxPreviousCerts]
+	if len(kept) > ca.maxPreviousCAs {
+		dropped := kept[:len(kept)-ca.maxPreviousCAs]
 		for _, cert := range dropped {
 			ca.logger.Info("dropping a previous CA certificate from the retained history",
-				"reason", "history exceeds the configured maximum", "max", ca.maxPreviousCerts,
+				"reason", "history exceeds the configured maximum", "max", ca.maxPreviousCAs,
 				"subject", cert.Subject.String(), "notAfter", cert.NotAfter)
 		}
 		kept = kept[len(dropped):]
 	}
 
-	ca.previousCertificates = kept
+	ca.previousCAs = kept
 }
 
 // Sign issues a certificate for pcConfig under the current CA and returns it
@@ -335,17 +329,11 @@ func (ca *CertificateAuthority) normalizePreviousCertificates() {
 //
 // Failures caused by the CA itself - none loaded, an expired signer, or a
 // pcConfig.Duration that does not fit inside the remaining CA validity - wrap
-// [ErrCASignerUnusable] and are transient: a CA rotation can make an identical
-// request succeed, so callers requeue rather than record a terminal outcome.
-// Any other error is a fault of the request and is terminal.
-func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConfig) (*podcertificate.PodCertificate, error) {
+// [ErrCASignerUnusable]; see its doc. Any other error is terminal.
+func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.Config) (*podcertificate.Certificate, error) {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 
-	// See the certificate field: guarded like every other accessor. Classified
-	// as ErrCASignerUnusable: like an expired signer, a CA rotation can make an
-	// identical request succeed, so callers requeue rather than record a
-	// terminal outcome.
 	if ca.certificate == nil {
 		return nil, fmt.Errorf("no CA certificate loaded: %w", ErrCASignerUnusable)
 	}
@@ -401,7 +389,7 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 		return nil, fmt.Errorf("create certificate for public key type %T: %w", pcConfig.PublicKey, err)
 	}
 
-	return &podcertificate.PodCertificate{
+	return &podcertificate.Certificate{
 		// Issued certificate first, then the CA that signed it.
 		CertificateChain: string(certificatePEM(issuedCertificate)) + string(certificatePEM(ca.certificate.Raw)),
 		Config:           pcConfig,
@@ -423,14 +411,12 @@ func (ca *CertificateAuthority) TrustBundlePEM() []byte {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 
-	// See the certificate field: with no CA loaded there is nothing to
-	// publish, so the bundle is empty rather than a panic.
 	if ca.certificate == nil {
 		return nil
 	}
 
 	bundle := certificatePEM(ca.certificate.Raw)
-	for _, cert := range ca.previousCertificates {
+	for _, cert := range ca.previousCAs {
 		bundle = append(bundle, certificatePEM(cert.Raw)...)
 	}
 

@@ -221,7 +221,7 @@ func defineHighAvailabilityTests() {
 				Eventually(func(g Gomega) {
 					g.Expect(podLogLineCount(leader, "starting ClusterTrustBundle publisher")).To(BeNumerically(">", 0),
 						"the leader must start the leader-gated ClusterTrustBundle publisher")
-					g.Expect(podLogLineCount(leader, "reconciled ClusterTrustBundle")).To(BeNumerically(">", 0),
+					g.Expect(podLogLineCount(leader, publishedBundleLine)).To(BeNumerically(">", 0),
 						"the leader must publish the ClusterTrustBundle")
 				}).Should(Succeed())
 
@@ -239,7 +239,7 @@ func defineHighAvailabilityTests() {
 				Consistently(func(g Gomega) {
 					g.Expect(podLogLineCount(follower, "starting ClusterTrustBundle publisher")).To(Equal(0),
 						"a standby replica must not start the ClusterTrustBundle publisher")
-					g.Expect(podLogLineCount(follower, "reconciled ClusterTrustBundle")).To(Equal(0),
+					g.Expect(podLogLineCount(follower, publishedBundleLine)).To(Equal(0),
 						"a standby replica must never write the shared ClusterTrustBundle")
 				}, haSettleWindow, 5*time.Second).Should(Succeed())
 			})

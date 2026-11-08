@@ -29,13 +29,13 @@ import (
 // Raising the interval past reloadFailureGracePeriod / reloadFailureThreshold
 // (3m20s) would make the threshold rather than the grace period the binding
 // constraint in HealthCheck, so the signer would report NotReady *later* than it
-// does today - a slower reconcile delaying the alarm rather than only the
-// repair. At 60s there is ~3.3x of margin.
+// does today - a slower reload delaying the alarm rather than only the repair.
+// At 60s there is ~3.3x of margin.
 const caReloadInterval = 60 * time.Second
 
 // errWatchChannelClosed indicates that fsnotify closed one of its channels.
 // This cannot be recovered in place, so the watcher must fail and be restarted.
-var errWatchChannelClosed = errors.New("ca-watcher: fsnotify channel closed unexpectedly")
+var errWatchChannelClosed = errors.New("fsnotify channel closed unexpectedly")
 
 // Watch starts a [fsnotify.Watcher], which reloads the CA cert and private key
 // when the underlying files change.
@@ -52,28 +52,28 @@ func (ca *CertificateAuthority) Watch(ctx context.Context, notify chan<- struct{
 	logger := log.FromContext(ctx).WithName("ca-watcher")
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return ca.failWatcher(fmt.Errorf("ca-watcher: unable to create fsnotify.Watcher: %w", err))
+		return ca.health.failWatcher(fmt.Errorf("create fsnotify watcher: %w", err))
 	}
 	defer watcher.Close() //nolint:errcheck // nothing to do with a Close error on shutdown
 
 	paths := []string{
-		filepath.Dir(ca.certFile),
-		filepath.Dir(ca.privKeyFile),
+		filepath.Dir(ca.caCertFile),
+		filepath.Dir(ca.caKeyFile),
 	}
 
 	slices.Sort(paths)
 	for _, path := range slices.Compact(paths) {
 		logger.Info("watching CA directory for changes", "path", path)
 		if err := watcher.Add(path); err != nil {
-			return ca.failWatcher(fmt.Errorf("ca-watcher: unable to add watch directory %s: %w", path, err))
+			return ca.health.failWatcher(fmt.Errorf("watch directory %s: %w", path, err))
 		}
 	}
 
-	// Reconcile once now that the watches are registered: a rotation landing
+	// Reload once now that the watches are registered: a rotation landing
 	// between New's initial load and this point produces no observable event,
 	// so without this pass it would go unnoticed until the first tick.
 	logger.Info("reloading the CA periodically as well as on events", "interval", ca.reloadInterval)
-	ca.reloadOnce(logger, notify, "watch startup")
+	ca.reload(ctx, logger, notify, "watch startup", 1)
 
 	return ca.watchLoop(ctx, logger, watcher.Events, watcher.Errors, notify)
 }
@@ -100,14 +100,17 @@ func (ca *CertificateAuthority) watchLoop(
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			// Reconcile on every tick, not only while reloads are failing: the
+			// Reload on every tick, not only while reloads are failing: the
 			// silent routes (dropped events, a stale inode after the watched
 			// directory is recreated) leave the CA in a *successful* state, so
-			// a failure-gated pass would never run in exactly those cases.
-			ca.reloadOnce(logger, notify, "periodic reload")
+			// a failure-gated pass would never run in exactly those cases. A
+			// tick makes one attempt: it is not correlated with a write, so
+			// there is no torn state to ride out, and the next tick is itself
+			// the retry.
+			ca.reload(ctx, logger, notify, "periodic reload", 1)
 		case event, ok := <-events:
 			if !ok {
-				return ca.failWatcher(errWatchChannelClosed)
+				return ca.health.failWatcher(errWatchChannelClosed)
 			}
 			// Remove is included because a kubelet-style atomic swap replaces
 			// the timestamped directory behind ..data, and a plain deletion of
@@ -119,32 +122,25 @@ func (ca *CertificateAuthority) watchLoop(
 
 			// Coalesce the burst of events a single (near-atomic) CA update
 			// produces before reloading.
-			switch err := ca.drainEvents(ctx, logger, events); {
-			case err == nil:
-				// Burst settled; fall through to reload.
-			case errors.Is(err, errWatchChannelClosed):
-				return ca.failWatcher(err)
-			default:
-				// ctx canceled while draining.
-				return nil
+			if err := ca.drainEvents(ctx, logger, events); err != nil {
+				if errors.Is(err, errWatchChannelClosed) {
+					return ca.health.failWatcher(err)
+				}
+				return nil // ctx canceled while draining
 			}
 
 			logger.Info("reloading CA certificate")
-			// Read before the reload: reloadWithRetry clears the streak on
-			// success.
-			wasFailing := ca.reloadFailing()
-			changed, err := ca.reloadWithRetry(ctx, logger)
-			if ctx.Err() != nil {
-				// Shutting down mid-reload: the retry was abandoned, not
-				// failed, so it is not reported as one.
-				return nil
-			}
-			ca.reportReload(logger, notify, "filesystem event", wasFailing, changed, err)
+			// An event-driven reload gets the retry budget: it follows a
+			// write, and a rotation briefly leaves torn state on disk.
+			ca.reload(ctx, logger, notify, "filesystem event", ca.reloadAttempts)
 		case err, ok := <-errs:
 			if !ok {
-				return ca.failWatcher(errWatchChannelClosed)
+				return ca.health.failWatcher(errWatchChannelClosed)
 			}
 			logger.Error(err, "error watching CA certificate")
+		}
+		if ctx.Err() != nil {
+			return nil
 		}
 	}
 }
@@ -171,36 +167,36 @@ func (ca *CertificateAuthority) drainEvents(ctx context.Context, logger logr.Log
 	}
 }
 
-// reloadOnce reloads the CA once, without retrying, and notifies callers
-// when the material actually changed. The retry budget in reloadWithRetry
-// exists to ride out the torn state a rotation briefly leaves on disk, which is
-// event-adjacent; a pass that is not correlated with a write has nothing to ride
-// out, and the next pass is itself the retry. Keeping it to a single attempt
-// also bounds the log stream: a permanently unloadable CA costs one line per
-// interval rather than the whole retry burst, forever.
-func (ca *CertificateAuthority) reloadOnce(logger logr.Logger, notify chan<- struct{}, cause string) {
-	// Read before the reload: recordReloadResult below clears the streak.
-	wasFailing := ca.reloadFailing()
-	changed, err := ca.load()
-
-	// Recorded regardless of whether anything changed: a readable CA clears the
-	// failure streak (so a replica recovers readiness without a restart), and an
-	// unreadable one accumulates towards the readiness threshold even though no
-	// filesystem event ever arrived.
-	ca.recordReloadAttempt(changed, err)
-
+// reload reads the CA from disk, making up to attempts attempts, and
+// announces the result. It is the one reload sequence the watcher runs, at
+// startup, on every tick and after every filesystem event. A reload abandoned
+// because ctx ended is a shutdown, not a failure, and is not reported.
+//
+// Keeping the periodic pass to a single attempt also bounds the log stream: a
+// permanently unloadable CA costs one line per interval rather than the whole
+// retry burst, forever.
+func (ca *CertificateAuthority) reload(ctx context.Context, logger logr.Logger, notify chan<- struct{}, cause string, attempts int) {
+	// Read before the reload: a successful attempt clears the streak.
+	wasFailing := ca.health.failing()
+	changed, err := ca.loadWithRetry(ctx, logger, attempts)
+	if ctx.Err() != nil {
+		return
+	}
 	ca.reportReload(logger, notify, cause, wasFailing, changed, err)
 }
 
-// recordReloadAttempt records one reload attempt for both consumers that must
-// stay in step: the readiness streak (recordReloadResult) and the reload
-// counter. It returns the resulting number of consecutive failures. New's
-// bootstrap load calls recordReloadResult directly, since it is not an
-// attempt of the reload loop.
-func (ca *CertificateAuthority) recordReloadAttempt(changed bool, err error) int {
-	failures := ca.recordReloadResult(err)
+// reloadAttempt makes one attempt to load the CA and records it for both
+// consumers that must stay in step: the readiness streak and the reload
+// counter. Recorded regardless of whether anything changed: a readable CA
+// clears the failure streak (so a replica recovers readiness without a
+// restart), and an unreadable one accumulates towards the readiness threshold.
+// New's bootstrap load records its result directly, since it is not an attempt
+// of the reload loop.
+func (ca *CertificateAuthority) reloadAttempt() (changed bool, failures int, err error) {
+	changed, err = ca.load()
+	failures = ca.health.record(err)
 	metrics.CAReloadAttempts.WithLabelValues(string(reloadResult(changed, err))).Inc()
-	return failures
+	return changed, failures, err
 }
 
 // reportReload announces the outcome of one reload - failed, changed,
@@ -246,37 +242,30 @@ func notifyChanged(notify chan<- struct{}) {
 	}
 }
 
-// reloadWithRetry attempts to reload the CA, retrying on a bounded linear
-// backoff. A failed attempt leaves the last-good CA in place (see load), so
-// callers keep signing with the previous material until a good reload succeeds.
-// Every attempt is recorded for the readiness probe (see HealthCheck).
-// It reports whether the reload changed the CA material, so callers only
-// republish on a real rotation. It returns nil on the first successful reload,
-// ctx.Err() if ctx is canceled, or the final error once the attempt budget is
-// exhausted.
-func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr.Logger) (bool, error) {
+// loadWithRetry attempts to load the CA up to attempts times, on a bounded
+// linear backoff. A failed attempt leaves the last-good CA in place (see load),
+// so callers keep signing with the previous material until a good reload
+// succeeds. It reports whether the reload changed the CA material, so callers
+// only republish on a real rotation. It returns nil on the first successful
+// attempt, ctx.Err() if ctx is canceled, or the final error once the attempt
+// budget is exhausted.
+func (ca *CertificateAuthority) loadWithRetry(ctx context.Context, logger logr.Logger, attempts int) (bool, error) {
 	const maxBackoff = 5 * time.Second
 
-	var err error
 	for attempt := 1; ; attempt++ {
-		var changed bool
-		if changed, err = ca.load(); err == nil {
-			ca.recordReloadAttempt(changed, nil)
-
+		// Every attempt is recorded, not only the exhausted burst, so the
+		// readiness streak and the attempts counter count every read that
+		// failed.
+		changed, failures, err := ca.reloadAttempt()
+		if err == nil {
 			return changed, nil
 		}
-
-		// Record each failed attempt rather than only the exhausted burst:
-		// nothing reloads again until the next filesystem event, so a CA that
-		// stays unloadable must be able to cross the readiness threshold
-		// without one.
-		failures := ca.recordReloadAttempt(false, err)
-		if attempt >= ca.reloadAttempts {
+		if attempt >= attempts {
 			return false, fmt.Errorf("reload failed after %d attempt(s), %d consecutive failure(s): %w",
 				attempt, failures, err)
 		}
 		logger.Error(err, "failed to reload CA certificate, retrying",
-			"attempt", attempt, "maxAttempts", ca.reloadAttempts,
+			"attempt", attempt, "maxAttempts", attempts,
 			"consecutiveFailures", failures)
 
 		timer := time.NewTimer(min(ca.reloadBackoff*time.Duration(attempt), maxBackoff))
@@ -292,13 +281,13 @@ func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr
 // reloadResult classifies a reload attempt for the metric. The three values are
 // the three arms the callers already branch on, so the label cannot drift from
 // what the logs say happened.
-func reloadResult(changed bool, err error) metrics.Result {
+func reloadResult(changed bool, err error) metrics.ReloadResult {
 	switch {
 	case err != nil:
-		return metrics.ResultFailed
+		return metrics.ReloadFailed
 	case changed:
-		return metrics.ResultChanged
+		return metrics.ReloadChanged
 	default:
-		return metrics.ResultUnchanged
+		return metrics.ReloadUnchanged
 	}
 }

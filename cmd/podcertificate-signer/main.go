@@ -26,9 +26,12 @@ import (
 	"time"
 
 	"go.uber.org/zap/zapcore"
-	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
-	// to ensure that exec-entrypoint and run can make use of them.
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	// The OIDC client auth provider, for out-of-cluster runs (make run)
+	// against a kubeconfig that authenticates with OIDC. It is the only
+	// provider the client-go auth umbrella package still registers; exec-based
+	// credential plugins need no import. In-cluster the ServiceAccount token
+	// is used and this is inert.
+	_ "k8s.io/client-go/plugin/pkg/client/auth/oidc"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -56,7 +59,9 @@ var (
 )
 
 const (
-	DefaultControllerName = "PodCertificateSigner"
+	// controllerName is the controller-runtime controller name, the logger
+	// name and the reporter on every event the controller emits.
+	controllerName = "PodCertificateSigner"
 
 	// defaultEnableAnnotationInterpolation is the shipped default for
 	// --enable-annotation-interpolation. On: a ${...} placeholder resolves
@@ -99,10 +104,10 @@ func init() {
 // struct, so nothing is copied field by field afterwards.
 type flags struct {
 	signerName, caCertPath, caKeyPath string
-	maxPreviousCACerts                int
+	maxPreviousCAs                    int
 	requireCAHistory                  bool
 	manager                           managerConfig
-	certificate                       podcertificate.Options
+	certOpts                          podcertificate.Options
 }
 
 // registerFlags declares every command-line flag on fs and returns the struct
@@ -112,7 +117,7 @@ func registerFlags(fs *flag.FlagSet) *flags {
 	fs.StringVar(&f.signerName, "signer-name", "", "Only sign CSR with this .spec.signerName. Required.")
 	fs.StringVar(&f.caCertPath, "ca-cert-path", "", "CA certificate file.")
 	fs.StringVar(&f.caKeyPath, "ca-key-path", "", "CA private key file.")
-	fs.StringVar(&f.certificate.ClusterFQDN, "cluster-fqdn", podcertificate.DefaultClusterFQDN, "The FQDN of the cluster")
+	fs.StringVar(&f.certOpts.ClusterFQDN, "cluster-fqdn", podcertificate.DefaultClusterFQDN, "The FQDN of the cluster")
 	fs.StringVar(&f.manager.leaderElectionID, "leader-election-id", "pcs-leader-election",
 		"The name of the Lease used to coordinate leader election between replicas.")
 	fs.StringVar(&f.manager.leaderElectionNamespace, "leader-election-namespace", "",
@@ -127,28 +132,28 @@ func registerFlags(fs *flag.FlagSet) *flags {
 			"(SubjectAccessReview) for every scrape. On by default. Set to false to fall back to the legacy "+
 			"unauthenticated plaintext endpoint - see the chart's metrics.insecure escape hatch.")
 	fs.IntVar(&f.manager.maxConcurrentReconciles, "max-concurrent-reconciles", 5, "maximum number of concurrent reconciles which can be run.")
-	fs.IntVar(&f.maxPreviousCACerts, "max-previous-ca-certs", 2, "maximum number of previous CA certificates to keep during CA rotation.")
+	fs.IntVar(&f.maxPreviousCAs, "max-previous-ca-certs", 2, "maximum number of previous CA certificates to keep during CA rotation.")
 	fs.BoolVar(&f.requireCAHistory, "require-ca-history", false,
 		"Refuse to start when the signer's ClusterTrustBundle does not exist, instead of starting with an empty "+
 			"previous-CA history. Off by default, because a first install has no bundle yet and the controller cannot "+
 			"tell that apart from one that was deleted. Turn it on once the signer has published its bundle, so a "+
 			"deleted bundle cannot silently reset the retained CA history (see docs/operations.md).")
 	fs.DurationVar(&f.manager.reconcileTimeout, "reconcile-timeout", 5*time.Minute, "maximum duration of a reconcile before it times out.")
-	fs.BoolVar(&f.certificate.EnableInterpolation, "enable-annotation-interpolation", defaultEnableAnnotationInterpolation,
+	fs.BoolVar(&f.certOpts.EnableInterpolation, "enable-annotation-interpolation", defaultEnableAnnotationInterpolation,
 		"Allow ${...} placeholders (e.g. ${pod.name}, ${pod.serviceAccountName}) in certificate configuration annotations, "+
 			"resolved from the verified fields of the PodCertificateRequest. On by default; resolved values remain subject "+
 			"to the identity constraints unless --allow-unverified-identities is set. Set to false to deny any value "+
 			"containing ${...} instead of resolving it.")
-	fs.BoolVar(&f.certificate.HonorCSRSANs, "honor-csr-sans", false,
+	fs.BoolVar(&f.certOpts.HonorCSRSANs, "honor-csr-sans", false,
 		"Honor DNS and IP SANs embedded in the kubelet-generated PKCS#10 CSR when no SAN annotation overrides them. "+
 			"CSR SANs stay subject to the identity constraints unless --allow-unverified-identities is set (CSR DNS SANs "+
 			"must be a verified identity; CSR IP SANs are denied). Kubelet generates empty CSRs today; this prepares for "+
 			"upcoming Kubernetes support for requesting SANs.")
-	fs.BoolVar(&f.certificate.AllowUnverifiedIdentities, "allow-unverified-identities", defaultAllowUnverifiedIdentities,
+	fs.BoolVar(&f.certOpts.AllowUnverifiedIdentities, "allow-unverified-identities", defaultAllowUnverifiedIdentities,
 		"Allow cn/san/ip-san/uris annotation values that are not derived from the verified PodCertificateRequest fields "+
-			"(pod name/namespace/serviceAccountName/uid + cluster FQDN). Off by default: leaving it off prevents a pod from "+
-			"requesting a certificate for an identity it does not own.")
-	fs.BoolVar(&f.certificate.AllowPodAnnotations, "allow-pod-annotations", defaultAllowPodAnnotations,
+			"(pod name, namespace and serviceAccountName + cluster FQDN), and, with --honor-csr-sans, CSR SANs. Off by default: "+
+			"leaving it off prevents a pod from requesting a certificate for an identity it does not own.")
+	fs.BoolVar(&f.certOpts.AllowPodAnnotations, "allow-pod-annotations", defaultAllowPodAnnotations,
 		"Fall back to the pod's own annotations for configuration values the PodCertificateRequest does not carry in "+
 			"spec.unverifiedUserAnnotations. Deprecated and removed in 4.0.0; on by default until then. Set to false once "+
 			"every workload has moved to spec.unverifiedUserAnnotations, so pod annotations stop influencing issuance.")
@@ -167,7 +172,7 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	if err := validateFlags(f.signerName, f.certificate.ClusterFQDN); err != nil {
+	if err := validateFlags(f.signerName, f.certOpts.ClusterFQDN); err != nil {
 		setupLog.Error(err, "invalid command-line flags")
 		os.Exit(1)
 	}
@@ -204,8 +209,8 @@ func main() {
 	ca, err := authority.New(
 		f.caCertPath,
 		f.caKeyPath,
-		authority.WithPreviousCABundle(previousCAs),
-		authority.WithMaxPreviousCertificates(f.maxPreviousCACerts),
+		authority.WithPreviousCAs(previousCAs),
+		authority.WithMaxPreviousCAs(f.maxPreviousCAs),
 		authority.WithLogger(ctrl.Log.WithName("certificate-authority")),
 	)
 	if err != nil {
@@ -224,11 +229,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Wire the CA file watcher and the ClusterTrustBundle publisher. The
+	// Wire the CA file watcher and the ClusterTrustBundle publisher: the
+	// watcher signals the publisher whenever a reload changed the CA. The
 	// watcher runs on every replica so standby replicas keep their in-memory
 	// CA current; the publisher is leader-gated so only the elected leader
 	// writes the shared ClusterTrustBundle.
-	caWatcher, ctbPublisher := trustbundle.NewRunnables(c, f.signerName, ca)
+	ctbPublisher := trustbundle.NewPublisher(c, f.signerName, ca)
+	caWatcher := authority.NewWatcher(ca, ctbPublisher.Notify())
 	if err := mgr.Add(caWatcher); err != nil {
 		setupLog.Error(err, "unable to add CA watcher runnable")
 		os.Exit(1)
@@ -238,13 +245,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	reconciler, err := controller.NewPodCertificateRequestReconciler(mgr, DefaultControllerName, f.signerName, ca, f.certificate)
+	reconciler, err := controller.NewPodCertificateRequestReconciler(mgr, controllerName, f.signerName, ca, f.certOpts)
 	if err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", DefaultControllerName)
+		setupLog.Error(err, "unable to create controller", "controller", controllerName)
 		os.Exit(1)
 	}
 	if err := reconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to set up controller", "controller", DefaultControllerName)
+		setupLog.Error(err, "unable to set up controller", "controller", controllerName)
 		os.Exit(1)
 	}
 

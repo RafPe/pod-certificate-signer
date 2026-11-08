@@ -64,8 +64,8 @@ repaired by the next publish instead of becoming permanent history
 ([ADR-0004](./adr/0004-bootstrapped-previous-ca-history.md)).
 
 > [!IMPORTANT]
-> **Set `signer.require_ca_history: true` once the signer has published its
-> bundle.** A bundle that has never existed and one that was *deleted* look
+> **Set `signer.require_ca_history: true` (the `--require-ca-history` flag)
+> once the signer has published its bundle.** A bundle that has never existed and one that was *deleted* look
 > identical to the controller, so by default a missing bundle starts an empty
 > history — which is right for a first install and, after one, means the retained
 > CAs are gone for good the next time the controller restarts. With the flag on,
