@@ -2,6 +2,7 @@ package controller
 
 import (
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -25,25 +26,30 @@ func TestEventThrottleAllowsOncePerObjectPerInterval(t *testing.T) {
 }
 
 // Once the interval has elapsed the object is announced again, and the entry
-// that expired is dropped rather than kept forever.
+// that expired is dropped rather than kept forever. Fake time, like the
+// sibling throttle tests in events_test.go.
 func TestEventThrottleResetsAfterInterval(t *testing.T) {
-	throttle := eventThrottle{interval: 20 * time.Millisecond}
-	uid := types.UID("pcr-uid")
+	synctest.Test(t, func(t *testing.T) {
+		var throttle eventThrottle
+		uid := types.UID("pcr-uid")
 
-	if !throttle.allow(uid) {
-		t.Fatal("the first event must pass")
-	}
-	time.Sleep(30 * time.Millisecond)
-	if !throttle.allow(uid) {
-		t.Error("an event after the interval elapsed must pass again")
-	}
+		if !throttle.allow(uid) {
+			t.Fatal("the first event must pass")
+		}
+		time.Sleep(defaultEventThrottleInterval)
+		synctest.Wait()
+		if !throttle.allow(uid) {
+			t.Error("an event after the interval elapsed must pass again")
+		}
 
-	// The expired entry for a second object is pruned on the next call, so
-	// the map holds only objects seen within the current window.
-	throttle.allow("other")
-	time.Sleep(30 * time.Millisecond)
-	throttle.allow(uid)
-	if _, kept := throttle.last["other"]; kept {
-		t.Error("an entry older than the interval must be pruned")
-	}
+		// The expired entry for a second object is pruned on the next call, so
+		// the map holds only objects seen within the current window.
+		throttle.allow("other")
+		time.Sleep(defaultEventThrottleInterval)
+		synctest.Wait()
+		throttle.allow(uid)
+		if _, kept := throttle.last["other"]; kept {
+			t.Error("an entry older than the interval must be pruned")
+		}
+	})
 }

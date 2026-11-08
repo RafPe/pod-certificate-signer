@@ -128,21 +128,19 @@ flowchart TB
 
     subgraph controller["Controller [Container: Go]"]
         reconciler["PodCertificateRequest reconciler<br/><i>[Component]</i><br/>Validates the request, then issues or denies"]
-        config["Certificate configuration<br/><i>[Component]</i><br/>Annotation contract, identity constraints,<br/>interpolation, status-contract validation"]
+        config["Certificate configuration<br/><i>[Component]</i><br/>CSR parsing, annotation contract, identity<br/>constraints, interpolation, status-contract validation"]
         authority["Certificate authority<br/><i>[Component]</i><br/>In-memory CA, fsnotify hot-reload,<br/>fits lifetimes to CA validity, signs leaves,<br/>retains previous CAs across rotation"]
-        signerCore["Signer<br/><i>[Component]</i><br/>Scopes signing to one signer name, parses<br/>the kubelet CSR, names &amp; assembles the<br/>ClusterTrustBundle object"]
-        ctb["ClusterTrustBundle publisher<br/><i>[Component]</i><br/>Leader-gated; reconciles the bundle<br/>towards the current CA"]
+        ctb["ClusterTrustBundle publisher<br/><i>[Component]</i><br/>Leader-gated; names &amp; assembles the bundle<br/>and reconciles it towards the current CA"]
         probes["Health &amp; readiness<br/><i>[Component]</i><br/>healthz/readyz gated on CA and<br/>publisher health"]
-        metrics["Metrics<br/><i>[Component]</i><br/>Prometheus, incl. publish failures"]
+        metrics["Metrics<br/><i>[Component]</i><br/>Prometheus, bounded surface (ADR-0005)"]
     end
 
     api -->|PodCertificateRequest events| reconciler
     reconciler -->|Reads requesting pod, updates status| api
     reconciler -->|Parses the CSR, resolves configuration| config
-    reconciler -->|Signs on success| signerCore
-    signerCore -->|Signs with current CA key| authority
+    reconciler -->|Signs on success| authority
     authority -->|Watches &amp; reloads cert/key| ca
-    ctb -->|Reads the assembled ClusterTrustBundle| signerCore
+    ctb -->|Reads the current trust bundle PEM| authority
     ctb -->|Creates/patches ClusterTrustBundle| api
     probes -->|Polls watcher/reload health| authority
     probes -->|Polls last publish outcome| ctb
@@ -152,17 +150,17 @@ flowchart TB
 
 | Component | Responsibility | Leader-gated |
 | --- | --- | --- |
-| **PodCertificateRequest reconciler** | Watches `PodCertificateRequest`s for the configured signer name, reads the requesting pod (uncached `get`), drives validation and records the `Issued`/`Denied`/`Failed` outcome. | No — runs on every replica |
-| **Certificate configuration** | Parses the annotation contract, enforces identity constraints, resolves `${...}` interpolation, and validates duration/refresh/EKU against the apiserver status contract. | No |
+| **PodCertificateRequest reconciler** | Watches `PodCertificateRequest`s for the configured signer name, reads the requesting pod (uncached `get`), drives validation and records the `Issued`/`Denied`/`Failed` outcome. | **Yes** — controller-runtime gates controllers on leader election by default; see [ADR-0006](adr/0006-release-leader-lease-on-cancel.md) |
+| **Certificate configuration** | Parses the kubelet CSR and the annotation contract, enforces identity constraints, resolves `${...}` interpolation, and validates duration/refresh/EKU against the apiserver status contract. | n/a — library used by the reconciler |
 | **Certificate authority** | Holds the in-memory CA, hot-reloads the cert/key when the mounted files change (fsnotify), fits the requested lifetime inside the CA validity, builds and signs the leaf certificate, and retains up to `--max-previous-ca-certs` previous CAs across rotation as the trust bundle PEM. | No — every replica keeps its CA current |
-| **Signer** | Scopes signing to one signer name, parses the kubelet-generated CSR, and names and assembles the `ClusterTrustBundle` object from the authority's trust bundle. | No |
-| **ClusterTrustBundle publisher** | Reconciles the signer's `ClusterTrustBundle` towards the current CA on reload events and a 10-minute drift-repair tick, with single-flight retries. | **Yes** — only the elected leader writes the shared resource |
+| **ClusterTrustBundle publisher** | Names and assembles the signer's `ClusterTrustBundle` from the authority's trust bundle and reconciles it towards the current CA on reload events and a 10-minute drift-repair tick, with single-flight retries. | **Yes** — only the elected leader writes the shared resource |
 | **Health & readiness** | Serves `healthz`/`readyz`; readiness is gated on CA watcher/reload health and the publisher's last outcome. | No |
-| **Metrics** | Exposes Prometheus metrics under the `podcertificatesigner_` prefix, alongside controller-runtime's. The surface is bounded by [ADR-0005](adr/0005-bounded-metrics-surface.md): no label carries a pod, request or certificate identity. | No |
+| **Metrics** | Exposes the bounded `podcertificatesigner_` Prometheus surface (request outcomes, requeues, drops, CA reloads, trust-bundle publishes and the CA gauges), alongside controller-runtime's. [ADR-0005](adr/0005-bounded-metrics-surface.md): no label carries a pod, request or certificate identity. | No |
 
 The CA watcher runs on **every** replica so a standby never signs or publishes
-with stale material immediately after being promoted; only the publisher is
-leader-gated, so exactly one replica writes the shared `ClusterTrustBundle`. See
+with stale material immediately after being promoted; signing and publishing
+are leader-gated, so exactly one replica issues certificates and writes the
+shared `ClusterTrustBundle` at a time. See
 [Operations](./operations.md) for how these behave during CA rotation, leader
 changes and restarts.
 

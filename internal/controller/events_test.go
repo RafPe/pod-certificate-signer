@@ -54,6 +54,7 @@ func caUnusableHarness(t *testing.T, signErr error) (
 		APIReader:     cl,
 		Log:           logr.Discard(),
 		Signer:        &stubSigner{name: caUnusableSignerName, err: signErr},
+		SignerName:    caUnusableSignerName,
 		EventRecorder: rec,
 	}
 
@@ -146,8 +147,8 @@ func TestReconcileOtherTransientErrorsEmitNoEvent(t *testing.T) {
 		// A transient error that is not the CA (a failed API read, say) is routed
 		// through the same branch, so assert on that branch directly.
 		ctx := logr.NewContext(t.Context(), logr.Discard())
-		if _, err := r.recordFailure(ctx, pcr, errors.New("etcdserver: request timed out")); err == nil {
-			t.Fatal("recordFailure() error = nil, want the transient error returned so the reconcile requeues")
+		if _, err := r.requeueOrRecordTerminal(ctx, pcr, errors.New("etcdserver: request timed out")); err == nil {
+			t.Fatal("requeueOrRecordTerminal() error = nil, want the transient error returned so the reconcile requeues")
 		}
 
 		select {
@@ -239,7 +240,7 @@ func TestReconcileDroppedGonePodEmitsEvent(t *testing.T) {
 			stub := &stubSigner{name: signerName, cert: stubCert()}
 			rec := events.NewFakeRecorder(10)
 			r := &PodCertificateRequestReconciler{
-				Client: cache, APIReader: live, Log: logr.Discard(), Signer: stub, EventRecorder: rec,
+				Client: cache, APIReader: live, Log: logr.Discard(), Signer: stub, SignerName: stub.name, EventRecorder: rec,
 			}
 
 			res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pcr)})

@@ -22,7 +22,7 @@ logs. Two of them are outages an operator cannot see coming:
   reconciler requeues silently and forever (`controller.go:318-320`). Pods sit
   in `ContainerCreating` with nothing on the request explaining why. #108 adds
   an event; nothing makes the *approaching* condition alertable.
-- **A reload loop that stopped.** `caReconcileInterval` exists so a rotation the
+- **A reload loop that stopped.** `caReloadInterval` exists so a rotation the
   event path missed still converges (`authority.go:89-105`). A wedged ticker
   produces no failures, so any failure-based signal stays at zero forever.
 
@@ -143,7 +143,7 @@ starts once it merges.
    has since been deleted) and deriving the table would ship a permanent zero
    series for an impossible outcome.
 3. **CA reload counters and gauges (M2, M3, M4).** M2 increments in
-   `reconcileOnce` and the event path, whose three results map to the existing
+   `reloadOnce` and the event path, whose three results map to the existing
    `changed`/`unchanged`/`failed` branches. M3 and M4 read state already held
    under `healthMu`.
 4. **CA expiry and trust bundle (M5, M6, M7).** M5 and M7 are computed at scrape

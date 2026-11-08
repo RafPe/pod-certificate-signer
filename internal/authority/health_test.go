@@ -36,7 +36,7 @@ func newTestCA(t *testing.T) (*CertificateAuthority, string) {
 // been unloadable persistently, which is both at least 3 consecutive failed
 // reload attempts and at least 10 minutes since the first of them.
 func TestHealthyGracePeriodForReloadFailures(t *testing.T) {
-	reloadErr := errors.New("failed to load key pair")
+	reloadErr := errors.New("load key pair")
 
 	tests := []struct {
 		name         string

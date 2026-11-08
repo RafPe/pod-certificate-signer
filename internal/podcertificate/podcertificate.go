@@ -1,8 +1,14 @@
+// Package podcertificate turns a PodCertificateRequest, its pod and the
+// kubelet-generated CSR into the certificate configuration the authority
+// signs: it parses the CSR, applies the annotation contract, enforces the
+// identity constraints and validates the result against the apiserver's
+// status contract.
 package podcertificate
 
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"time"
 
@@ -34,6 +40,13 @@ type Options struct {
 	// SANs; when disabled, CSR SANs are ignored, which the API contract
 	// explicitly allows for signers.
 	HonorCSRSANs bool
+	// AllowPodAnnotations keeps the deprecated fallback to the pod's own
+	// annotations for configuration values the request does not carry. It is
+	// on by default until the fallback is removed in 4.0.0, and is the switch
+	// an operator who has migrated every workload to
+	// spec.unverifiedUserAnnotations uses to close that second requester-
+	// controlled input now.
+	AllowPodAnnotations bool
 	// AllowUnverifiedIdentities lifts the requirement that certificate identities
 	// resolve to one derived from the apiserver-verified PodCertificateRequest
 	// fields (pod name/namespace/serviceAccountName/uid + cluster FQDN). It
@@ -48,16 +61,17 @@ type Options struct {
 
 // NewPodCertificateConfig builds the certificate configuration for the given
 // PodCertificateRequest, its associated pod and the CSR kubelet generated for
-// it. A nil csr means no public key and no requested SANs.
+// it. pod is required: its name and namespace form the default identities. A
+// nil csr means no public key and no requested SANs.
 //
 // Configuration values are read from the request spec.unverifiedUserAnnotations,
-// falling back to the pod's annotations (deprecated, see
-// annotationResolver.lookup). Keys follow the <signer-name>-<suffix>
+// falling back to the pod's annotations while opts.AllowPodAnnotations is set
+// (deprecated, see podAnnotation). Keys follow the <signer-name>-<suffix>
 // convention, e.g. coolcert.example.com/mysigner-cn.
 //
-// Malformed values and any unverifiedUserAnnotations key the signer does not
-// recognize result in an error, since signers should deny requests they do not
-// fully understand rather than silently fall back to defaults.
+// Malformed or empty values and any unverifiedUserAnnotations key the signer
+// does not recognize result in an error, since signers should deny requests
+// they do not fully understand rather than silently fall back to defaults.
 func NewPodCertificateConfig(
 	ctx context.Context,
 	pcr *certificatesv1.PodCertificateRequest,
@@ -65,6 +79,9 @@ func NewPodCertificateConfig(
 	csr *CSR,
 	opts Options,
 ) (*PodCertificateConfig, error) {
+	if pod == nil {
+		return nil, errors.New("pod is required")
+	}
 	if csr == nil {
 		csr = &CSR{}
 	}
@@ -73,7 +90,7 @@ func NewPodCertificateConfig(
 	}
 	signerName := pcr.Spec.SignerName
 
-	if err := checkUnrecognizedUserAnnotations(pcr.Spec.UnverifiedUserAnnotations, signerName); err != nil {
+	if err := validateAnnotationKeys(pcr.Spec.UnverifiedUserAnnotations, signerName); err != nil {
 		return nil, err
 	}
 

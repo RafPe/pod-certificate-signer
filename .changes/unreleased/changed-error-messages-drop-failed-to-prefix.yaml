@@ -1,0 +1,2 @@
+kind: Changed
+body: 'CA reload and signing errors drop their "failed to"/"unable to" prefixes (`load key pair: ...`, `parse certificate: ...`), matching the rest of the codebase; anything matching controller logs on the old wording should match on the remainder.'

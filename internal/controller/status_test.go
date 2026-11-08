@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
 	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -46,7 +47,7 @@ func TestRecordOutcomeNoEventWhenStatusWriteFails(t *testing.T) {
 	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: rec}
 
 	_, err := r.recordOutcome(context.Background(), pcr,
-		certificatesv1.PodCertificateRequestConditionTypeIssued, ReasonCertificateIssued, "issued", corev1.EventTypeNormal)
+		certificatesv1.PodCertificateRequestConditionTypeIssued, metrics.ReasonCertificateIssued, "issued", corev1.EventTypeNormal)
 	if err == nil {
 		t.Fatal("recordOutcome() error = nil, want the status write error to propagate")
 	}
@@ -92,7 +93,7 @@ func TestReconcileRetriesStatusConflict(t *testing.T) {
 	stub := &stubSigner{name: signerName, cert: stubCert()}
 	rec := events.NewFakeRecorder(10)
 	r := &PodCertificateRequestReconciler{
-		Client: cl, APIReader: cl, Log: logr.Discard(), Signer: stub, EventRecorder: rec,
+		Client: cl, APIReader: cl, Log: logr.Discard(), Signer: stub, SignerName: stub.name, EventRecorder: rec,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pcr)})
@@ -153,7 +154,7 @@ func TestReconcileConflictPreservesConcurrentTerminalOutcome(t *testing.T) {
 						Type:               certificatesv1.PodCertificateRequestConditionTypeDenied,
 						Status:             metav1.ConditionTrue,
 						LastTransitionTime: metav1.Now(),
-						Reason:             string(ReasonInvalidUserConfig),
+						Reason:             string(metrics.ReasonInvalidUserConfig),
 						Message:            "denied by a concurrent writer",
 					}}
 					if err := c.Status().Update(ctx, concurrent); err != nil {
@@ -171,7 +172,7 @@ func TestReconcileConflictPreservesConcurrentTerminalOutcome(t *testing.T) {
 	stub := &stubSigner{name: signerName, cert: stubCert()}
 	rec := events.NewFakeRecorder(10)
 	r := &PodCertificateRequestReconciler{
-		Client: cl, APIReader: cl, Log: logr.Discard(), Signer: stub, EventRecorder: rec,
+		Client: cl, APIReader: cl, Log: logr.Discard(), Signer: stub, SignerName: stub.name, EventRecorder: rec,
 	}
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
@@ -219,7 +220,7 @@ func TestRecordTerminal(t *testing.T) {
 		wantType string
 	}{
 		{"failed clears fields", failed(errors.New("sign broke")), "Failed"},
-		{"denied clears fields", denied(ReasonUnsupportedKeyType, errors.New("bad key")), "Denied"},
+		{"denied clears fields", denied(metrics.ReasonUnsupportedKeyType, errors.New("bad key")), "Denied"},
 	}
 
 	for _, tc := range cases {
@@ -234,7 +235,7 @@ func TestRecordTerminal(t *testing.T) {
 				WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
 				Build()
 			rec := events.NewFakeRecorder(10)
-			r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: rec}
+			r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: rec}
 
 			var te *TerminalError
 			if !errors.As(tc.err, &te) {
@@ -288,14 +289,10 @@ func TestRecordIssued(t *testing.T) {
 		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
 		Build()
 	rec := events.NewFakeRecorder(10)
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: rec}
+	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: rec}
 
 	now := time.Now()
-	cert := podcertificate.NewPodCertificate("pem-chain",
-		&podcertificate.PodCertificateConfig{Duration: time.Hour, RefreshBefore: 15 * time.Minute},
-		now,
-		now.Add(time.Hour),
-	)
+	cert := &podcertificate.PodCertificate{CertificateChain: "pem-chain", Config: &podcertificate.PodCertificateConfig{Duration: time.Hour, RefreshBefore: 15 * time.Minute}, NotBefore: now, NotAfter: now.Add(time.Hour)}
 
 	if _, err := r.recordIssued(context.Background(), pcr, cert); err != nil {
 		t.Fatalf("recordIssued: %v", err)

@@ -22,13 +22,12 @@ import (
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/signer"
 )
 
 // apiRetryBackoff is the retry budget one API operation gets for transient
 // errors before its outcome is recorded as failed: a single publish, or the
-// startup read of the previous-CA history. Package-level so tests exercise the
-// same policy the binary ships with.
+// startup read of the previous-CA history. Both consumers read it directly, so
+// tests exercise the same policy the binary ships with.
 var apiRetryBackoff = wait.Backoff{
 	Steps:    5,
 	Duration: 500 * time.Millisecond,
@@ -68,11 +67,11 @@ func (*CAWatcher) NeedLeaderElection() bool { return false }
 // single-flight (a reconcile triggered while one is in flight is coalesced). It
 // is leader-gated so only the elected leader writes the shared resource.
 type Publisher struct {
-	client   client.Client
-	signer   *signer.Signer
-	events   <-chan struct{}
-	interval time.Duration
-	backoff  wait.Backoff
+	client     client.Client
+	signerName string
+	ca         *authority.CertificateAuthority
+	events     <-chan struct{}
+	interval   time.Duration
 
 	// runMu is a single-flight guard: TryLock lets a reconcile skip when
 	// another is already publishing.
@@ -86,15 +85,15 @@ type Publisher struct {
 // NewRunnables wires the CA file watcher and the ClusterTrustBundle publisher
 // so that CA reload events flow from the watcher to the publisher over a shared
 // channel. The watcher runs on every replica; the publisher is leader-gated.
-func NewRunnables(c client.Client, s *signer.Signer, ca *authority.CertificateAuthority) (*CAWatcher, *Publisher) {
+func NewRunnables(c client.Client, signerName string, ca *authority.CertificateAuthority) (*CAWatcher, *Publisher) {
 	events := make(chan struct{}, 2)
 	watcher := &CAWatcher{ca: ca, notify: events}
 	publisher := &Publisher{
-		client:   c,
-		signer:   s,
-		events:   events,
-		interval: DriftRepairInterval,
-		backoff:  apiRetryBackoff,
+		client:     c,
+		signerName: signerName,
+		ca:         ca,
+		events:     events,
+		interval:   DriftRepairInterval,
 	}
 	return watcher, publisher
 }
@@ -109,16 +108,16 @@ func (p *Publisher) Start(ctx context.Context) error {
 	ticker := time.NewTicker(p.interval)
 	defer ticker.Stop()
 
-	p.reconcile(ctx, logger)
+	p.publish(ctx, logger)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-p.events:
-			p.reconcile(ctx, logger)
+			p.publish(ctx, logger)
 		case <-ticker.C:
 			// Periodic drift repair, independent of fsnotify events.
-			p.reconcile(ctx, logger)
+			p.publish(ctx, logger)
 		}
 	}
 }
@@ -127,12 +126,12 @@ func (p *Publisher) Start(ctx context.Context) error {
 // ClusterTrustBundle.
 func (*Publisher) NeedLeaderElection() bool { return true }
 
-// reconcile publishes the current CA trust bundle to the ClusterTrustBundle,
+// publish writes the current CA trust bundle to the ClusterTrustBundle,
 // retrying with exponential backoff. It is single-flight: if a publish is
 // already in flight the call is skipped, since the in-flight publish will use
 // the latest in-memory CA state anyway. It returns true if a publish ran and
 // false if it was skipped.
-func (p *Publisher) reconcile(ctx context.Context, logger logr.Logger) bool {
+func (p *Publisher) publish(ctx context.Context, logger logr.Logger) bool {
 	if !p.runMu.TryLock() {
 		logger.V(1).Info("ClusterTrustBundle publish already in progress, skipping")
 		return false
@@ -149,18 +148,24 @@ func (p *Publisher) reconcile(ctx context.Context, logger logr.Logger) bool {
 	// wrong in the other direction: a transport or per-request deadline
 	// surfaces as an error wrapping context.DeadlineExceeded while ctx is still
 	// live, and that is exactly the transient failure this backoff exists for.
-	err := retry.OnError(p.backoff, func(error) bool { return ctx.Err() == nil }, func() error {
+	err := retry.OnError(apiRetryBackoff, func(error) bool { return ctx.Err() == nil }, func() error {
 		var perr error
 		op, perr = p.publishOnce(ctx, logger)
 		return perr
 	})
+	if ctx.Err() != nil {
+		// Shutting down: the publish was abandoned, not failed. Recording it
+		// as a failure would flip readiness and count a failed publish for a
+		// process that is exiting anyway.
+		return true
+	}
 	p.recordPublishResult(err)
 	if err != nil {
-		metrics.ClusterTrustBundlePublishAttempts.WithLabelValues(metrics.ResultFailed).Inc()
+		metrics.ClusterTrustBundlePublishAttempts.WithLabelValues(string(metrics.ResultFailed)).Inc()
 		logger.Error(err, "unable to update ClusterTrustBundle after retries")
 		return true
 	}
-	metrics.ClusterTrustBundlePublishAttempts.WithLabelValues(publishResult(op)).Inc()
+	metrics.ClusterTrustBundlePublishAttempts.WithLabelValues(string(publishResult(op))).Inc()
 	return true
 }
 
@@ -169,7 +174,7 @@ func (p *Publisher) reconcile(ctx context.Context, logger logr.Logger) bool {
 // function touches only .spec, so the status results cannot occur; they are
 // folded into "updated" rather than minting a label value the surface does not
 // budget for.
-func publishResult(op controllerutil.OperationResult) string {
+func publishResult(op controllerutil.OperationResult) metrics.Result {
 	switch op {
 	case controllerutil.OperationResultNone:
 		return metrics.ResultUnchanged
@@ -181,12 +186,12 @@ func publishResult(op controllerutil.OperationResult) string {
 }
 
 // publishOnce performs a single CreateOrPatch of the ClusterTrustBundle to the
-// current CA trust bundle. The desired bundle is read from the signer once, so
-// the object that is read, the spec that is compared and the spec that is
-// written all describe the same CA state. The mutate function overwrites (never
-// merges) the spec, so CA pruning in the rolling window is preserved.
+// current CA trust bundle. The desired bundle is read from the CA once, so the
+// object that is read, the spec that is compared and the spec that is written
+// all describe the same CA state. The mutate function overwrites (never merges)
+// the spec, so CA pruning in the rolling window is preserved.
 func (p *Publisher) publishOnce(ctx context.Context, logger logr.Logger) (controllerutil.OperationResult, error) {
-	desired := p.signer.ClusterTrustBundle()
+	desired := desired(p.signerName, p.ca)
 	bundle := &certificatesv1.ClusterTrustBundle{ObjectMeta: metav1.ObjectMeta{Name: desired.Name}}
 	// Use the direct API client: reading through the manager's cache-backed
 	// client would start an informer for ClusterTrustBundles, which requires

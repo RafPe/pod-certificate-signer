@@ -72,7 +72,8 @@ func TestNewPodCertificateConfigUserAnnotationsPrecedence(t *testing.T) {
 	pcr := testPCR(map[string]string{testSignerName + "-cn": "from-pcr"})
 
 	// Literal values require the unverified-identities opt-in.
-	config, err := NewPodCertificateConfig(context.Background(), pcr, pod, nil, Options{AllowUnverifiedIdentities: true})
+	config, err := NewPodCertificateConfig(context.Background(), pcr, pod, nil,
+		Options{AllowUnverifiedIdentities: true, AllowPodAnnotations: true})
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}
@@ -81,7 +82,8 @@ func TestNewPodCertificateConfigUserAnnotationsPrecedence(t *testing.T) {
 	}
 }
 
-// Pod annotations remain supported as a (deprecated) fallback.
+// Pod annotations remain supported as a (deprecated) fallback while
+// AllowPodAnnotations is set.
 func TestNewPodCertificateConfigPodAnnotationFallback(t *testing.T) {
 	pod := testPod(map[string]string{
 		testSignerName + "-cn":       "custom-cn",
@@ -92,7 +94,8 @@ func TestNewPodCertificateConfigPodAnnotationFallback(t *testing.T) {
 	})
 
 	// These are literal (non-derived) values, allowed only with the opt-in.
-	config, err := NewPodCertificateConfig(context.Background(), testPCR(nil), pod, nil, Options{AllowUnverifiedIdentities: true})
+	config, err := NewPodCertificateConfig(context.Background(), testPCR(nil), pod, nil,
+		Options{AllowUnverifiedIdentities: true, AllowPodAnnotations: true})
 	if err != nil {
 		t.Fatalf("NewPodCertificateConfig: %v", err)
 	}

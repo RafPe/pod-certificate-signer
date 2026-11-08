@@ -67,6 +67,7 @@ spec:
             - --enable-annotation-interpolation={{ .Values.signer.enable_annotation_interpolation }}
             - --honor-csr-sans={{ .Values.signer.honor_csr_sans }}
             - --allow-unverified-identities={{ .Values.signer.allow_unverified_identities }}
+            - --allow-pod-annotations={{ .Values.signer.allow_pod_annotations }}
           {{- with .Values.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}

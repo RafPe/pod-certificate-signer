@@ -30,12 +30,12 @@ func TestTerminalOutcomesAreCounted(t *testing.T) {
 	cases := []struct {
 		name          string
 		conditionType string
-		reason        Reason
-		wantOutcome   string
+		reason        metrics.Reason
+		wantOutcome   metrics.Outcome
 	}{
-		{"issued", certificatesv1.PodCertificateRequestConditionTypeIssued, ReasonCertificateIssued, metrics.OutcomeIssued},
-		{"denied", certificatesv1.PodCertificateRequestConditionTypeDenied, ReasonUnsupportedKeyType, metrics.OutcomeDenied},
-		{"failed", certificatesv1.PodCertificateRequestConditionTypeFailed, ReasonSigningFailed, metrics.OutcomeFailed},
+		{"issued", certificatesv1.PodCertificateRequestConditionTypeIssued, metrics.ReasonCertificateIssued, metrics.OutcomeIssued},
+		{"denied", certificatesv1.PodCertificateRequestConditionTypeDenied, metrics.ReasonUnsupportedKeyType, metrics.OutcomeDenied},
+		{"failed", certificatesv1.PodCertificateRequestConditionTypeFailed, metrics.ReasonSigningFailed, metrics.OutcomeFailed},
 	}
 
 	for _, tc := range cases {
@@ -91,7 +91,7 @@ func TestOutcomeNotCountedWhenStatusWriteIsLost(t *testing.T) {
 						Type:               certificatesv1.PodCertificateRequestConditionTypeDenied,
 						Status:             metav1.ConditionTrue,
 						LastTransitionTime: metav1.Now(),
-						Reason:             string(ReasonInvalidUserConfig),
+						Reason:             string(metrics.ReasonInvalidUserConfig),
 						Message:            "denied by a concurrent writer",
 					}}
 					if err := c.Status().Update(ctx, concurrent); err != nil {
@@ -107,12 +107,12 @@ func TestOutcomeNotCountedWhenStatusWriteIsLost(t *testing.T) {
 		Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10),
 	}
 
-	before := outcomeCount(metrics.OutcomeIssued, ReasonCertificateIssued)
+	before := outcomeCount(metrics.OutcomeIssued, metrics.ReasonCertificateIssued)
 	if _, err := r.recordOutcome(context.Background(), pcr,
-		certificatesv1.PodCertificateRequestConditionTypeIssued, ReasonCertificateIssued, "issued", corev1.EventTypeNormal); err != nil {
+		certificatesv1.PodCertificateRequestConditionTypeIssued, metrics.ReasonCertificateIssued, "issued", corev1.EventTypeNormal); err != nil {
 		t.Fatalf("recordOutcome: %v", err)
 	}
-	if got := outcomeCount(metrics.OutcomeIssued, ReasonCertificateIssued) - before; got != 0 {
+	if got := outcomeCount(metrics.OutcomeIssued, metrics.ReasonCertificateIssued) - before; got != 0 {
 		t.Errorf("issued counter moved by %v on a discarded status write, want 0", got)
 	}
 }
@@ -123,7 +123,7 @@ func TestRequeuesAreClassified(t *testing.T) {
 	cases := []struct {
 		name       string
 		err        error
-		wantReason Reason
+		wantReason metrics.Reason
 	}{
 		{"ca unusable", fmt.Errorf("cannot sign: %w", authority.ErrCASignerUnusable), metrics.ReasonCASignerUnusable},
 		{"anything else", errors.New("etcdserver: request timed out"), metrics.ReasonTransient},
@@ -131,14 +131,14 @@ func TestRequeuesAreClassified(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// recordFailure announces CA-unusable requeues as an event, so the
+			// requeueOrRecordTerminal announces CA-unusable requeues as an event, so the
 			// reconciler needs a recorder even though this test asserts the metric.
 			r := &PodCertificateRequestReconciler{Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
 			ctx := logr.NewContext(context.Background(), logr.Discard())
 
 			before := requeueCount(tc.wantReason)
-			if _, err := r.recordFailure(ctx, &certificatesv1.PodCertificateRequest{}, tc.err); err == nil {
-				t.Fatal("recordFailure() error = nil, want the transient error returned for requeue")
+			if _, err := r.requeueOrRecordTerminal(ctx, &certificatesv1.PodCertificateRequest{}, tc.err); err == nil {
+				t.Fatal("requeueOrRecordTerminal() error = nil, want the transient error returned for requeue")
 			}
 			if got := requeueCount(tc.wantReason) - before; got != 1 {
 				t.Errorf("requeue counter for %q moved by %v, want 1", tc.wantReason, got)
@@ -153,7 +153,7 @@ func TestDropsAreCounted(t *testing.T) {
 	r := &PodCertificateRequestReconciler{EventRecorder: events.NewFakeRecorder(10)}
 
 	before := dropCount()
-	r.recordPodGone(&certificatesv1.PodCertificateRequest{
+	r.warnPodGone(&certificatesv1.PodCertificateRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns"},
 	}, "pod is gone")
 	if got := dropCount() - before; got != 1 {
@@ -171,8 +171,8 @@ func TestSeriesCountDoesNotGrowWithRequests(t *testing.T) {
 	}
 
 	before := seriesCount(t, reg)
-	issuedBefore := outcomeCount(metrics.OutcomeIssued, ReasonCertificateIssued)
-	deniedBefore := outcomeCount(metrics.OutcomeDenied, ReasonUnsupportedKeyType)
+	issuedBefore := outcomeCount(metrics.OutcomeIssued, metrics.ReasonCertificateIssued)
+	deniedBefore := outcomeCount(metrics.OutcomeDenied, metrics.ReasonUnsupportedKeyType)
 	requeuedBefore := requeueCount(metrics.ReasonCASignerUnusable)
 	droppedBefore := dropCount()
 
@@ -187,8 +187,8 @@ func TestSeriesCountDoesNotGrowWithRequests(t *testing.T) {
 		what  string
 		delta float64
 	}{
-		{"issued", outcomeCount(metrics.OutcomeIssued, ReasonCertificateIssued) - issuedBefore},
-		{"denied", outcomeCount(metrics.OutcomeDenied, ReasonUnsupportedKeyType) - deniedBefore},
+		{"issued", outcomeCount(metrics.OutcomeIssued, metrics.ReasonCertificateIssued) - issuedBefore},
+		{"denied", outcomeCount(metrics.OutcomeDenied, metrics.ReasonUnsupportedKeyType) - deniedBefore},
 		{"requeued", requeueCount(metrics.ReasonCASignerUnusable) - requeuedBefore},
 		{"dropped", dropCount() - droppedBefore},
 	} {
@@ -250,7 +250,7 @@ func reconcileDistinctRequest(t *testing.T, i int) {
 		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
 		Build()
 	r := &PodCertificateRequestReconciler{
-		Client: cl, APIReader: cl, Log: logr.Discard(), Signer: stub, EventRecorder: events.NewFakeRecorder(10),
+		Client: cl, APIReader: cl, Log: logr.Discard(), Signer: stub, SignerName: stub.name, EventRecorder: events.NewFakeRecorder(10),
 	}
 	// The requeue case returns the error by design; every other case must not.
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pcr)})
@@ -259,11 +259,11 @@ func reconcileDistinctRequest(t *testing.T, i int) {
 	}
 }
 
-func outcomeCount(outcome string, reason Reason) float64 {
-	return promtestutil.ToFloat64(metrics.PodCertificateRequests.WithLabelValues(outcome, string(reason)))
+func outcomeCount(outcome metrics.Outcome, reason metrics.Reason) float64 {
+	return promtestutil.ToFloat64(metrics.PodCertificateRequests.WithLabelValues(string(outcome), string(reason)))
 }
 
-func requeueCount(reason Reason) float64 {
+func requeueCount(reason metrics.Reason) float64 {
 	return promtestutil.ToFloat64(metrics.PodCertificateRequestRequeues.WithLabelValues(string(reason)))
 }
 

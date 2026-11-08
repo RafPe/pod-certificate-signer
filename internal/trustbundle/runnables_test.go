@@ -31,7 +31,7 @@ func leaderGated(r manager.Runnable) bool {
 // promotion), while the ClusterTrustBundle publisher remains restricted to the
 // elected leader.
 func TestRunnablesLeaderElection(t *testing.T) {
-	watcher, publisher := NewRunnables(nil, nil, nil)
+	watcher, publisher := NewRunnables(nil, "example.org/signer", nil)
 
 	if leaderGated(watcher) {
 		t.Error("CAWatcher is leader-gated; want it to run on every replica so standby CAs stay current")

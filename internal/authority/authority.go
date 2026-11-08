@@ -1,3 +1,6 @@
+// Package authority holds the signing CA: it loads the certificate and key
+// from disk, hot-reloads them on change, retains previous CAs across a
+// rotation, signs leaf certificates and exposes the resulting trust bundle.
 package authority
 
 import (
@@ -36,13 +39,21 @@ var serialNumberLimit = new(big.Int).Lsh(big.NewInt(1), 128)
 // a terminal outcome. Callers match it with errors.Is.
 var ErrCASignerUnusable = errors.New("ca signer unusable")
 
-// Option is a function which configures the [CertificateAuthority].
+// Option is a function which configures the [CertificateAuthority]. The CA is
+// the one component with several independent, individually-optional settings
+// (seed history, retention bound, logger), which is why it takes options where
+// the rest of the codebase takes a flat struct.
 type Option func(ca *CertificateAuthority) error
 
 // CertificateAuthority is a CA which signs Pod Certificate Requests.
 type CertificateAuthority struct {
 	certFile    string
 	privKeyFile string
+	// certificate is the loaded CA certificate. New fails closed, so it is
+	// non-nil once New has returned and load never clears it; the accessors
+	// still guard it, because CertificateNotAfter runs on every metrics scrape
+	// where a panic takes down the scrape rather than being recovered, and
+	// one stance for all of them is easier to trust than a per-method one.
 	certificate *x509.Certificate
 	signer      crypto.Signer
 	// previousCertificates is the retained history of CAs that were current
@@ -64,10 +75,10 @@ type CertificateAuthority struct {
 	mu          sync.Mutex
 
 	// Watch/reload tuning. Set to sane defaults in New; overridable in tests.
-	drainWindow       time.Duration // coalesce window for a burst of fs events
-	reloadAttempts    int           // bounded retries for a single reload
-	reloadBackoff     time.Duration // base delay between reload attempts
-	reconcileInterval time.Duration // periodic reload, independent of events
+	drainWindow    time.Duration // coalesce window for a burst of fs events
+	reloadAttempts int           // bounded retries for a single reload
+	reloadBackoff  time.Duration // base delay between reload attempts
+	reloadInterval time.Duration // periodic reload, independent of events
 
 	// health tracks the recent reload outcomes and whether the watcher has
 	// exited unrecoverably. It is guarded by its own mutex (separate from mu)
@@ -150,7 +161,7 @@ func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error
 		drainWindow:          500 * time.Millisecond,
 		reloadAttempts:       5,
 		reloadBackoff:        200 * time.Millisecond,
-		reconcileInterval:    caReconcileInterval,
+		reloadInterval:       caReloadInterval,
 	}
 
 	// Additional configuration of the CA with the given options.
@@ -181,26 +192,26 @@ func New(caFile, caKeyFile string, opts ...Option) (*CertificateAuthority, error
 // still counts as a successful reload: "the CA is readable" is the health
 // signal, "the CA changed" is not.
 func (ca *CertificateAuthority) load() (bool, error) {
-	caCert, err := tls.LoadX509KeyPair(ca.certFile, ca.privKeyFile)
+	keyPair, err := tls.LoadX509KeyPair(ca.certFile, ca.privKeyFile)
 	if err != nil {
-		return false, fmt.Errorf("failed to load key pair: %w", err)
+		return false, fmt.Errorf("load key pair: %w", err)
 	}
 
-	caX509Cert, err := x509.ParseCertificate(caCert.Certificate[0])
+	caCert, err := x509.ParseCertificate(keyPair.Certificate[0])
 	if err != nil {
-		return false, fmt.Errorf("failed to parse certificate: %w", err)
+		return false, fmt.Errorf("parse certificate: %w", err)
 	}
 
-	if err := validateCACertificate(caX509Cert, time.Now()); err != nil {
+	if err := validateCACertificate(caCert, time.Now()); err != nil {
 		return false, err
 	}
 
-	signer, ok := caCert.PrivateKey.(crypto.Signer)
+	signer, ok := keyPair.PrivateKey.(crypto.Signer)
 	if !ok {
 		return false, errors.New("private key does not implement crypto.Signer interface")
 	}
 
-	fingerprint := sha256.Sum256(caCert.Certificate[0])
+	fingerprint := sha256.Sum256(keyPair.Certificate[0])
 
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
@@ -222,7 +233,7 @@ func (ca *CertificateAuthority) load() (bool, error) {
 		ca.previousCertificates = append(ca.previousCertificates, ca.certificate)
 	}
 
-	ca.certificate = caX509Cert
+	ca.certificate = caCert
 	ca.signer = signer
 	ca.fingerprint = fingerprint
 
@@ -331,10 +342,8 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 
-	// New fails closed, so a loaded certificate is an invariant today - but
-	// nothing else defends it, and any construction path that defers the first
-	// load would turn the dereferences below into panics. Classified as
-	// ErrCASignerUnusable: like an expired signer, a CA rotation can make an
+	// See the certificate field: guarded like every other accessor. Classified
+	// as ErrCASignerUnusable: like an expired signer, a CA rotation can make an
 	// identical request succeed, so callers requeue rather than record a
 	// terminal outcome.
 	if ca.certificate == nil {
@@ -343,22 +352,22 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 
 	now := time.Now()
 
-	nbf := now.Add(-ca.backDate)
-	if !nbf.Before(ca.certificate.NotAfter) {
+	notBefore := now.Add(-ca.backDate)
+	if !notBefore.Before(ca.certificate.NotAfter) {
 		return nil, fmt.Errorf("the signer has expired: NotAfter=%v: %w", ca.certificate.NotAfter, ErrCASignerUnusable)
 	}
 
-	naf := nbf.Add(pcConfig.Duration)
-	if naf.After(ca.certificate.NotAfter) {
-		return nil, fmt.Errorf("certificate validity period exceeds the signer CA validity: notAfter=%v, caNotAfter=%v: %w", naf, ca.certificate.NotAfter, ErrCASignerUnusable)
+	notAfter := notBefore.Add(pcConfig.Duration)
+	if notAfter.After(ca.certificate.NotAfter) {
+		return nil, fmt.Errorf("certificate validity period exceeds the signer CA validity: notAfter=%v, caNotAfter=%v: %w", notAfter, ca.certificate.NotAfter, ErrCASignerUnusable)
 	}
-	if naf.Before(now) {
-		return nil, fmt.Errorf("certificate not after is in the past: %v", naf)
+	if notAfter.Before(now) {
+		return nil, fmt.Errorf("certificate not after is in the past: %v", notAfter)
 	}
 
 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 	if err != nil {
-		return nil, fmt.Errorf("unable to generate a serial number for %s: %w", pcConfig.CommonName, err)
+		return nil, fmt.Errorf("generate serial number for %s: %w", pcConfig.CommonName, err)
 	}
 
 	template := &x509.Certificate{
@@ -373,8 +382,8 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 		PublicKey:          pcConfig.PublicKey,
 		KeyUsage:           pcConfig.KeyUsage,
 		ExtKeyUsage:        pcConfig.ExtKeyUsage,
-		NotBefore:          nbf,
-		NotAfter:           naf,
+		NotBefore:          notBefore,
+		NotAfter:           notAfter,
 		// BasicConstraintsValid is what makes Go emit the basicConstraints
 		// extension at all; IsCA stays at its zero value, so the pair asserts
 		// cA:FALSE on every leaf. DER omits a field at its DEFAULT, so the
@@ -389,13 +398,16 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.PodCertificateConf
 
 	issuedCertificate, err := x509.CreateCertificate(rand.Reader, template, ca.certificate, pcConfig.PublicKey, ca.signer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create certificate for public key type %T: %w", pcConfig.PublicKey, err)
+		return nil, fmt.Errorf("create certificate for public key type %T: %w", pcConfig.PublicKey, err)
 	}
 
-	// Certificate chain: issued cert + CA cert
-	certificateChain := string(certificatePEM(issuedCertificate)) + string(certificatePEM(ca.certificate.Raw))
-
-	return podcertificate.NewPodCertificate(certificateChain, pcConfig, nbf, naf), nil
+	return &podcertificate.PodCertificate{
+		// Issued certificate first, then the CA that signed it.
+		CertificateChain: string(certificatePEM(issuedCertificate)) + string(certificatePEM(ca.certificate.Raw)),
+		Config:           pcConfig,
+		NotBefore:        notBefore,
+		NotAfter:         notAfter,
+	}, nil
 }
 
 // certificatePEM encodes a DER certificate as a PEM CERTIFICATE block.
@@ -410,6 +422,12 @@ func certificatePEM(der []byte) []byte {
 func (ca *CertificateAuthority) TrustBundlePEM() []byte {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
+
+	// See the certificate field: with no CA loaded there is nothing to
+	// publish, so the bundle is empty rather than a panic.
+	if ca.certificate == nil {
+		return nil
+	}
 
 	bundle := certificatePEM(ca.certificate.Raw)
 	for _, cert := range ca.previousCertificates {

@@ -163,10 +163,21 @@ The same items (`cn`/`san`/`ip-san`/`eku`/`uris`/`duration`/`refresh`) can be
 set as pod [`annotations`](https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/)
 with the same `<signer>/<name>-<item>` keys, e.g.
 `coolcert.example.com/foo-cn: some-name.example.com`. This path predates
-`userAnnotations` and is kept only for compatibility. It is validated like the
-request path: a pod annotation that carries the signer's prefix but is not one
-of the items above denies the request, exactly as the same key would on
-`unverifiedUserAnnotations`.
+`userAnnotations` and is kept only for compatibility. Values read from it are
+validated like request values, but unknown keys are ignored rather than
+denied: pod annotations are shared with every other consumer of the pod, and a
+signer-name prefix cannot tell a typo from the key of a sibling signer whose
+name extends this one (a signer `example.org/signer` would otherwise see
+`example.org/signer-x-cn`, belonging to `example.org/signer-x`, as an unknown
+item). A misspelled pod annotation therefore falls back to the default; use
+`unverifiedUserAnnotations`, where unknown keys deny the request.
+
+Operators who have moved every workload to `unverifiedUserAnnotations` can
+close the fallback now with `--allow-pod-annotations=false` (Helm:
+`signer.allow_pod_annotations: false`), so pod annotations stop being a second
+requester-controlled input. The flag defaults to `true` until 4.0.0 removes the
+fallback. An item that is present on the request with an empty value is a
+misconfiguration and denies the request rather than falling back to the pod.
 
 ## Identity constraints
 

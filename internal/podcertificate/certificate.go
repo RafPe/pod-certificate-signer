@@ -11,12 +11,15 @@ import (
 )
 
 // PodCertificate is a certificate issued for a pod, together with the
-// configuration it was issued from and its validity bounds.
+// configuration it was issued from and its validity bounds. It is built once
+// by the authority and read by the reconciler; nothing mutates it afterwards.
 type PodCertificate struct {
-	certificateChain string
-	config           *PodCertificateConfig
-	notBefore        time.Time
-	notAfter         time.Time
+	// CertificateChain is the PEM-encoded chain: the issued certificate
+	// followed by the CA certificate that signed it.
+	CertificateChain string
+	Config           *PodCertificateConfig
+	NotBefore        time.Time
+	NotAfter         time.Time
 }
 
 // PodCertificateConfig describes the certificate to be issued for a pod.
@@ -82,37 +85,6 @@ const (
 	// to lie within [notBefore+RefreshMargin, notAfter-RefreshMargin].
 	RefreshMargin = 10 * time.Minute
 )
-
-// NewPodCertificate creates a new [PodCertificate].
-func NewPodCertificate(certificateChain string, config *PodCertificateConfig, notBefore, notAfter time.Time) *PodCertificate {
-	return &PodCertificate{
-		certificateChain: certificateChain,
-		config:           config,
-		notBefore:        notBefore,
-		notAfter:         notAfter,
-	}
-}
-
-// CertificateChain returns the PEM-encoded certificate chain: the issued
-// certificate followed by the CA certificate that signed it.
-func (pc *PodCertificate) CertificateChain() string {
-	return pc.certificateChain
-}
-
-// Config returns the configuration the certificate was issued from.
-func (pc *PodCertificate) Config() *PodCertificateConfig {
-	return pc.config
-}
-
-// NotBefore returns the start of the certificate validity period.
-func (pc *PodCertificate) NotBefore() time.Time {
-	return pc.notBefore
-}
-
-// NotAfter returns the end of the certificate validity period.
-func (pc *PodCertificate) NotAfter() time.Time {
-	return pc.notAfter
-}
 
 // Validate checks that the configuration can be used to issue a certificate
 // which kube-apiserver will accept on the status subresource. Validating up

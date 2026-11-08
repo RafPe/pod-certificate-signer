@@ -59,7 +59,7 @@ func TestReconcileAnnouncesRecoveryWithoutChange(t *testing.T) {
 	var lines []string
 	logger := captureLogger(&lines)
 
-	ca.reconcileOnce(logger, nil, "test")
+	ca.reloadOnce(logger, nil, "test")
 	if ca.failureCount() == 0 {
 		t.Fatal("the mismatched pair must record a reload failure, otherwise this test proves nothing")
 	}
@@ -71,7 +71,7 @@ func TestReconcileAnnouncesRecoveryWithoutChange(t *testing.T) {
 	}
 
 	lines = nil
-	ca.reconcileOnce(logger, nil, "test")
+	ca.reloadOnce(logger, nil, "test")
 
 	if ca.failureCount() != 0 {
 		t.Errorf("failureCount = %d, want 0: a successful reload must clear the streak", ca.failureCount())
@@ -96,7 +96,7 @@ func TestReconcileStaysQuietWhenNothingChangedAndNothingFailed(t *testing.T) {
 	var lines []string
 	logger := captureLogger(&lines)
 
-	ca.reconcileOnce(logger, nil, "test")
+	ca.reloadOnce(logger, nil, "test")
 
 	if containsLine(lines, reloadSucceededLine) {
 		t.Errorf("an unchanged reload after no failure must not announce itself; logged: %v", lines)

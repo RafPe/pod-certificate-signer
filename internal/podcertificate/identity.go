@@ -161,10 +161,10 @@ func verifiedIdentities(pcr *certificatesv1.PodCertificateRequest, clusterFQDN s
 	return allowed
 }
 
-// assertVerifiedIdentities reports an error when any of values is not in the
+// validateVerifiedIdentities reports an error when any of values is not in the
 // allowed set. A nil set means the identity constraint is off (see
 // Options.AllowUnverifiedIdentities), and every value passes.
-func assertVerifiedIdentities(kind string, values []string, allowed map[string]struct{}) error {
+func validateVerifiedIdentities(kind string, values []string, allowed map[string]struct{}) error {
 	if allowed == nil {
 		return nil
 	}

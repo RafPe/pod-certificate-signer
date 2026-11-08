@@ -56,13 +56,14 @@ func TestReconcileTickRecoversAFailedReloadWithoutAnEvent(t *testing.T) {
 		// any kind is delivered for it.
 		rotated := writeCA(t, dir, "recovered-ca.example.org", 24*time.Hour)
 
-		notify, _, stop := runWatchLoop(t, ca)
+		w := runWatchLoop(t, ca)
+		notify, stop := w.notify, w.stop
 		defer stop()
 
 		// Past the first production tick (the half interval keeps a tick that
 		// lands at the same fake instant as the sleep unambiguously before
 		// it): the tick must have reloaded.
-		time.Sleep(ca.reconcileInterval + ca.reconcileInterval/2)
+		time.Sleep(ca.reloadInterval + ca.reloadInterval/2)
 		synctest.Wait()
 		select {
 		case <-notify:
@@ -89,9 +90,10 @@ func TestReconcileTickRecoversAFailedReloadWithoutAnEvent(t *testing.T) {
 func TestReconcileTickNotifiesOnlyWhenTheCAChanges(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ca, dir := newTestCA(t)
-		interval := ca.reconcileInterval
+		interval := ca.reloadInterval
 
-		notify, _, stop := runWatchLoop(t, ca)
+		w := runWatchLoop(t, ca)
+		notify, stop := w.notify, w.stop
 		defer stop()
 
 		// Ten whole ticks over unchanged material must produce nothing. The
@@ -139,7 +141,8 @@ func TestReconcileTickSurvivesAWatcherError(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ca, dir := newTestCA(t)
 
-		notify, errs, stop := runWatchLoop(t, ca)
+		w := runWatchLoop(t, ca)
+		notify, errs, stop := w.notify, w.errs, w.stop
 		defer stop()
 
 		// The loop is the only receiver, so the send completing proves the
@@ -153,7 +156,7 @@ func TestReconcileTickSurvivesAWatcherError(t *testing.T) {
 		}
 
 		rotated := writeCA(t, dir, "ca-2.example.org", 24*time.Hour)
-		time.Sleep(ca.reconcileInterval + ca.reconcileInterval/2)
+		time.Sleep(ca.reloadInterval + ca.reloadInterval/2)
 		synctest.Wait()
 		select {
 		case <-notify:
@@ -180,7 +183,7 @@ func TestWatchLoopStopsTheReconcileTickerOnContextCancel(t *testing.T) {
 
 		// Let one tick land, so cancellation races a running ticker rather
 		// than a loop that has not started yet.
-		time.Sleep(ca.reconcileInterval + ca.reconcileInterval/2)
+		time.Sleep(ca.reloadInterval + ca.reloadInterval/2)
 		synctest.Wait()
 		cancel()
 
@@ -219,7 +222,7 @@ func TestReconcileOnceRecordsASingleFailure(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ca.reconcileOnce(log.FromContext(ctx), nil, "test")
+	ca.reloadOnce(log.FromContext(ctx), nil, "test")
 
 	if got := ca.failureCount(); got != 1 {
 		t.Errorf("reload failures after one reconcile pass = %d, want 1 (a single attempt, not a retry burst)", got)
@@ -241,11 +244,11 @@ func TestTickOnlyFailuresCrossTheReadinessThreshold(t *testing.T) {
 			t.Fatalf("write non-CA files: %v", err)
 		}
 
-		_, _, stop := runWatchLoop(t, ca)
+		stop := runWatchLoop(t, ca).stop
 		defer stop()
 
 		// Exactly reloadFailureThreshold ticks, one failure each.
-		time.Sleep(time.Duration(reloadFailureThreshold)*ca.reconcileInterval + ca.reconcileInterval/2)
+		time.Sleep(time.Duration(reloadFailureThreshold)*ca.reloadInterval + ca.reloadInterval/2)
 		synctest.Wait()
 		if got := ca.failureCount(); got != reloadFailureThreshold {
 			t.Fatalf("reload failures after %d ticks = %d, want %d (one failure per tick)",

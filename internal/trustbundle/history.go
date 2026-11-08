@@ -12,8 +12,6 @@ import (
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/signer"
 )
 
 // ErrHistoryBundleAbsent reports that the signer's ClusterTrustBundle does not
@@ -53,7 +51,7 @@ func LoadPreviousCAHistory(ctx context.Context, c client.Client, signerName stri
 	switch {
 	case err == nil:
 		logger.Info("bootstrapped previous CA certificates from ClusterTrustBundle",
-			"name", signer.ClusterTrustBundleName(signerName), "count", len(previousCAs))
+			"name", Name(signerName), "count", len(previousCAs))
 		return previousCAs, nil
 	case !errors.Is(err, ErrHistoryBundleAbsent) || requireHistory:
 		// A real read error, or an absence the operator declared fatal.
@@ -64,7 +62,7 @@ func LoadPreviousCAHistory(ctx context.Context, c client.Client, signerName stri
 		"This is expected on a first install. If the signer has published its bundle before, the history it held is "+
 		"now lost and certificates issued under a retired CA will stop verifying once the bundle is republished; "+
 		"restore the bundle before this controller publishes, or run with --require-ca-history to make this fatal",
-		"bundle", signer.ClusterTrustBundleName(signerName))
+		"bundle", Name(signerName))
 
 	return nil, nil
 }
@@ -79,7 +77,7 @@ func LoadPreviousCAHistory(ctx context.Context, c client.Client, signerName stri
 // retry or fail closed: silently returning an empty history would overwrite the
 // bundle on startup and drop previously-trusted CAs.
 func fetchPreviousCAs(ctx context.Context, c client.Client, signerName string) ([]*x509.Certificate, error) {
-	bundleName := signer.ClusterTrustBundleName(signerName)
+	bundleName := Name(signerName)
 
 	bundle := &certificatesv1.ClusterTrustBundle{}
 	if err := c.Get(ctx, client.ObjectKey{Name: bundleName}, bundle); err != nil {

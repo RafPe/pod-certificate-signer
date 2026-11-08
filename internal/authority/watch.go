@@ -15,7 +15,7 @@ import (
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
 )
 
-// caReconcileInterval is how often the watch loop reloads the CA without
+// caReloadInterval is how often the watch loop reloads the CA without
 // waiting for a filesystem event. fsnotify is not a durable event log: watches
 // can be dropped, the kernel queue can overflow, and a watched directory that
 // is deleted and recreated leaves the watch on the stale inode, in which case
@@ -31,7 +31,7 @@ import (
 // constraint in HealthCheck, so the signer would report NotReady *later* than it
 // does today - a slower reconcile delaying the alarm rather than only the
 // repair. At 60s there is ~3.3x of margin.
-const caReconcileInterval = 60 * time.Second
+const caReloadInterval = 60 * time.Second
 
 // errWatchChannelClosed indicates that fsnotify closed one of its channels.
 // This cannot be recovered in place, so the watcher must fail and be restarted.
@@ -46,8 +46,8 @@ var errWatchChannelClosed = errors.New("ca-watcher: fsnotify channel closed unex
 //
 // This method blocks until the given [context.Context] is canceled. It returns
 // nil on a clean shutdown and a non-nil error if the watch cannot be
-// established or fsnotify closes a channel; in the latter case [HealthCheck]
-// also reports the failure so a readiness probe can surface it.
+// established or fsnotify closes a channel; in either case [HealthCheck] also
+// reports the failure so a readiness probe can surface it.
 func (ca *CertificateAuthority) Watch(ctx context.Context, notify chan<- struct{}) error {
 	logger := log.FromContext(ctx).WithName("ca-watcher")
 	watcher, err := fsnotify.NewWatcher()
@@ -72,15 +72,15 @@ func (ca *CertificateAuthority) Watch(ctx context.Context, notify chan<- struct{
 	// Reconcile once now that the watches are registered: a rotation landing
 	// between New's initial load and this point produces no observable event,
 	// so without this pass it would go unnoticed until the first tick.
-	logger.Info("reloading the CA periodically as well as on events", "interval", ca.reconcileInterval)
-	ca.reconcileOnce(logger, notify, "watch startup")
+	logger.Info("reloading the CA periodically as well as on events", "interval", ca.reloadInterval)
+	ca.reloadOnce(logger, notify, "watch startup")
 
 	return ca.watchLoop(ctx, logger, watcher.Events, watcher.Errors, notify)
 }
 
 // watchLoop consumes filesystem events until ctx is canceled, reloading the CA
 // (with bounded retry) whenever the mounted files change, and reloading it
-// unconditionally every reconcileInterval so a rotation the event path never
+// unconditionally every reloadInterval so a rotation the event path never
 // saw, or failed to load, still converges. It returns nil on a clean shutdown
 // (ctx canceled) and a non-nil error if fsnotify closes a channel, so the caller
 // can fail fast and be restarted rather than spinning on zero values read from a
@@ -92,7 +92,7 @@ func (ca *CertificateAuthority) watchLoop(
 	errs <-chan error,
 	notify chan<- struct{},
 ) error {
-	ticker := time.NewTicker(ca.reconcileInterval)
+	ticker := time.NewTicker(ca.reloadInterval)
 	defer ticker.Stop()
 
 	for {
@@ -104,7 +104,7 @@ func (ca *CertificateAuthority) watchLoop(
 			// silent routes (dropped events, a stale inode after the watched
 			// directory is recreated) leave the CA in a *successful* state, so
 			// a failure-gated pass would never run in exactly those cases.
-			ca.reconcileOnce(logger, notify, "periodic reconciliation")
+			ca.reloadOnce(logger, notify, "periodic reload")
 		case event, ok := <-events:
 			if !ok {
 				return ca.failWatcher(errWatchChannelClosed)
@@ -134,6 +134,11 @@ func (ca *CertificateAuthority) watchLoop(
 			// success.
 			wasFailing := ca.reloadFailing()
 			changed, err := ca.reloadWithRetry(ctx, logger)
+			if ctx.Err() != nil {
+				// Shutting down mid-reload: the retry was abandoned, not
+				// failed, so it is not reported as one.
+				return nil
+			}
 			ca.reportReload(logger, notify, "filesystem event", wasFailing, changed, err)
 		case err, ok := <-errs:
 			if !ok {
@@ -166,14 +171,14 @@ func (ca *CertificateAuthority) drainEvents(ctx context.Context, logger logr.Log
 	}
 }
 
-// reconcileOnce reloads the CA once, without retrying, and notifies callers
+// reloadOnce reloads the CA once, without retrying, and notifies callers
 // when the material actually changed. The retry budget in reloadWithRetry
 // exists to ride out the torn state a rotation briefly leaves on disk, which is
 // event-adjacent; a pass that is not correlated with a write has nothing to ride
 // out, and the next pass is itself the retry. Keeping it to a single attempt
 // also bounds the log stream: a permanently unloadable CA costs one line per
 // interval rather than the whole retry burst, forever.
-func (ca *CertificateAuthority) reconcileOnce(logger logr.Logger, notify chan<- struct{}, cause string) {
+func (ca *CertificateAuthority) reloadOnce(logger logr.Logger, notify chan<- struct{}, cause string) {
 	// Read before the reload: recordReloadResult below clears the streak.
 	wasFailing := ca.reloadFailing()
 	changed, err := ca.load()
@@ -182,10 +187,20 @@ func (ca *CertificateAuthority) reconcileOnce(logger logr.Logger, notify chan<- 
 	// failure streak (so a replica recovers readiness without a restart), and an
 	// unreadable one accumulates towards the readiness threshold even though no
 	// filesystem event ever arrived.
-	ca.recordReloadResult(err)
-	metrics.CAReloadAttempts.WithLabelValues(reloadResult(changed, err)).Inc()
+	ca.recordReloadAttempt(changed, err)
 
 	ca.reportReload(logger, notify, cause, wasFailing, changed, err)
+}
+
+// recordReloadAttempt records one reload attempt for both consumers that must
+// stay in step: the readiness streak (recordReloadResult) and the reload
+// counter. It returns the resulting number of consecutive failures. New's
+// bootstrap load calls recordReloadResult directly, since it is not an
+// attempt of the reload loop.
+func (ca *CertificateAuthority) recordReloadAttempt(changed bool, err error) int {
+	failures := ca.recordReloadResult(err)
+	metrics.CAReloadAttempts.WithLabelValues(string(reloadResult(changed, err))).Inc()
+	return failures
 }
 
 // reportReload announces the outcome of one reload - failed, changed,
@@ -246,8 +261,7 @@ func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr
 	for attempt := 1; ; attempt++ {
 		var changed bool
 		if changed, err = ca.load(); err == nil {
-			ca.recordReloadResult(nil)
-			metrics.CAReloadAttempts.WithLabelValues(reloadResult(changed, nil)).Inc()
+			ca.recordReloadAttempt(changed, nil)
 
 			return changed, nil
 		}
@@ -256,8 +270,7 @@ func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr
 		// nothing reloads again until the next filesystem event, so a CA that
 		// stays unloadable must be able to cross the readiness threshold
 		// without one.
-		failures := ca.recordReloadResult(err)
-		metrics.CAReloadAttempts.WithLabelValues(metrics.ResultFailed).Inc()
+		failures := ca.recordReloadAttempt(false, err)
 		if attempt >= ca.reloadAttempts {
 			return false, fmt.Errorf("reload failed after %d attempt(s), %d consecutive failure(s): %w",
 				attempt, failures, err)
@@ -279,7 +292,7 @@ func (ca *CertificateAuthority) reloadWithRetry(ctx context.Context, logger logr
 // reloadResult classifies a reload attempt for the metric. The three values are
 // the three arms the callers already branch on, so the label cannot drift from
 // what the logs say happened.
-func reloadResult(changed bool, err error) string {
+func reloadResult(changed bool, err error) metrics.Result {
 	switch {
 	case err != nil:
 		return metrics.ResultFailed

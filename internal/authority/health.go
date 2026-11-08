@@ -74,11 +74,9 @@ func (ca *CertificateAuthority) CertificateNotAfter() time.Time {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 
-	// This runs on every metrics scrape, which is not a reconcile: a panic
-	// here takes down the scrape rather than being recovered. With no
-	// certificate loaded, report the zero time - the collector renders it as
-	// a 0 gauge (see metrics.timestamp), which correctly fires the staleness
-	// alert.
+	// See the certificate field. With no certificate loaded, report the zero
+	// time - the collector renders it as a 0 gauge (see metrics.timestamp),
+	// which correctly fires the staleness alert.
 	if ca.certificate == nil {
 		return time.Time{}
 	}
@@ -93,6 +91,12 @@ func (ca *CertificateAuthority) CertificateNotAfter() time.Time {
 func (ca *CertificateAuthority) TrustBundleSize() int {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
+
+	// See the certificate field: no CA loaded means nothing would be
+	// published, matching TrustBundlePEM.
+	if ca.certificate == nil {
+		return 0
+	}
 
 	return 1 + len(ca.previousCertificates)
 }

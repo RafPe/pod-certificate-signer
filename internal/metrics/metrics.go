@@ -16,6 +16,11 @@
 // The declarations live in their own package rather than in package main so
 // that internal/controller, internal/authority and internal/trustbundle can
 // all increment without an import cycle.
+//
+// The counters are process-global. A test that asserts on one must snapshot
+// it before the action and compare the delta after, and the tests of one
+// package must not run in parallel with each other, since two tests moving
+// the same counter cannot tell their increments apart.
 package metrics
 
 import (
@@ -27,27 +32,32 @@ import (
 // name with its separators removed, following cert-manager's certmanager_.
 const Namespace = "podcertificatesigner"
 
-// Result values for the ClusterTrustBundle publish counter. The first three are
-// controller-runtime's CreateOrPatch outcomes, which are a closed set of Go
-// constants; the fourth is ours.
+// Result is the value of the result label on the ClusterTrustBundle publish
+// and CA reload counters. The first three are controller-runtime's
+// CreateOrPatch outcomes, which are a closed set of Go constants; the other two
+// are ours.
+type Result string
+
 const (
-	ResultUnchanged = "unchanged"
-	ResultCreated   = "created"
-	ResultUpdated   = "updated"
-	ResultFailed    = "failed"
+	ResultUnchanged Result = "unchanged"
+	ResultCreated   Result = "created"
+	ResultUpdated   Result = "updated"
+	ResultFailed    Result = "failed"
 
 	// ResultChanged is the CA reload counter's third value: the material on
 	// disk differed from what was loaded, i.e. a rotation actually took.
-	ResultChanged = "changed"
+	ResultChanged Result = "changed"
 )
 
-// Outcome values for the terminal-outcome counter. They name what happened to
-// the request, not which condition type carried it, so an outcome stays
-// aggregatable if the API ever grows a fourth condition.
+// Outcome is the value of the outcome label on the terminal-outcome counter.
+// It names what happened to the request, not which condition type carried it,
+// so an outcome stays aggregatable if the API ever grows a fourth condition.
+type Outcome string
+
 const (
-	OutcomeIssued = "issued"
-	OutcomeDenied = "denied"
-	OutcomeFailed = "failed"
+	OutcomeIssued Outcome = "issued"
+	OutcomeDenied Outcome = "denied"
+	OutcomeFailed Outcome = "failed"
 )
 
 // Reason identifies why a PodCertificateRequest ended up where it did: the
@@ -88,7 +98,7 @@ const (
 
 // IssuanceOutcome is one outcome/reason pair the reconciler can record.
 type IssuanceOutcome struct {
-	Outcome string
+	Outcome Outcome
 	Reason  Reason
 }
 
@@ -209,17 +219,17 @@ func Register(r prometheus.Registerer, extra ...prometheus.Collector) error {
 //
 // If a label's values cannot be enumerated here, the label was never bounded.
 func preInitialise() {
-	for _, result := range []string{ResultChanged, ResultUnchanged, ResultFailed} {
-		CAReloadAttempts.WithLabelValues(result)
+	for _, result := range []Result{ResultChanged, ResultUnchanged, ResultFailed} {
+		CAReloadAttempts.WithLabelValues(string(result))
 	}
 	for _, pair := range IssuanceOutcomes {
-		PodCertificateRequests.WithLabelValues(pair.Outcome, string(pair.Reason))
+		PodCertificateRequests.WithLabelValues(string(pair.Outcome), string(pair.Reason))
 	}
 	for _, reason := range []Reason{ReasonCASignerUnusable, ReasonTransient} {
 		PodCertificateRequestRequeues.WithLabelValues(string(reason))
 	}
 	PodCertificateRequestDrops.WithLabelValues(string(ReasonAssociatedPodGone))
-	for _, result := range []string{ResultUnchanged, ResultCreated, ResultUpdated, ResultFailed} {
-		ClusterTrustBundlePublishAttempts.WithLabelValues(result)
+	for _, result := range []Result{ResultUnchanged, ResultCreated, ResultUpdated, ResultFailed} {
+		ClusterTrustBundlePublishAttempts.WithLabelValues(string(result))
 	}
 }
