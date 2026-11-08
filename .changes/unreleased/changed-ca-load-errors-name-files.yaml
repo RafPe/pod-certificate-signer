@@ -1,0 +1,2 @@
+kind: Changed
+body: 'Errors from loading the CA key pair, at startup or on a reload, now name the certificate and key files they came from.'

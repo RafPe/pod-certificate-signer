@@ -43,7 +43,7 @@ func TestReconcileOnceCountsReloadResults(t *testing.T) {
 	assertReloadDelta(t, before, map[metrics.ReloadResult]float64{metrics.ReloadFailed: 1})
 }
 
-// loadWithRetry records every attempt, not just the burst, because a CA that
+// reloadWithRetry records every attempt, not just the burst, because a CA that
 // stays unloadable must be able to cross the readiness threshold without
 // another filesystem event. The counter is named _attempts_ for exactly this
 // reason, and this pins it.
@@ -62,8 +62,8 @@ func TestLoadWithRetryCountsEveryAttempt(t *testing.T) {
 		}
 
 		before := reloadCounts()
-		if _, err := ca.loadWithRetry(t.Context(), logr.Discard(), ca.reloadAttempts); err == nil {
-			t.Fatal("loadWithRetry() error = nil, want the reload to fail")
+		if _, err := ca.reloadWithRetry(t.Context(), logr.Discard(), ca.reloadAttempts); err == nil {
+			t.Fatal("reloadWithRetry() error = nil, want the reload to fail")
 		}
 		assertReloadDelta(t, before, map[metrics.ReloadResult]float64{metrics.ReloadFailed: 3})
 	})

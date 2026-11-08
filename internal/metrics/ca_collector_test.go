@@ -34,7 +34,7 @@ func TestCACollectorReportsCurrentState(t *testing.T) {
 	// One golden comparison pins the exposition shape - name, type and help -
 	// for the whole collector; the rest assert the values.
 	want := `
-# HELP podcertificatesigner_ca_reload_consecutive_failures Consecutive failed CA reload attempts. Readiness fails once this reaches 3 and has been there for ten minutes, so alerting at 3 gives roughly five minutes before the replica leaves the Service.
+# HELP podcertificatesigner_ca_reload_consecutive_failures Consecutive failed CA reload attempts. Readiness fails once this reaches the readiness threshold and the failure streak is older than the grace period (both in docs/operations.md), so alerting on the threshold gives lead time before the replica leaves the Service.
 # TYPE podcertificatesigner_ca_reload_consecutive_failures gauge
 podcertificatesigner_ca_reload_consecutive_failures 2
 `

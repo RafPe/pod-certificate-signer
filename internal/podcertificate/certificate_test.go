@@ -13,13 +13,13 @@ func TestValidateDurationExceedingMaxExpiration(t *testing.T) {
 	maxExpirationSeconds := int32(7200)
 	pcr.Spec.MaxExpirationSeconds = &maxExpirationSeconds
 
-	if _, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{}); err == nil {
+	if _, err := NewConfig(context.Background(), pcr, testPod(nil), testCSR(nil), Options{}); err == nil {
 		t.Fatal("want a denial for a duration above maxExpirationSeconds, got nil")
 	}
 }
 
 func TestPodCertificateConfigValidate(t *testing.T) {
-	valid := Config{CommonName: "cn", Duration: time.Hour, RefreshBefore: 15 * time.Minute}
+	valid := Config{CommonName: "cn", Duration: time.Hour, RefreshBefore: 15 * time.Minute, PublicKey: testPublicKey}
 
 	cases := []struct {
 		name    string
@@ -28,6 +28,7 @@ func TestPodCertificateConfigValidate(t *testing.T) {
 	}{
 		{"valid", func(c *Config) {}, false},
 		{"missing common name", func(c *Config) { c.CommonName = "" }, true},
+		{"missing public key", func(c *Config) { c.PublicKey = nil }, true},
 		{"non-positive duration", func(c *Config) { c.Duration = 0 }, true},
 		{"duration below apiserver minimum", func(c *Config) { c.Duration = 30 * time.Minute }, true},
 		{"duration above max expiration", func(c *Config) { c.MaxExpiration = 30 * time.Minute; c.Duration = time.Hour }, true},

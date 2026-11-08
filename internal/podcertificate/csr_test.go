@@ -61,7 +61,7 @@ func TestParseCSRExtractsSANs(t *testing.T) {
 // Since certificates.k8s.io/v1 dropped spec.pkixPublicKey, the CSR is the only
 // path to this classification, so it is the only thing standing between an
 // unsignable key and the signing code.
-func TestClassifyPublicKey(t *testing.T) {
+func TestPublicKeyAlgorithm(t *testing.T) {
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("generate RSA key: %v", err)
@@ -85,22 +85,19 @@ func TestClassifyPublicKey(t *testing.T) {
 		{"ed25519", edKey, x509.Ed25519},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, algorithm, err := classifyPublicKey(tc.key)
+			algorithm, err := publicKeyAlgorithm(tc.key)
 			if err != nil {
-				t.Fatalf("classifyPublicKey: %v", err)
+				t.Fatalf("publicKeyAlgorithm: %v", err)
 			}
 			if algorithm != tc.want {
 				t.Errorf("algorithm = %v, want %v", algorithm, tc.want)
-			}
-			if got == nil {
-				t.Error("public key must be returned")
 			}
 		})
 	}
 
 	t.Run("unsupported", func(t *testing.T) {
 		// A DSA key parses out of DER but can never be signed against.
-		_, _, err := classifyPublicKey(&dsa.PublicKey{})
+		_, err := publicKeyAlgorithm(&dsa.PublicKey{})
 		if err == nil {
 			t.Fatal("expected an unsupported key type to be rejected")
 		}

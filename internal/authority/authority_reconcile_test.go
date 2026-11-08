@@ -42,8 +42,8 @@ func TestReconcileTickRecoversAFailedReloadWithoutAnEvent(t *testing.T) {
 		if _, _, err := nonCA.WriteFiles(dir); err != nil {
 			t.Fatalf("write non-CA files: %v", err)
 		}
-		if _, err := ca.loadWithRetry(t.Context(), log.FromContext(t.Context()), ca.reloadAttempts); err == nil {
-			t.Fatal("loadWithRetry() = nil, want error for a permanently unloadable CA")
+		if _, err := ca.reloadWithRetry(t.Context(), log.FromContext(t.Context()), ca.reloadAttempts); err == nil {
+			t.Fatal("reloadWithRetry() = nil, want error for a permanently unloadable CA")
 		}
 		// The watch loop has not started yet, so this sleep crosses the grace
 		// period without firing any reconcile tick.
@@ -289,7 +289,7 @@ func TestWatchReconcilesOnStartup(t *testing.T) {
 	defer cancel()
 	notify := make(chan struct{}, 1)
 	watchDone := make(chan error, 1)
-	go func() { watchDone <- ca.Watch(ctx, notify) }()
+	go func() { watchDone <- ca.watch(ctx, notify) }()
 
 	select {
 	case <-notify:

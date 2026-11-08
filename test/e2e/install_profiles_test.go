@@ -298,7 +298,7 @@ func defineVerifiedInterpolationProfileTests() {
 			Entry("unrecognized annotation key", "pcs-deny-unknown-key", map[string]string{
 				signerName + "-cn":    "${pod.name}",
 				signerName + "-bogus": "anything",
-			}, "unrecognized user annotation key"),
+			}, `unrecognized key "`+signerName+`-bogus" in spec.unverifiedUserAnnotations`),
 		)
 
 		It("omits the default DNS SANs for an over-long pod name and warns", func() {

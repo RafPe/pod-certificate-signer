@@ -79,6 +79,15 @@ func (h *reloadHealth) failWatcher(err error) error {
 	return err
 }
 
+// snapshot reports the consecutive-failure streak and when the CA was last
+// read successfully.
+func (h *reloadHealth) snapshot() (int, time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	return h.failures, h.lastSuccess
+}
+
 // check is HealthCheck's verdict; see there.
 func (h *reloadHealth) check() error {
 	h.mu.Lock()
@@ -105,10 +114,7 @@ func (h *reloadHealth) check() error {
 // read successfully. It is safe for concurrent use and does not contend with a
 // reload, nor with a signing operation.
 func (ca *CertificateAuthority) ReloadHealth() (int, time.Time) {
-	ca.health.mu.Lock()
-	defer ca.health.mu.Unlock()
-
-	return ca.health.failures, ca.health.lastSuccess
+	return ca.health.snapshot()
 }
 
 // HealthCheck reports whether the CA is still tracking its on-disk material.
@@ -120,36 +126,4 @@ func (ca *CertificateAuthority) ReloadHealth() (int, time.Time) {
 // use and is intended to back a readiness probe.
 func (ca *CertificateAuthority) HealthCheck() error {
 	return ca.health.check()
-}
-
-// CertificateNotAfter reports when the loaded CA certificate expires. It is
-// safe for concurrent use: it takes mu, copies a scalar and releases, so a
-// caller reading it on a metrics scrape does not hold the lock across signing.
-// With no certificate loaded it reports the zero time, which the collector
-// renders as a 0 gauge (see metrics.timestamp) - correctly firing the
-// staleness alert.
-func (ca *CertificateAuthority) CertificateNotAfter() time.Time {
-	ca.mu.Lock()
-	defer ca.mu.Unlock()
-
-	if ca.certificate == nil {
-		return time.Time{}
-	}
-
-	return ca.certificate.NotAfter
-}
-
-// TrustBundleSize reports how many certificates the in-memory trust bundle
-// holds: the current CA plus the retained previous ones. It is what the signer
-// would publish, not a read of the published ClusterTrustBundle; with no CA
-// loaded that is nothing, matching TrustBundlePEM. Safe for concurrent use.
-func (ca *CertificateAuthority) TrustBundleSize() int {
-	ca.mu.Lock()
-	defer ca.mu.Unlock()
-
-	if ca.certificate == nil {
-		return 0
-	}
-
-	return 1 + len(ca.previousCAs)
 }

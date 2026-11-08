@@ -26,29 +26,30 @@ const (
 	SigningFailed      ConditionReason = "SigningFailed"
 )
 
-// EventReason names something that happened to a request without ending it:
-// a requeue, a drop, or a warning attached to an issuance. It appears on
-// events and on the requeue and drop counters, and is never written onto the
-// status - a condition makes a request immutable, so writing one for a
-// non-terminal event would freeze a request that could still succeed.
-type EventReason string
+// NonTerminalReason names something that happened to a request without ending
+// it: a requeue, a drop, or a notice attached to an issuance. It labels events
+// and the requeue and drop counters (Transient labels only the counter), and
+// is never written onto the status - a condition makes a request immutable,
+// so writing one for a non-terminal reason would freeze a request that could
+// still succeed.
+type NonTerminalReason string
 
 const (
 	// CASignerUnusable: the CA cannot sign this request right now (it has
 	// expired, or its remaining validity is shorter than the requested
 	// lifetime). A CA rotation can make the same request succeed, so it is
 	// requeued; see authority.ErrCASignerUnusable.
-	CASignerUnusable EventReason = "CASignerUnusable"
+	CASignerUnusable NonTerminalReason = "CASignerUnusable"
 	// Transient: every other requeue - an API read failure, a conflicted
 	// write. The controller's own retry loop is doing its job.
-	Transient EventReason = "Transient"
+	Transient NonTerminalReason = "Transient"
 	// AssociatedPodGone: a live read confirmed the request's pod is gone
 	// (absent, or replaced by a different pod), so the request is dropped.
-	AssociatedPodGone EventReason = "AssociatedPodGone"
+	AssociatedPodGone NonTerminalReason = "AssociatedPodGone"
 	// DefaultSANSkipped: the certificate issued, but a default that could not
 	// be applied (e.g. the pod DNS SANs for an over-long pod name) is surfaced
 	// so the operator can see why.
-	DefaultSANSkipped EventReason = "DefaultSANSkipped"
+	DefaultSANSkipped NonTerminalReason = "DefaultSANSkipped"
 )
 
 // Kind is what happened to a request that reached a terminal condition. It

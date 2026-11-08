@@ -13,22 +13,19 @@ import (
 // in milliseconds: without a throttle a single wedged request would fill the
 // object's event stream (and the apiserver's event budget) with the same note.
 //
-// The zero value is usable: the map is created on first use and a zero interval
-// falls back to defaultEventThrottleInterval. Because it carries a mutex, it
-// must only ever be used through a pointer to its owner - never copied.
+// The zero value is usable: the map is created on first use. Because it carries
+// a mutex, it must only ever be used through a pointer to its owner - never
+// copied.
 type eventThrottle struct {
 	mu   sync.Mutex
 	last map[types.UID]time.Time
-
-	// interval is the minimum spacing between two events for the same object.
-	interval time.Duration
 }
 
-// defaultEventThrottleInterval is the spacing used when an eventThrottle does
-// not configure one. It is deliberately coarse: the event exists so an operator
+// eventThrottleInterval is the minimum spacing between two events for the same
+// object. It is deliberately coarse: the event exists so an operator
 // looking at `kubectl describe` sees the condition at all, not so they can
 // count its occurrences, and the reconcile keeps requeueing either way.
-const defaultEventThrottleInterval = 5 * time.Minute
+const eventThrottleInterval = 5 * time.Minute
 
 // allow reports whether an event may be emitted for uid now, and records the
 // emission when it says yes. The first occurrence for an object always passes;
@@ -42,14 +39,10 @@ func (t *eventThrottle) allow(uid types.UID) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	interval := t.interval
-	if interval <= 0 {
-		interval = defaultEventThrottleInterval
-	}
 	now := time.Now()
 
 	for key, seen := range t.last {
-		if now.Sub(seen) >= interval {
+		if now.Sub(seen) >= eventThrottleInterval {
 			delete(t.last, key)
 		}
 	}

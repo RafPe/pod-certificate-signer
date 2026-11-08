@@ -60,12 +60,14 @@ func annotationKey(signerName string, suffix AnnotationSuffix) string {
 	return signerName + "-" + string(suffix)
 }
 
-// podAnnotation returns the value of the given pod annotation. It reports
-// false when the annotation is absent or empty.
+// podAnnotation returns the value of the given pod annotation and whether the
+// key is present. An empty value is reported as present, so rawValue can deny
+// it exactly as it denies an empty request annotation.
 //
 // Deprecated: pod-annotation configuration is removed in 4.0.0; configure the
-// signer through spec.unverifiedUserAnnotations. This is the only function the
-// legacy path calls.
+// signer through spec.unverifiedUserAnnotations. The legacy path has two
+// touchpoints, both gated by Options.AllowPodAnnotations, and both go together:
+// this read and the fallback branch in annotationResolver.rawValue.
 func podAnnotation(pod *corev1.Pod, key string) (string, bool) {
 	value, ok := pod.Annotations[key]
 	return value, ok
@@ -87,7 +89,7 @@ func validateAnnotationKeys(annotations map[string]string, signerName string) er
 
 	for key := range annotations {
 		if _, ok := known[key]; !ok {
-			return fmt.Errorf("unrecognized user annotation key %q", key)
+			return fmt.Errorf("unrecognized key %q in spec.unverifiedUserAnnotations", key)
 		}
 	}
 
@@ -231,27 +233,33 @@ func (r *annotationResolver) dnsNames(defaults []string) ([]string, error) {
 var errUnverifiedIPSAN = errors.New("IP SANs are not derived from a verified pod identity and are denied; start the controller with --allow-unverified-identities to allow them")
 
 // ipAddresses applies the ip-san-annotation > CSR-requested > none precedence
-// for IP SANs, under errUnverifiedIPSAN.
+// for IP SANs, then the one IP SAN policy, errUnverifiedIPSAN.
 func (r *annotationResolver) ipAddresses() ([]net.IP, error) {
-	ipSAN, ok, err := r.value(AnnotationSuffixIPSAN)
+	ipSAN, fromAnnotation, err := r.value(AnnotationSuffixIPSAN)
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		if r.opts.HonorCSRSANs && len(r.csr.IPAddresses) > 0 {
-			if r.verified != nil {
-				return nil, fmt.Errorf("CSR %w", errUnverifiedIPSAN)
-			}
-			return r.csr.IPAddresses, nil
+
+	var ips []net.IP
+	var attribute func(error) error
+	switch {
+	case fromAnnotation:
+		attribute = func(err error) error { return r.annotationError(AnnotationSuffixIPSAN, err) }
+		if !r.opts.AllowUnverifiedIdentities {
+			return nil, attribute(errUnverifiedIPSAN)
 		}
+		if ips, err = parseIPs(ipSAN); err != nil {
+			return nil, attribute(err)
+		}
+	case r.opts.HonorCSRSANs && len(r.csr.IPAddresses) > 0:
+		attribute = func(err error) error { return fmt.Errorf("CSR %w", err) }
+		ips = r.csr.IPAddresses
+	default:
 		return nil, nil
 	}
-	if r.verified != nil {
-		return nil, r.annotationError(AnnotationSuffixIPSAN, errUnverifiedIPSAN)
-	}
-	ips, err := parseIPs(ipSAN)
-	if err != nil {
-		return nil, r.annotationError(AnnotationSuffixIPSAN, err)
+
+	if !r.opts.AllowUnverifiedIdentities {
+		return nil, attribute(errUnverifiedIPSAN)
 	}
 	return ips, nil
 }

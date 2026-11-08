@@ -138,7 +138,7 @@ func TestFetchPreviousCAsParsesExistingBundle(t *testing.T) {
 	}
 
 	bundle := &certificatesv1.ClusterTrustBundle{
-		ObjectMeta: metav1.ObjectMeta{Name: Name(testSignerName)},
+		ObjectMeta: metav1.ObjectMeta{Name: bundleName(testSignerName)},
 		Spec: certificatesv1.ClusterTrustBundleSpec{
 			SignerName:  testSignerName,
 			TrustBundle: string(ca.CertPEM),
@@ -163,7 +163,7 @@ func TestFetchPreviousCAsParsesExistingBundle(t *testing.T) {
 // silently shortened history would be written back on the next publish.
 func TestFetchPreviousCAsCorruptCertificateFailsClosed(t *testing.T) {
 	bundle := &certificatesv1.ClusterTrustBundle{
-		ObjectMeta: metav1.ObjectMeta{Name: Name(testSignerName)},
+		ObjectMeta: metav1.ObjectMeta{Name: bundleName(testSignerName)},
 		Spec: certificatesv1.ClusterTrustBundleSpec{
 			SignerName:  testSignerName,
 			TrustBundle: "-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n",
@@ -181,4 +181,36 @@ func TestFetchPreviousCAsCorruptCertificateFailsClosed(t *testing.T) {
 	if certs != nil {
 		t.Fatalf("history = %v, want nil on a corrupt bundle", certs)
 	}
+}
+
+// A corrupt bundle reads back identically every time, so startup must fail on
+// the first read instead of spending the retry budget on it.
+func TestLoadPreviousCAHistoryCorruptBundleIsNotRetried(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		bundle := &certificatesv1.ClusterTrustBundle{
+			ObjectMeta: metav1.ObjectMeta{Name: bundleName(testSignerName)},
+			Spec: certificatesv1.ClusterTrustBundleSpec{
+				SignerName:  testSignerName,
+				TrustBundle: "-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n",
+			},
+		}
+		reads := 0
+		c := fake.NewClientBuilder().
+			WithScheme(clientgoscheme.Scheme).
+			WithObjects(bundle).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					reads++
+					return cl.Get(ctx, key, obj, opts...)
+				},
+			}).
+			Build()
+
+		if _, err := LoadPreviousCAHistory(t.Context(), c, testSignerName, false); err == nil {
+			t.Fatal("LoadPreviousCAHistory err = nil, want the parse failure so startup fails closed")
+		}
+		if reads != 1 {
+			t.Errorf("read the bundle %d times, want 1: a corrupt bundle must not be retried", reads)
+		}
+	})
 }

@@ -142,14 +142,14 @@ its own issue and ADR.
 ## Implementation Plan
 
 * **Affected paths**:
-  * `internal/podcertificate/podcertificate.go` —
-    `verifiedIdentities` (`:505-548`) is the sole implementation of this
+  * `internal/podcertificate/identity.go` —
+    `verifiedIdentities` is the sole implementation of this
     decision. The "Deliberately excluded" comment on its `if sa != ""` branch
     names the excluded forms and cites this ADR.
-  * `internal/podcertificate/identity_constraints_test.go` — the
+  * `internal/podcertificate/identity_test.go` — the
     characterization tests that lock it.
 * **Dependencies**: none.
-* **Patterns to follow**: identity checks go through `assertVerifiedIdentity`
+* **Patterns to follow**: identity checks go through `validateVerifiedIdentities`
   against the map `verifiedIdentities` returns. Comparison is exact string
   equality — never prefix, suffix, or pattern matching, which is what makes
   `${pod.name}.attacker.com` fail.

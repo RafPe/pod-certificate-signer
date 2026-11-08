@@ -15,7 +15,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
 )
 
@@ -30,10 +29,10 @@ var apiRetryBackoff = wait.Backoff{
 	Jitter:   0.1,
 }
 
-// DriftRepairInterval is how often the publisher re-publishes the
+// driftRepairInterval is how often the publisher re-publishes the
 // ClusterTrustBundle even without a CA reload event, to repair external drift
 // (e.g. a manual edit or a lost event).
-const DriftRepairInterval = 10 * time.Minute
+const driftRepairInterval = 10 * time.Minute
 
 // Publisher keeps the signer's ClusterTrustBundle in step with the current CA.
 // It publishes when it starts, whenever the CA watcher reports a change, and
@@ -45,8 +44,8 @@ const DriftRepairInterval = 10 * time.Minute
 type Publisher struct {
 	client     client.Client
 	signerName string
-	ca         *authority.CertificateAuthority
-	events     chan struct{}
+	source     bundleSource
+	caChanged  chan struct{}
 	interval   time.Duration
 
 	// healthMu guards the most recent publish outcome, polled by readiness.
@@ -54,24 +53,28 @@ type Publisher struct {
 	lastPublishErr error
 }
 
-// NewPublisher returns the runnable that publishes ca's trust bundle as the
-// ClusterTrustBundle for signerName.
-func NewPublisher(c client.Client, signerName string, ca *authority.CertificateAuthority) *Publisher {
+// NewPublisher returns the runnable that publishes source's trust bundle (the
+// certificate authority's) as the ClusterTrustBundle for signerName.
+//
+// c must read directly from the API server, not through the manager cache: a
+// cached read would start a ClusterTrustBundle informer, which needs list and
+// watch RBAC this controller is not granted.
+func NewPublisher(c client.Client, signerName string, source bundleSource) *Publisher {
 	return &Publisher{
 		client:     c,
 		signerName: signerName,
-		ca:         ca,
+		source:     source,
 		// Two slots: one for the change being published, one for a change
 		// that lands meanwhile. A third would publish the same CA state again.
-		events:   make(chan struct{}, 2),
-		interval: DriftRepairInterval,
+		caChanged: make(chan struct{}, 2),
+		interval:  driftRepairInterval,
 	}
 }
 
 // Notify is the channel the CA watcher signals a changed CA on (see
 // authority.NewWatcher). Sends must not block; the watcher's do not.
 func (p *Publisher) Notify() chan<- struct{} {
-	return p.events
+	return p.caChanged
 }
 
 // Start publishes the ClusterTrustBundle on startup, so a newly-elected leader
@@ -89,7 +92,7 @@ func (p *Publisher) Start(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-p.events:
+		case <-p.caChanged:
 			p.publish(ctx, logger)
 		case <-ticker.C:
 			// Periodic drift repair, independent of CA changes.
@@ -158,11 +161,8 @@ func publishResult(op controllerutil.OperationResult) metrics.PublishResult {
 // all describe the same CA state. The mutate function overwrites (never merges)
 // the spec, so CA pruning in the rolling window is preserved.
 func (p *Publisher) publishOnce(ctx context.Context, logger logr.Logger) (controllerutil.OperationResult, error) {
-	desired := desiredBundle(p.signerName, p.ca)
+	desired := desiredBundle(p.signerName, p.source)
 	bundle := &certificatesv1.ClusterTrustBundle{ObjectMeta: metav1.ObjectMeta{Name: desired.Name}}
-	// Use the direct API client: reading through the manager's cache-backed
-	// client would start an informer for ClusterTrustBundles, which requires
-	// list/watch RBAC permissions this controller does not need.
 	op, err := controllerutil.CreateOrPatch(ctx, p.client, bundle, func() error {
 		bundle.Spec = desired.Spec
 		return nil

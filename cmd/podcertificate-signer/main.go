@@ -114,10 +114,10 @@ type flags struct {
 // their parsed values land in.
 func registerFlags(fs *flag.FlagSet) *flags {
 	f := &flags{}
-	fs.StringVar(&f.signerName, "signer-name", "", "Only sign CSR with this .spec.signerName. Required.")
+	fs.StringVar(&f.signerName, "signer-name", "", "Only sign PodCertificateRequests with this .spec.signerName. Required.")
 	fs.StringVar(&f.caCertPath, "ca-cert-path", "", "CA certificate file.")
 	fs.StringVar(&f.caKeyPath, "ca-key-path", "", "CA private key file.")
-	fs.StringVar(&f.certOpts.ClusterFQDN, "cluster-fqdn", podcertificate.DefaultClusterFQDN, "The FQDN of the cluster")
+	fs.StringVar(&f.certOpts.ClusterFQDN, "cluster-fqdn", podcertificate.DefaultClusterFQDN, "The FQDN of the cluster.")
 	fs.StringVar(&f.manager.leaderElectionID, "leader-election-id", "pcs-leader-election",
 		"The name of the Lease used to coordinate leader election between replicas.")
 	fs.StringVar(&f.manager.leaderElectionNamespace, "leader-election-namespace", "",
@@ -131,14 +131,14 @@ func registerFlags(fs *flag.FlagSet) *flags {
 		"Serve the metrics endpoint over HTTPS and require authentication (TokenReview) and authorization "+
 			"(SubjectAccessReview) for every scrape. On by default. Set to false to fall back to the legacy "+
 			"unauthenticated plaintext endpoint - see the chart's metrics.insecure escape hatch.")
-	fs.IntVar(&f.manager.maxConcurrentReconciles, "max-concurrent-reconciles", 5, "maximum number of concurrent reconciles which can be run.")
-	fs.IntVar(&f.maxPreviousCAs, "max-previous-ca-certs", 2, "maximum number of previous CA certificates to keep during CA rotation.")
+	fs.IntVar(&f.manager.maxConcurrentReconciles, "max-concurrent-reconciles", 5, "Maximum number of concurrent reconciles.")
+	fs.IntVar(&f.maxPreviousCAs, "max-previous-ca-certs", 2, "Maximum number of previous CA certificates to retain across CA rotations.")
 	fs.BoolVar(&f.requireCAHistory, "require-ca-history", false,
 		"Refuse to start when the signer's ClusterTrustBundle does not exist, instead of starting with an empty "+
 			"previous-CA history. Off by default, because a first install has no bundle yet and the controller cannot "+
 			"tell that apart from one that was deleted. Turn it on once the signer has published its bundle, so a "+
 			"deleted bundle cannot silently reset the retained CA history (see docs/operations.md).")
-	fs.DurationVar(&f.manager.reconcileTimeout, "reconcile-timeout", 5*time.Minute, "maximum duration of a reconcile before it times out.")
+	fs.DurationVar(&f.manager.reconcileTimeout, "reconcile-timeout", 5*time.Minute, "Maximum duration of a reconcile before it times out.")
 	fs.BoolVar(&f.certOpts.EnableInterpolation, "enable-annotation-interpolation", defaultEnableAnnotationInterpolation,
 		"Allow ${...} placeholders (e.g. ${pod.name}, ${pod.serviceAccountName}) in certificate configuration annotations, "+
 			"resolved from the verified fields of the PodCertificateRequest. On by default; resolved values remain subject "+
@@ -161,29 +161,42 @@ func registerFlags(fs *flag.FlagSet) *flags {
 }
 
 func main() {
-	f := registerFlags(flag.CommandLine)
+	fs := flag.CommandLine
+	f := registerFlags(fs)
 	opts := zap.Options{
 		Development:     true,
 		TimeEncoder:     zapcore.ISO8601TimeEncoder,
 		StacktraceLevel: zapcore.DPanicLevel,
 	}
-	opts.BindFlags(flag.CommandLine)
-	flag.Parse()
+	opts.BindFlags(fs)
+	// flag.CommandLine exits on a parse error, so there is no error to handle.
+	_ = fs.Parse(os.Args[1:])
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	if err := validateFlags(f.signerName, f.certOpts.ClusterFQDN); err != nil {
-		setupLog.Error(err, "invalid command-line flags")
+	// run returns only once the manager has stopped (or failed to start), and
+	// the process exits straight after: ADR-0006 relies on that.
+	if err := run(ctrl.SetupSignalHandler(), fs, f); err != nil {
+		setupLog.Error(err, "controller manager exited with an error")
 		os.Exit(1)
 	}
+}
 
-	ctx := ctrl.SetupSignalHandler()
-	restCfg := ctrl.GetConfigOrDie()
+// run wires the signer and runs the controller manager until ctx is canceled.
+// Every setup step that fails returns its error, so main has one exit point.
+// mgr.Start is its last statement: see the PRECONDITION in managerOptions.
+func run(ctx context.Context, fs *flag.FlagSet, f *flags) error {
+	if err := validateFlags(f.signerName, f.certOpts); err != nil {
+		return fmt.Errorf("invalid command-line flags: %w", err)
+	}
 
+	restCfg, err := ctrl.GetConfig()
+	if err != nil {
+		return fmt.Errorf("load kubeconfig: %w", err)
+	}
 	mgr, err := ctrl.NewManager(restCfg, managerOptions(scheme, ctx, f.manager))
 	if err != nil {
-		setupLog.Error(err, "unable to create controller manager")
-		os.Exit(1)
+		return fmt.Errorf("create controller manager: %w", err)
 	}
 
 	// Bootstrap previous CA certificates from the existing ClusterTrustBundle
@@ -194,17 +207,14 @@ func main() {
 	//
 	// This needs its own client: the manager is not started yet, and the
 	// publisher must not go through the manager cache anyway (see
-	// trustbundle.Publisher).
+	// trustbundle.NewPublisher).
 	c, err := client.New(restCfg, client.Options{Scheme: scheme})
 	if err != nil {
-		setupLog.Error(err, "unable to create API client")
-		os.Exit(1)
+		return fmt.Errorf("create API client: %w", err)
 	}
 	previousCAs, err := trustbundle.LoadPreviousCAHistory(ctx, c, f.signerName, f.requireCAHistory)
 	if err != nil {
-		setupLog.Error(err, "unable to bootstrap the previous-CA history; "+
-			"refusing to start to avoid dropping previously-trusted CAs")
-		os.Exit(1)
+		return fmt.Errorf("bootstrap the previous-CA history; refusing to start to avoid dropping previously-trusted CAs: %w", err)
 	}
 	ca, err := authority.New(
 		f.caCertPath,
@@ -214,8 +224,7 @@ func main() {
 		authority.WithLogger(ctrl.Log.WithName("certificate-authority")),
 	)
 	if err != nil {
-		setupLog.Error(err, "unable to create certificate authority")
-		os.Exit(1)
+		return fmt.Errorf("create certificate authority: %w", err)
 	}
 
 	// The signer's custom metric surface is bounded by decision, not by
@@ -225,8 +234,7 @@ func main() {
 	// This runs here rather than in init() because the CA gauges are read from
 	// the loaded CA at scrape time, so the collector needs it to exist.
 	if err := signermetrics.Register(metrics.Registry, signermetrics.NewCACollector(ca)); err != nil {
-		setupLog.Error(err, "unable to register the signer metrics")
-		os.Exit(1)
+		return fmt.Errorf("register the signer metrics: %w", err)
 	}
 
 	// Wire the CA file watcher and the ClusterTrustBundle publisher: the
@@ -235,63 +243,55 @@ func main() {
 	// CA current; the publisher is leader-gated so only the elected leader
 	// writes the shared ClusterTrustBundle.
 	ctbPublisher := trustbundle.NewPublisher(c, f.signerName, ca)
-	caWatcher := authority.NewWatcher(ca, ctbPublisher.Notify())
-	if err := mgr.Add(caWatcher); err != nil {
-		setupLog.Error(err, "unable to add CA watcher runnable")
-		os.Exit(1)
+	if err := mgr.Add(authority.NewWatcher(ca, ctbPublisher.Notify())); err != nil {
+		return fmt.Errorf("add CA watcher runnable: %w", err)
 	}
 	if err := mgr.Add(ctbPublisher); err != nil {
-		setupLog.Error(err, "unable to add ClusterTrustBundle publisher runnable")
-		os.Exit(1)
+		return fmt.Errorf("add ClusterTrustBundle publisher runnable: %w", err)
 	}
 
 	reconciler, err := controller.NewPodCertificateRequestReconciler(mgr, controllerName, f.signerName, ca, f.certOpts)
 	if err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", controllerName)
-		os.Exit(1)
+		return fmt.Errorf("create controller %s: %w", controllerName, err)
 	}
 	if err := reconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to set up controller", "controller", controllerName)
-		os.Exit(1)
+		return fmt.Errorf("set up controller %s: %w", controllerName, err)
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-		setupLog.Error(err, "unable to set up health check")
-		os.Exit(1)
+		return fmt.Errorf("set up health check: %w", err)
 	}
 	// Gate readiness on the CA's watcher/reload health: a replica that can no
 	// longer observe CA rotations, or whose reloads have been failing
 	// persistently, must be pulled from readiness so it is not relied upon to
 	// publish or sign with stale material. A transient reload failure keeps the
 	// replica ready, since the last-good CA is retained and signing works.
-	if err := mgr.AddReadyzCheck("readyz", readyzCheck(ca)); err != nil {
-		setupLog.Error(err, "unable to set up ready check")
-		os.Exit(1)
+	if err := mgr.AddReadyzCheck("certificate-authority", readyzCheck(ca)); err != nil {
+		return fmt.Errorf("set up CA ready check: %w", err)
 	}
 	// Also gate readiness on the ClusterTrustBundle publisher: a leader whose
 	// publishes keep failing must be pulled from readiness so the failure is
 	// visible and traffic/leadership can move elsewhere.
 	if err := mgr.AddReadyzCheck("clustertrustbundle", readyzCheck(ctbPublisher)); err != nil {
-		setupLog.Error(err, "unable to set up ClusterTrustBundle ready check")
-		os.Exit(1)
+		return fmt.Errorf("set up ClusterTrustBundle ready check: %w", err)
 	}
 
-	displayCommandlineFlags()
+	displayCommandlineFlags(fs)
 
 	if err := mgr.Start(ctx); err != nil {
-		setupLog.Error(err, "unable to start controller manager")
-		os.Exit(1)
+		return fmt.Errorf("run controller manager: %w", err)
 	}
+	return nil
 }
 
 // validateFlags checks command-line flags that must fail before the controller
 // establishes a Kubernetes API connection.
-func validateFlags(signerName, clusterFQDN string) error {
+func validateFlags(signerName string, certOpts podcertificate.Options) error {
 	if signerName == "" {
 		return errors.New("the --signer-name flag is required")
 	}
-	if err := podcertificate.ValidateClusterFQDN(clusterFQDN); err != nil {
-		return fmt.Errorf("invalid --cluster-fqdn %q: %w", clusterFQDN, err)
+	if err := certOpts.Validate(); err != nil {
+		return fmt.Errorf("invalid --cluster-fqdn: %w", err)
 	}
 	return nil
 }
@@ -328,7 +328,8 @@ func managerOptions(scheme *runtime.Scheme, baseContext context.Context, cfg man
 		// SIGKILL) still falls back to Lease expiry.
 		//
 		// PRECONDITION: the process must exit as soon as the manager stops, so
-		// mgr.Start stays the last statement in main(). The release is
+		// mgr.Start stays the last statement in run(), and main exits as soon
+		// as run returns. The release is
 		// deferred until every runnable has returned, but only within
 		// GracefulShutdownTimeout (30s default); past that deadline the Lease
 		// is released with leader-gated code possibly still live. So every
@@ -398,10 +399,10 @@ func readyzCheck(h healthChecker) healthz.Checker {
 	}
 }
 
-// displayCommandlineFlags visits all CLI flags and prints them.
-func displayCommandlineFlags() {
-	flag.CommandLine.VisitAll(func(f *flag.Flag) {
-		setupLog.Info("Flag",
+// displayCommandlineFlags logs every flag on fs with its value and default.
+func displayCommandlineFlags(fs *flag.FlagSet) {
+	fs.VisitAll(func(f *flag.Flag) {
+		setupLog.Info("command-line flag",
 			"name", f.Name,
 			"value", f.Value.String(),
 			"default", f.DefValue)

@@ -10,12 +10,13 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/outcome"
 )
 
 // Options is the process-wide policy the certificate configuration is built
@@ -62,10 +63,10 @@ type Options struct {
 
 // NewConfig builds the certificate configuration for the given
 // PodCertificateRequest, its associated pod and the CSR kubelet generated for
-// it. pcr and pod are required (the pod's name and namespace form the default
-// identities); a nil csr means no public key and no requested SANs. A config
-// returned without error has passed [Config.Validate], so it is
-// one kube-apiserver will accept.
+// it. pcr, pod and csr are required: the pod's name and namespace form the
+// default identities, and the CSR carries the subject public key. opts must
+// have passed [Options.Validate]. A config returned without error has passed
+// [Config.Validate], so it is one kube-apiserver will accept.
 //
 // Configuration values are read from the request spec.unverifiedUserAnnotations,
 // falling back to the pod's annotations while opts.AllowPodAnnotations is set
@@ -89,7 +90,7 @@ func NewConfig(
 		return nil, errors.New("pod is required")
 	}
 	if csr == nil {
-		csr = &CSR{}
+		return nil, errors.New("certificate signing request is required")
 	}
 	if opts.ClusterFQDN == "" {
 		opts.ClusterFQDN = DefaultClusterFQDN
@@ -153,12 +154,13 @@ func NewConfig(
 	}
 	// If the default pod DNS SANs were dropped for an over-long label and no
 	// annotation/CSR SAN took their place, the certificate loses its canonical
-	// DNS identity. Surface it so the operator can add an explicit SAN; the
-	// reconciler turns this into a Warning event and a log line.
+	// DNS identity. Surface it so the operator can add an explicit SAN.
 	if dnsLabelTooLong && len(config.DNSNames) == 0 {
-		config.Warnings = append(config.Warnings, fmt.Sprintf(
-			"default pod DNS SANs omitted: pod name %q exceeds the %d-character DNS label limit; request an explicit SAN via the san annotation if one is needed",
-			pod.Name, dnsLabelMaxLen))
+		config.Notices = append(config.Notices, Notice{
+			Reason: outcome.DefaultSANSkipped,
+			Message: fmt.Sprintf("default pod DNS SANs omitted: pod name %q exceeds the %d-character DNS label limit; "+
+				"request an explicit SAN via the san annotation if one is needed", pod.Name, dnsLabelMaxLen),
+		})
 	}
 	if config.IPAddresses, err = resolver.ipAddresses(); err != nil {
 		return nil, err
@@ -178,8 +180,8 @@ func NewConfig(
 	if err := config.Validate(); err != nil {
 		// A denial is all the requester sees, so it carries any notice that
 		// explains it (e.g. why the default DNS SANs were dropped).
-		if len(config.Warnings) > 0 {
-			return nil, fmt.Errorf("%w (%s)", err, strings.Join(config.Warnings, "; "))
+		for _, notice := range config.Notices {
+			err = fmt.Errorf("%w (%s)", err, notice.Message)
 		}
 		return nil, err
 	}

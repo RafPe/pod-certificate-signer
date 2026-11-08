@@ -1,0 +1,2 @@
+kind: Changed
+body: 'The readiness check that tracks the CA watcher and reload health is now named `certificate-authority` instead of `readyz`, so `/readyz?verbose` says which component is not ready. Anything that probes `/readyz/readyz` directly must switch to `/readyz/certificate-authority`; the `/readyz` endpoint itself is unchanged.'

@@ -22,6 +22,8 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
+	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -250,4 +252,39 @@ func waitForCondition(pcr *certificatesv1.PodCertificateRequest, conditionType s
 	}, 30*time.Second, 200*time.Millisecond).Should(Succeed())
 
 	return found
+}
+
+func TestFailedIsTerminal(t *testing.T) {
+	base := errors.New("boom")
+	err := failed(base)
+
+	if err.Error() != "boom" {
+		t.Fatalf("Error() = %q, want %q", err.Error(), "boom")
+	}
+	if !errors.Is(err, base) {
+		t.Fatal("errors.Is should find the wrapped base error")
+	}
+
+	var te *terminalError
+	if !errors.As(err, &te) {
+		t.Fatal("errors.As should match *terminalError")
+	}
+	if te.kind != outcome.Failed || te.reason != outcome.SigningFailed {
+		t.Fatalf("kind, reason = %q, %q, want %q, %q", te.kind, te.reason, outcome.Failed, outcome.SigningFailed)
+	}
+
+	var none *terminalError
+	if errors.As(errors.New("plain"), &none) {
+		t.Fatal("a plain error must NOT classify as *terminalError")
+	}
+}
+
+func TestDeniedIsTerminal(t *testing.T) {
+	var te *terminalError
+	if !errors.As(denied(outcome.UnsupportedKeyType, errors.New("bad key")), &te) {
+		t.Fatal("errors.As should match *terminalError")
+	}
+	if te.kind != outcome.Denied || te.reason != outcome.UnsupportedKeyType {
+		t.Fatalf("kind, reason = %q, %q, want %q, %q", te.kind, te.reason, outcome.Denied, outcome.UnsupportedKeyType)
+	}
 }

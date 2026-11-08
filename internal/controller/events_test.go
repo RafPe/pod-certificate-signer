@@ -123,7 +123,7 @@ func TestReconcileCASignerUnusableEmitsThrottledWarning(t *testing.T) {
 
 		// Once the window has passed the condition is re-announced, so an operator
 		// who arrives late still sees it.
-		time.Sleep(defaultEventThrottleInterval)
+		time.Sleep(eventThrottleInterval)
 		reconcileRequeues(t, r, pcr)
 		select {
 		case e := <-rec.Events:
@@ -178,7 +178,7 @@ func TestEventThrottleIsPerObject(t *testing.T) {
 
 		// Entries drop out of the map once their window has passed, so the
 		// throttle does not grow with every object it has ever seen.
-		time.Sleep(defaultEventThrottleInterval)
+		time.Sleep(eventThrottleInterval)
 		if !throttle.allow("uid-a") {
 			t.Error("event for uid-a after the window was throttled, want it emitted")
 		}
