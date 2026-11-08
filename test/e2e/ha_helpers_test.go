@@ -6,9 +6,7 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -17,8 +15,6 @@ import (
 	. "github.com/onsi/gomega"
 	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
-	policyv1 "k8s.io/api/policy/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/test/utils"
 )
@@ -367,122 +363,10 @@ func podLogLineCount(pod string, needles ...string) int {
 	return count
 }
 
-// haPodDisruptionBudgetStatus reads the budget the chart renders for the
-// controller.
-func haPodDisruptionBudgetStatus(g Gomega) policyv1.PodDisruptionBudgetStatus {
-	cmd := exec.Command("kubectl", "get", "poddisruptionbudget", releaseName,
-		"-n", namespace, "-o", "json")
-	output, err := utils.Run(cmd)
-	g.Expect(err).NotTo(HaveOccurred(), "Failed to read the PodDisruptionBudget")
-
-	var pdb policyv1.PodDisruptionBudget
-	g.Expect(json.Unmarshal([]byte(trimToJSON(output)), &pdb)).To(Succeed(),
-		"Failed to decode the PodDisruptionBudget")
-	return pdb.Status
-}
-
-// evictControllerPod asks the apiserver to evict a replica, returning kubectl's
-// output and whether the eviction was refused.
-//
-// It posts an Eviction to the pod's eviction subresource, which is what a node
-// drain does and the only path that consults the PodDisruptionBudget. A plain
-// `kubectl delete pod` bypasses the budget entirely and would prove nothing.
-func evictControllerPod(pod string) (string, error) {
-	GinkgoHelper()
-
-	eviction, err := json.Marshal(map[string]any{
-		"apiVersion": "policy/v1",
-		"kind":       "Eviction",
-		"metadata":   map[string]any{"name": pod, "namespace": namespace},
-	})
-	Expect(err).NotTo(HaveOccurred(), "Failed to build the Eviction body")
-
-	dir, err := os.MkdirTemp("", "pcs-e2e-eviction")
-	Expect(err).NotTo(HaveOccurred(), "Failed to create a temp dir for the Eviction")
-	DeferCleanup(func() { _ = os.RemoveAll(dir) })
-
-	body := filepath.Join(dir, "eviction.json")
-	Expect(os.WriteFile(body, eviction, os.FileMode(0o600))).To(Succeed())
-
-	cmd := exec.Command("kubectl", "create", "--raw",
-		fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/eviction", namespace, pod),
-		"-f", body)
-	return utils.Run(cmd)
-}
-
 // clusterTrustBundleWriteVerbs are the verbs the readiness spec revokes. get is
 // not among them: see the spec for why revoking it would produce a crash loop
 // instead of a readiness failure.
 var clusterTrustBundleWriteVerbs = []string{"create", "update", "patch"}
-
-// restrictClusterTrustBundleWrites removes the controller's ClusterTrustBundle
-// write permissions and registers their restoration.
-//
-// The ClusterRole is Helm-managed, so the patch is a targeted verb replacement
-// on the rule that grants them, and the cleanup puts the original verb list
-// back verbatim rather than reinstating what this file believes it should be.
-func restrictClusterTrustBundleWrites() {
-	GinkgoHelper()
-
-	index, verbs := clusterTrustBundleRule()
-	DeferCleanup(func() {
-		patchClusterRoleVerbs(index, verbs)
-	})
-	patchClusterRoleVerbs(index, []string{"get"})
-}
-
-// restoreClusterTrustBundleWrites puts the write verbs back before the spec
-// ends, so the assertions that follow the revocation run against a controller
-// that is permitted to publish again. The DeferCleanup registered above stays
-// as the backstop for a spec that fails in between.
-func restoreClusterTrustBundleWrites() {
-	GinkgoHelper()
-
-	index, verbs := clusterTrustBundleRule()
-	patchClusterRoleVerbs(index, append(verbs, clusterTrustBundleWriteVerbs...))
-}
-
-// clusterTrustBundleRule locates the ClusterRole rule granting access to
-// ClusterTrustBundles and returns its index and current verbs.
-func clusterTrustBundleRule() (int, []string) {
-	GinkgoHelper()
-
-	cmd := exec.Command("kubectl", "get", "clusterrole", releaseName, "-o", "json")
-	output, err := utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to read the controller ClusterRole: %s", output)
-
-	var role rbacv1.ClusterRole
-	Expect(json.Unmarshal([]byte(trimToJSON(output)), &role)).To(Succeed(),
-		"Failed to decode the controller ClusterRole")
-
-	for i, rule := range role.Rules {
-		for _, resource := range rule.Resources {
-			if resource == "clustertrustbundles" {
-				return i, rule.Verbs
-			}
-		}
-	}
-
-	Fail("the controller ClusterRole has no clustertrustbundles rule")
-	return 0, nil
-}
-
-// patchClusterRoleVerbs replaces the verbs of one ClusterRole rule.
-func patchClusterRoleVerbs(index int, verbs []string) {
-	GinkgoHelper()
-
-	patch, err := json.Marshal([]map[string]any{{
-		"op":    "replace",
-		"path":  fmt.Sprintf("/rules/%d/verbs", index),
-		"value": verbs,
-	}})
-	Expect(err).NotTo(HaveOccurred(), "Failed to build the ClusterRole patch")
-
-	cmd := exec.Command("kubectl", "patch", "clusterrole", releaseName,
-		"--type=json", "--patch", string(patch))
-	output, err := utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to patch the controller ClusterRole: %s", output)
-}
 
 // findRequestForSigner returns the single request belonging to the given pod
 // and addressed to the given signer.

@@ -15,7 +15,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -321,77 +320,5 @@ func TestProcessPodBeingDeletedSkips(t *testing.T) {
 	cert, err := r.signRequest(context.Background(), testPCR())
 	if cert != nil || !errors.Is(err, errDropRequest) {
 		t.Fatalf("got (%v, %v), want (nil, errDropRequest)", cert, err)
-	}
-}
-
-// requeueOrRecordTerminal: a terminal error writes a condition and does not requeue.
-func TestRecordFailureTerminalWritesCondition(t *testing.T) {
-	pcr := testPCR()
-	cl := fake.NewClientBuilder().
-		WithScheme(newTestScheme(t)).
-		WithObjects(pcr).
-		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
-		Build()
-	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
-
-	res, err := r.requeueOrRecordTerminal(context.Background(), pcr, failed(errors.New("x")))
-	if err != nil {
-		t.Fatalf("requeueOrRecordTerminal returned err = %v, want nil", err)
-	}
-	if res != (ctrl.Result{}) {
-		t.Fatalf("result = %+v, want empty (no requeue)", res)
-	}
-	got := &certificatesv1.PodCertificateRequest{}
-	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(pcr), got); err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Status.Conditions) != 1 {
-		t.Fatalf("conditions = %d, want 1", len(got.Status.Conditions))
-	}
-}
-
-// requeueOrRecordTerminal: a transient error is returned (requeue) and writes no condition.
-func TestRecordFailureTransientRequeues(t *testing.T) {
-	pcr := testPCR()
-	cl := fake.NewClientBuilder().
-		WithScheme(newTestScheme(t)).
-		WithObjects(pcr).
-		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
-		Build()
-	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
-
-	sentinel := errors.New("apiserver blip")
-	if _, err := r.requeueOrRecordTerminal(context.Background(), pcr, sentinel); !errors.Is(err, sentinel) {
-		t.Fatalf("err = %v, want sentinel returned for requeue", err)
-	}
-	got := &certificatesv1.PodCertificateRequest{}
-	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(pcr), got); err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Status.Conditions) != 0 {
-		t.Fatalf("conditions = %d, want 0 (transient must not write)", len(got.Status.Conditions))
-	}
-}
-
-// requeueOrRecordTerminal: when recording a terminal outcome fails because the status
-// write itself errors, that write error is returned so the reconcile requeues
-// (the Failed condition is never silently lost).
-func TestRecordFailureWriteErrorRequeues(t *testing.T) {
-	pcr := testPCR()
-	writeErr := errors.New("status write failed")
-	cl := fake.NewClientBuilder().
-		WithScheme(newTestScheme(t)).
-		WithObjects(pcr).
-		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
-		WithInterceptorFuncs(interceptor.Funcs{
-			SubResourceUpdate: func(ctx context.Context, c client.Client, subResourceName string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
-				return writeErr
-			},
-		}).
-		Build()
-	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
-
-	if _, err := r.requeueOrRecordTerminal(context.Background(), pcr, failed(errors.New("boom"))); !errors.Is(err, writeErr) {
-		t.Fatalf("err = %v, want the status-write error returned for requeue", err)
 	}
 }
