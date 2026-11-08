@@ -321,13 +321,13 @@ func (ca *CertificateAuthority) normalizePreviousCAs() {
 	ca.previousCAs = kept
 }
 
-// Sign issues a certificate for pcConfig under the current CA and returns it
+// Sign issues a certificate for cfg under the current CA and returns it
 // together with the PEM chain (leaf, then CA).
 //
 // Failures caused by the CA itself - none loaded, an expired signer, or a
-// pcConfig.Duration that does not fit inside the remaining CA validity - wrap
+// cfg.Duration that does not fit inside the remaining CA validity - wrap
 // [ErrCASignerUnusable]; see its doc. Any other error is terminal.
-func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.Config) (*podcertificate.Certificate, error) {
+func (ca *CertificateAuthority) Sign(cfg *podcertificate.Config) (*podcertificate.Certificate, error) {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 
@@ -342,7 +342,7 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.Config) (*podcerti
 		return nil, fmt.Errorf("the signer has expired: NotAfter=%v: %w", ca.certificate.NotAfter, ErrCASignerUnusable)
 	}
 
-	notAfter := notBefore.Add(pcConfig.Duration)
+	notAfter := notBefore.Add(cfg.Duration)
 	if notAfter.After(ca.certificate.NotAfter) {
 		return nil, fmt.Errorf("certificate validity period exceeds the signer CA validity: notAfter=%v, caNotAfter=%v: %w", notAfter, ca.certificate.NotAfter, ErrCASignerUnusable)
 	}
@@ -352,21 +352,21 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.Config) (*podcerti
 
 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 	if err != nil {
-		return nil, fmt.Errorf("generate serial number for %s: %w", pcConfig.CommonName, err)
+		return nil, fmt.Errorf("generate serial number for %s: %w", cfg.CommonName, err)
 	}
 
 	template := &x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			CommonName: pcConfig.CommonName,
+			CommonName: cfg.CommonName,
 		},
-		DNSNames:           pcConfig.DNSNames,
-		IPAddresses:        pcConfig.IPAddresses,
-		URIs:               pcConfig.URIs,
-		PublicKeyAlgorithm: pcConfig.PublicKeyAlgorithm,
-		PublicKey:          pcConfig.PublicKey,
-		KeyUsage:           pcConfig.KeyUsage,
-		ExtKeyUsage:        pcConfig.ExtKeyUsage,
+		DNSNames:           cfg.DNSNames,
+		IPAddresses:        cfg.IPAddresses,
+		URIs:               cfg.URIs,
+		PublicKeyAlgorithm: cfg.PublicKeyAlgorithm,
+		PublicKey:          cfg.PublicKey,
+		KeyUsage:           cfg.KeyUsage,
+		ExtKeyUsage:        cfg.ExtKeyUsage,
 		NotBefore:          notBefore,
 		NotAfter:           notAfter,
 		// BasicConstraintsValid is what makes Go emit the basicConstraints
@@ -381,15 +381,15 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.Config) (*podcerti
 		BasicConstraintsValid: true,
 	}
 
-	issuedCertificate, err := x509.CreateCertificate(rand.Reader, template, ca.certificate, pcConfig.PublicKey, ca.signer)
+	issuedCertificate, err := x509.CreateCertificate(rand.Reader, template, ca.certificate, cfg.PublicKey, ca.signer)
 	if err != nil {
-		return nil, fmt.Errorf("create certificate for public key type %T: %w", pcConfig.PublicKey, err)
+		return nil, fmt.Errorf("create certificate for public key type %T: %w", cfg.PublicKey, err)
 	}
 
 	return &podcertificate.Certificate{
 		// Issued certificate first, then the CA that signed it.
 		CertificateChain: string(certificatePEM(issuedCertificate)) + string(certificatePEM(ca.certificate.Raw)),
-		Config:           pcConfig,
+		Config:           cfg,
 		NotBefore:        notBefore,
 		NotAfter:         notAfter,
 	}, nil

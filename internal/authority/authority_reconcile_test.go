@@ -222,7 +222,7 @@ func TestReconcileOnceRecordsASingleFailure(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ca.reload(context.Background(), log.FromContext(ctx), nil, "test", 1)
+	reloadOnce(ca, log.FromContext(ctx))
 
 	if got := ca.failureCount(); got != 1 {
 		t.Errorf("reload failures after one reconcile pass = %d, want 1 (a single attempt, not a retry burst)", got)
