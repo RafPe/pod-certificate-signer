@@ -175,7 +175,7 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, nil
 	}
 	if isTerminal(&pcr) {
-		logger.Info("PodCertificateRequest is already terminal")
+		logger.Info("PodCertificateRequest is immutable")
 		return ctrl.Result{}, nil
 	}
 
