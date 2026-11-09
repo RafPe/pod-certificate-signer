@@ -46,6 +46,20 @@ func TestValidateFlagsRejectsInvalidClusterFQDN(t *testing.T) {
 	}
 }
 
+// An explicitly empty --cluster-fqdn must fail startup, as it did before the
+// options moved into podcertificate.Options: falling back to cluster.local
+// would issue the wrong DNS names and SPIFFE IDs in a custom-domain cluster.
+func TestValidateFlagsRejectsEmptyClusterFQDN(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	f := registerFlags(fs)
+	if err := fs.Parse([]string{"--cluster-fqdn="}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := validateFlags("example.org/signer", f.certOpts); err == nil {
+		t.Fatal("validateFlags(--cluster-fqdn=) = nil, want an error for the empty value")
+	}
+}
+
 // The manager must bypass the cache for Pods: the controller only does point
 // Gets by name (and re-reads live via the APIReader for identity), so a
 // cluster-wide pod informer wastes memory and forces list/watch RBAC the

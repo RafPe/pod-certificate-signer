@@ -290,6 +290,14 @@ func validateFlags(signerName string, certOpts podcertificate.Options) error {
 	if signerName == "" {
 		return errors.New("the --signer-name flag is required")
 	}
+	// Options treats an empty ClusterFQDN as "use the default", which suits
+	// callers that never set it. An operator who passes --cluster-fqdn= (an
+	// empty Helm signer.cluster_fqdn renders exactly that) has set it, and
+	// silently signing under cluster.local would be wrong in a custom-domain
+	// cluster, so the flag must not be empty.
+	if certOpts.ClusterFQDN == "" {
+		return errors.New("the --cluster-fqdn flag must not be empty")
+	}
 	if err := certOpts.Validate(); err != nil {
 		return fmt.Errorf("invalid --cluster-fqdn: %w", err)
 	}
