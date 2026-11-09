@@ -70,26 +70,21 @@ func podAnnotation(pod *corev1.Pod, key string) (string, bool) {
 	return value, true
 }
 
-// checkUnrecognizedAnnotations rejects annotation keys the signer does not
-// recognize. Signers should deny such requests rather than silently fall back
-// to defaults, see
+// checkUnrecognizedUserAnnotations rejects unverifiedUserAnnotations keys the
+// signer does not recognize. Signers should deny such requests, see
 // https://pkg.go.dev/k8s.io/api/certificates/v1#PodCertificateRequestSpec
 //
-// On spec.unverifiedUserAnnotations every key is the signer's business, so any
-// unknown key is rejected. Pod annotations are shared with every other
-// consumer of the pod, so only keys carrying the signer's own prefix are
-// examined (signerPrefixedOnly) - the same typo that would be denied on the
-// request is then denied on the pod too, rather than silently ignored.
-func checkUnrecognizedAnnotations(annotations map[string]string, signerName string, signerPrefixedOnly bool) error {
+// Pod annotations are deliberately not checked: they are shared with every
+// other consumer of the pod, and a signer-name prefix cannot tell a typo from
+// a key belonging to another signer whose name extends this one (example.com/pod
+// versus example.com/pod-client).
+func checkUnrecognizedUserAnnotations(annotations map[string]string, signerName string) error {
 	known := make(map[string]struct{}, len(annotationSuffixes))
 	for _, suffix := range annotationSuffixes {
 		known[annotationKey(signerName, suffix)] = struct{}{}
 	}
 
 	for key := range annotations {
-		if signerPrefixedOnly && !strings.HasPrefix(key, signerName+"-") {
-			continue
-		}
 		if _, ok := known[key]; !ok {
 			return fmt.Errorf("unrecognized user annotation key %q", key)
 		}

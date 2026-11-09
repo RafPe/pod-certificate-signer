@@ -57,8 +57,7 @@ type Options struct {
 //
 // Malformed values and any unverifiedUserAnnotations key the signer does not
 // recognize result in an error, since signers should deny requests they do not
-// fully understand rather than silently fall back to defaults. The same
-// denial applies to pod annotations that carry the signer's prefix.
+// fully understand rather than silently fall back to defaults.
 func NewPodCertificateConfig(
 	ctx context.Context,
 	pcr *certificatesv1.PodCertificateRequest,
@@ -74,13 +73,8 @@ func NewPodCertificateConfig(
 	}
 	signerName := pcr.Spec.SignerName
 
-	if err := checkUnrecognizedAnnotations(pcr.Spec.UnverifiedUserAnnotations, signerName, false); err != nil {
+	if err := checkUnrecognizedUserAnnotations(pcr.Spec.UnverifiedUserAnnotations, signerName); err != nil {
 		return nil, err
-	}
-	if pod != nil {
-		if err := checkUnrecognizedAnnotations(pod.Annotations, signerName, true); err != nil {
-			return nil, err
-		}
 	}
 
 	resolver := &annotationResolver{

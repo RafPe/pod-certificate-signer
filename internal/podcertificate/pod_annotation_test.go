@@ -5,27 +5,24 @@ import (
 	"testing"
 )
 
-// The deprecated pod-annotation path is validated like the request path: a
-// pod annotation that carries the signer's prefix but names no known item is
-// a typo the request would have been denied for, so it is denied here too
-// rather than silently falling back to the defaults. Annotations under any
-// other prefix belong to other consumers of the pod and are ignored.
-func TestPodAnnotationsUnknownSignerKeyDenied(t *testing.T) {
+// Pod annotations are shared with every other consumer of the pod, so unknown
+// keys there are never a reason to deny. In particular a signer-name prefix
+// cannot be used to spot typos: example.com/pod-client-eku belongs to a signer
+// named example.com/pod-client, and denying it would break example.com/pod's
+// own request on a pod that uses both signers.
+func TestPodAnnotationsUnknownKeysIgnored(t *testing.T) {
 	cases := []struct {
 		name        string
 		annotations map[string]string
-		wantErr     bool
 	}{
-		{"typo under the signer prefix", map[string]string{testSignerName + "-sna": "x.example.org"}, true},
-		{"known key under the signer prefix", map[string]string{testSignerName + "-eku": "client"}, false},
-		{"unrelated annotation", map[string]string{"prometheus.io/scrape": "true"}, false},
-		{"signer prefix without the separator", map[string]string{testSignerName + "sna": "x"}, false},
+		{"key of a signer whose name extends this one", map[string]string{testSignerName + "-client-eku": "client"}},
+		{"unknown key under the signer prefix", map[string]string{testSignerName + "-sna": "x.example.org"}},
+		{"unrelated annotation", map[string]string{"prometheus.io/scrape": "true"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(tc.annotations), nil, Options{})
-			if gotErr := err != nil; gotErr != tc.wantErr {
-				t.Fatalf("NewPodCertificateConfig(pod annotations %v) error = %v, want error = %t", tc.annotations, err, tc.wantErr)
+			if _, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(tc.annotations), nil, Options{}); err != nil {
+				t.Fatalf("NewPodCertificateConfig(pod annotations %v) error = %v, want nil", tc.annotations, err)
 			}
 		})
 	}
