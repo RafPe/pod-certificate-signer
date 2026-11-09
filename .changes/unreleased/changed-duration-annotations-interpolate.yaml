@@ -1,0 +1,2 @@
+kind: Changed
+body: 'The `duration` and `refresh` annotations now resolve `${...}` placeholders exactly like every other configuration annotation, so a value using interpolation is either expanded or, with `--enable-annotation-interpolation=false`, denied, rather than failing to parse as a duration.'

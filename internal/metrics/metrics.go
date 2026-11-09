@@ -14,11 +14,14 @@
 //     workload; a status condition is the durable verdict.
 //
 // The declarations live in their own package rather than in package main so
-// that internal/controller and internal/kubernetes/authority can both increment
-// without an import cycle.
+// that internal/controller, internal/authority and internal/trustbundle can
+// all increment without an import cycle.
 package metrics
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/prometheus/client_golang/prometheus"
+	certificatesv1 "k8s.io/api/certificates/v1"
+)
 
 // Namespace prefixes every metric this package declares. It is the application
 // name with its separators removed, following cert-manager's certmanager_.
@@ -47,41 +50,55 @@ const (
 	OutcomeFailed = "failed"
 )
 
-// Reason values.
+// Reason identifies why a PodCertificateRequest ended up where it did: the
+// reason written onto its terminal condition, or the event-only outcome of a
+// requeue or a drop.
 //
 // The terminal ones are the certificates API's own condition reasons, spelled
 // exactly as they are written onto the object, so a value read off a graph
 // greps identically against `kubectl get podcertificaterequest -o yaml`. The
 // requeue and drop reasons name conditions the API has no vocabulary for, so
-// the signer defines them; they are still a closed set computed here, never a
-// passthrough of an error string.
-const (
-	ReasonCertificateIssued  = "CertificateIssued"
-	ReasonUnsupportedKeyType = "UnsupportedKeyType"
-	// ReasonInvalidUserConfig is the API's spelling, which is longer than the
-	// name of the Go constant carrying it. The label follows the object.
-	ReasonInvalidUserConfig = "InvalidUnverifiedUserAnnotations"
-	ReasonSigningFailed     = "SigningFailed"
+// the signer defines them; they are still a closed set declared here, never a
+// passthrough of an error string. They are declared in this package, the leaf
+// of the import graph, so the controller that writes them and the metrics
+// that count them share one definition.
+type Reason string
 
-	ReasonCASignerUnusable  = "CASignerUnusable"
-	ReasonTransient         = "Transient"
-	ReasonAssociatedPodGone = "AssociatedPodGone"
+const (
+	ReasonCertificateIssued  Reason = "CertificateIssued"
+	ReasonUnsupportedKeyType Reason = Reason(certificatesv1.PodCertificateRequestConditionUnsupportedKeyType)
+	ReasonInvalidUserConfig  Reason = Reason(certificatesv1.PodCertificateRequestConditionInvalidUserConfig)
+	ReasonSigningFailed      Reason = "SigningFailed"
+
+	// ReasonCASignerUnusable is event-only and is deliberately never written as
+	// a condition: the CA cannot sign this request right now (it has expired,
+	// or its remaining validity is shorter than the requested lifetime), but a
+	// CA rotation can make the same request succeed, so the reconcile requeues
+	// rather than recording an outcome. Writing a condition would make the
+	// request immutable and turn a recoverable wait into a permanent failure.
+	ReasonCASignerUnusable Reason = "CASignerUnusable"
+	// ReasonTransient classifies every other requeue: an API read failure, a
+	// conflicted write. The controller's own retry loop is doing its job.
+	ReasonTransient Reason = "Transient"
+	// ReasonAssociatedPodGone is event-only and is never written as a
+	// condition: a request whose pod a live read confirms is gone (absent, or
+	// replaced by a different pod) is dropped, not failed.
+	ReasonAssociatedPodGone Reason = "AssociatedPodGone"
 )
 
+// IssuanceOutcome is one outcome/reason pair the reconciler can record.
+type IssuanceOutcome struct {
+	Outcome string
+	Reason  Reason
+}
+
 // IssuanceOutcomes is every outcome/reason pair the reconciler can record, and
-// the only ones pre-initialised.
-//
-// It is hand-curated rather than derived from the reason constants, because
-// they do not form a cross product and one of them is unreachable:
-// ReasonAssociatedPodNotFound is declared in the controller and never used, a
-// missing pod being dropped rather than failed. Deriving the table would ship a
-// permanent zero series for an outcome that cannot occur, which is worse than
-// no series at all - it makes an operator believe a category is being watched.
-//
-// TestMetricReasonsMatchControllerConstants pins these strings against the
-// controller's own, so a reason that changes spelling cannot silently split
-// into two series.
-var IssuanceOutcomes = [][2]string{
+// the only ones pre-initialised. It is hand-curated rather than derived from
+// the reason constants because they do not form a cross product: deriving the
+// table would ship a permanent zero series for pairs that cannot occur, which
+// is worse than no series at all - it makes an operator believe a category is
+// being watched.
+var IssuanceOutcomes = []IssuanceOutcome{
 	{OutcomeIssued, ReasonCertificateIssued},
 	{OutcomeDenied, ReasonUnsupportedKeyType},
 	{OutcomeDenied, ReasonInvalidUserConfig},
@@ -196,12 +213,12 @@ func preInitialise() {
 		CAReloadAttempts.WithLabelValues(result)
 	}
 	for _, pair := range IssuanceOutcomes {
-		PodCertificateRequests.WithLabelValues(pair[0], pair[1])
+		PodCertificateRequests.WithLabelValues(pair.Outcome, string(pair.Reason))
 	}
-	for _, reason := range []string{ReasonCASignerUnusable, ReasonTransient} {
-		PodCertificateRequestRequeues.WithLabelValues(reason)
+	for _, reason := range []Reason{ReasonCASignerUnusable, ReasonTransient} {
+		PodCertificateRequestRequeues.WithLabelValues(string(reason))
 	}
-	PodCertificateRequestDrops.WithLabelValues(ReasonAssociatedPodGone)
+	PodCertificateRequestDrops.WithLabelValues(string(ReasonAssociatedPodGone))
 	for _, result := range []string{ResultUnchanged, ResultCreated, ResultUpdated, ResultFailed} {
 		ClusterTrustBundlePublishAttempts.WithLabelValues(result)
 	}

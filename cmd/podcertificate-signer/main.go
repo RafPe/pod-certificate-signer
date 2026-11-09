@@ -18,48 +18,37 @@ package main
 
 import (
 	"context"
-	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
+	"go.uber.org/zap/zapcore"
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
-	"github.com/go-logr/logr"
-	"github.com/prometheus/client_golang/prometheus"
-	"go.uber.org/zap/zapcore"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
-	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/apimachinery/pkg/util/wait"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/controller"
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/podcertificate"
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
 	signermetrics "github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
-	// +kubebuilder:scaffold:imports
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/signer"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/trustbundle"
 )
 
 var (
@@ -78,68 +67,88 @@ const (
 	// so turning it on grants no identity the pod does not already own. See
 	// docs/adr/0002-annotation-interpolation-on-by-default.md.
 	//
-	// This is a named constant rather than a literal in the flag registration
-	// below because the flag is registered inside main() and is otherwise
-	// unreachable from a test. Keep it in sync with the chart value
-	// signer.enable_annotation_interpolation; the two are one decision stored
-	// twice and TestChartInterpolationDefaultMatchesBinary guards the drift.
+	// Keep it in sync with the chart value signer.enable_annotation_interpolation;
+	// the two are one decision stored twice and
+	// TestChartSecurityDefaultsMatchBinary guards the drift.
 	defaultEnableAnnotationInterpolation = true
+
+	// defaultAllowUnverifiedIdentities is the shipped default for
+	// --allow-unverified-identities: off, so a pod cannot request a certificate
+	// for an identity it does not own. Mirrored by the chart value
+	// signer.allow_unverified_identities.
+	defaultAllowUnverifiedIdentities = false
+
+	// defaultMetricsSecure is the shipped default for --metrics-secure: the
+	// metrics endpoint is served over HTTPS and every scrape is authenticated
+	// and authorized. Mirrored, inverted, by the chart value metrics.insecure.
+	defaultMetricsSecure = true
 )
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-
-	// +kubebuilder:scaffold:scheme
 }
 
-func main() {
-	var signerName, caCertPath, caKeyPath, clusterFqdn string
-	var leaderElectionID, leaderElectionNamespace string
-	var healthProbeBindAddress, metricsBindAddress string
-	var maxConcurrentReconciles, maxPreviousCACerts int
-	var enableLeaderElection, enableAnnotationInterpolation, honorCSRSANs bool
-	var allowUnverifiedIdentities, metricsSecure, requireCAHistory bool
-	var reconcileTimeout time.Duration
+// flags holds the parsed command-line flags. It is filled by registerFlags so
+// the registrations, their defaults and their help text can be exercised by a
+// test against a private FlagSet rather than the process-global one.
+type flags struct {
+	signerName, caCertPath, caKeyPath, clusterFQDN string
+	leaderElectionID, leaderElectionNamespace      string
+	healthProbeBindAddress, metricsBindAddress     string
+	maxConcurrentReconciles, maxPreviousCACerts    int
+	enableLeaderElection, metricsSecure            bool
+	requireCAHistory                               bool
+	reconcileTimeout                               time.Duration
+	certificate                                    podcertificate.Options
+}
 
-	flag.StringVar(&signerName, "signer-name", "", "Only sign CSR with this .spec.signerName. Required.")
-	flag.StringVar(&caCertPath, "ca-cert-path", "", "CA certificate file.")
-	flag.StringVar(&caKeyPath, "ca-key-path", "", "CA private key file.")
-	flag.StringVar(&clusterFqdn, "cluster-fqdn", "cluster.local", "The FQDN of the cluster")
-	flag.StringVar(&leaderElectionID, "leader-election-id", "pcs-leader-election",
-		"The name of the configmap used to coordinate leader election between controller-managers.")
-	flag.StringVar(&leaderElectionNamespace, "leader-election-namespace", "", "Namespace for leader election (default: pod's namespace).")
-	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
-	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
+// registerFlags declares every command-line flag on fs and returns the struct
+// their parsed values land in.
+func registerFlags(fs *flag.FlagSet) *flags {
+	f := &flags{}
+	fs.StringVar(&f.signerName, "signer-name", "", "Only sign CSR with this .spec.signerName. Required.")
+	fs.StringVar(&f.caCertPath, "ca-cert-path", "", "CA certificate file.")
+	fs.StringVar(&f.caKeyPath, "ca-key-path", "", "CA private key file.")
+	fs.StringVar(&f.clusterFQDN, "cluster-fqdn", "cluster.local", "The FQDN of the cluster")
+	fs.StringVar(&f.leaderElectionID, "leader-election-id", "pcs-leader-election",
+		"The name of the Lease used to coordinate leader election between replicas.")
+	fs.StringVar(&f.leaderElectionNamespace, "leader-election-namespace", "", "Namespace for leader election (default: pod's namespace).")
+	fs.StringVar(&f.healthProbeBindAddress, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	fs.BoolVar(&f.enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	flag.StringVar(&metricsBindAddress, "metrics-bind-address", ":9090", "The address on which to bind the metrics server.")
-	flag.BoolVar(&metricsSecure, "metrics-secure", true,
+	fs.StringVar(&f.metricsBindAddress, "metrics-bind-address", ":9090", "The address on which to bind the metrics server.")
+	fs.BoolVar(&f.metricsSecure, "metrics-secure", defaultMetricsSecure,
 		"Serve the metrics endpoint over HTTPS and require authentication (TokenReview) and authorization "+
 			"(SubjectAccessReview) for every scrape. On by default. Set to false to fall back to the legacy "+
 			"unauthenticated plaintext endpoint - see the chart's metrics.insecure escape hatch.")
-	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 5, "maximum number of concurrent reconciles which can be run.")
-	flag.IntVar(&maxPreviousCACerts, "max-previous-ca-certs", 2, "maximum number of previous CA certificates to keep during CA rotation.")
-	flag.BoolVar(&requireCAHistory, "require-ca-history", false,
+	fs.IntVar(&f.maxConcurrentReconciles, "max-concurrent-reconciles", 5, "maximum number of concurrent reconciles which can be run.")
+	fs.IntVar(&f.maxPreviousCACerts, "max-previous-ca-certs", 2, "maximum number of previous CA certificates to keep during CA rotation.")
+	fs.BoolVar(&f.requireCAHistory, "require-ca-history", false,
 		"Refuse to start when the signer's ClusterTrustBundle does not exist, instead of starting with an empty "+
 			"previous-CA history. Off by default, because a first install has no bundle yet and the controller cannot "+
 			"tell that apart from one that was deleted. Turn it on once the signer has published its bundle, so a "+
 			"deleted bundle cannot silently reset the retained CA history (see docs/operations.md).")
-	flag.DurationVar(&reconcileTimeout, "reconcile-timeout", 5*time.Minute, "maximum duration of a reconcile before it times out.")
-	flag.BoolVar(&enableAnnotationInterpolation, "enable-annotation-interpolation", defaultEnableAnnotationInterpolation,
+	fs.DurationVar(&f.reconcileTimeout, "reconcile-timeout", 5*time.Minute, "maximum duration of a reconcile before it times out.")
+	fs.BoolVar(&f.certificate.EnableInterpolation, "enable-annotation-interpolation", defaultEnableAnnotationInterpolation,
 		"Allow ${...} placeholders (e.g. ${pod.name}, ${pod.serviceAccountName}) in certificate configuration annotations, "+
 			"resolved from the verified fields of the PodCertificateRequest. On by default; resolved values remain subject "+
 			"to the identity constraints unless --allow-unverified-identities is set. Set to false to deny any value "+
 			"containing ${...} instead of resolving it.")
-	flag.BoolVar(&honorCSRSANs, "honor-csr-sans", false,
+	fs.BoolVar(&f.certificate.HonorCSRSANs, "honor-csr-sans", false,
 		"Honor DNS and IP SANs embedded in the kubelet-generated PKCS#10 CSR when no SAN annotation overrides them. "+
 			"CSR SANs stay subject to the identity constraints unless --allow-unverified-identities is set (CSR DNS SANs "+
 			"must be a verified identity; CSR IP SANs are denied). Kubelet generates empty CSRs today; this prepares for "+
 			"upcoming Kubernetes support for requesting SANs.")
-	flag.BoolVar(&allowUnverifiedIdentities, "allow-unverified-identities", false,
+	fs.BoolVar(&f.certificate.AllowUnverifiedIdentities, "allow-unverified-identities", defaultAllowUnverifiedIdentities,
 		"Allow cn/san/ip-san/uris annotation values that are not derived from the verified PodCertificateRequest fields "+
 			"(pod name/namespace/serviceAccountName/uid + cluster FQDN). Off by default: leaving it off prevents a pod from "+
 			"requesting a certificate for an identity it does not own.")
+	return f
+}
 
+func main() {
+	f := registerFlags(flag.CommandLine)
 	opts := zap.Options{
 		Development:     true,
 		TimeEncoder:     zapcore.ISO8601TimeEncoder,
@@ -150,26 +159,26 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	if err := validateFlags(signerName, clusterFqdn); err != nil {
+	if err := validateFlags(f.signerName, f.clusterFQDN); err != nil {
 		setupLog.Error(err, "invalid command-line flags")
 		os.Exit(1)
 	}
+	f.certificate.ClusterFQDN = f.clusterFQDN
 
 	ctx := ctrl.SetupSignalHandler()
 	restCfg := ctrl.GetConfigOrDie()
 
 	mgr, err := ctrl.NewManager(restCfg, managerOptions(scheme, managerConfig{
-		healthProbeBindAddress:  healthProbeBindAddress,
-		metricsBindAddress:      metricsBindAddress,
-		metricsSecure:           metricsSecure,
-		leaderElection:          enableLeaderElection,
-		leaderElectionID:        leaderElectionID,
-		leaderElectionNamespace: leaderElectionNamespace,
-		maxConcurrentReconciles: maxConcurrentReconciles,
-		reconcileTimeout:        reconcileTimeout,
+		healthProbeBindAddress:  f.healthProbeBindAddress,
+		metricsBindAddress:      f.metricsBindAddress,
+		metricsSecure:           f.metricsSecure,
+		leaderElection:          f.enableLeaderElection,
+		leaderElectionID:        f.leaderElectionID,
+		leaderElectionNamespace: f.leaderElectionNamespace,
+		maxConcurrentReconciles: f.maxConcurrentReconciles,
+		reconcileTimeout:        f.reconcileTimeout,
 		baseContext:             ctx,
 	}))
-
 	if err != nil {
 		setupLog.Error(err, "unable to create controller manager")
 		os.Exit(1)
@@ -181,25 +190,25 @@ func main() {
 	// own, so what is read from it is bounded and validated rather than
 	// adopted: ADR-0004.
 	//
-	// We need to use a new [client.Client] here, since the controller
-	// manager is not started yet, and we must update the ClusterTrustBundle
-	// early on.
+	// This needs its own client: the manager is not started yet, and the
+	// publisher must not go through the manager cache anyway (see
+	// trustbundle.Publisher).
 	c, err := client.New(restCfg, client.Options{Scheme: scheme})
 	if err != nil {
 		setupLog.Error(err, "unable to create API client")
 		os.Exit(1)
 	}
-	previousCAs, err := loadPreviousCAHistory(ctx, c, signerName, requireCAHistory)
+	previousCAs, err := trustbundle.LoadPreviousCAHistory(ctx, c, f.signerName, f.requireCAHistory)
 	if err != nil {
 		setupLog.Error(err, "unable to bootstrap the previous-CA history; "+
 			"refusing to start to avoid dropping previously-trusted CAs")
 		os.Exit(1)
 	}
 	ca, err := authority.New(
-		caCertPath,
-		caKeyPath,
+		f.caCertPath,
+		f.caKeyPath,
 		authority.WithPreviousCABundle(previousCAs),
-		authority.WithMaxPreviousCertificates(maxPreviousCACerts),
+		authority.WithMaxPreviousCertificates(f.maxPreviousCACerts),
 		authority.WithLogger(ctrl.Log.WithName("certificate-authority")),
 	)
 	if err != nil {
@@ -218,7 +227,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	pcrSigner, err := signer.New(signerName, ca)
+	pcrSigner, err := signer.New(f.signerName, ca)
 	if err != nil {
 		setupLog.Error(err, "unable to create signer")
 		os.Exit(1)
@@ -228,32 +237,25 @@ func main() {
 	// watcher runs on every replica so standby replicas keep their in-memory
 	// CA current; the publisher is leader-gated so only the elected leader
 	// writes the shared ClusterTrustBundle.
-	caWatcher, ctbUpdater := newCARunnables(c, pcrSigner, ca)
+	caWatcher, ctbPublisher := trustbundle.NewRunnables(c, pcrSigner, ca)
 	if err := mgr.Add(caWatcher); err != nil {
 		setupLog.Error(err, "unable to add CA watcher runnable")
 		os.Exit(1)
 	}
-	if err := mgr.Add(ctbUpdater); err != nil {
-		setupLog.Error(err, "unable to add ClusterTrustBundle updater runnable")
+	if err := mgr.Add(ctbPublisher); err != nil {
+		setupLog.Error(err, "unable to add ClusterTrustBundle publisher runnable")
 		os.Exit(1)
 	}
 
-	if err := (&controller.PodCertificateRequestReconciler{
-		Client:                        mgr.GetClient(),
-		APIReader:                     mgr.GetAPIReader(),
-		Log:                           ctrl.Log.WithName(DefaultControllerName),
-		Scheme:                        mgr.GetScheme(),
-		Signer:                        pcrSigner,
-		ClusterFqdn:                   clusterFqdn,
-		EventRecorder:                 mgr.GetEventRecorder(DefaultControllerName),
-		EnableAnnotationInterpolation: enableAnnotationInterpolation,
-		HonorCSRSANs:                  honorCSRSANs,
-		AllowUnverifiedIdentities:     allowUnverifiedIdentities,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "PodCertificateSignerReconciler")
+	reconciler, err := controller.NewPodCertificateRequestReconciler(mgr, DefaultControllerName, pcrSigner, f.certificate)
+	if err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", DefaultControllerName)
 		os.Exit(1)
 	}
-	// +kubebuilder:scaffold:builder
+	if err := reconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to set up controller", "controller", DefaultControllerName)
+		os.Exit(1)
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
@@ -264,14 +266,14 @@ func main() {
 	// persistently, must be pulled from readiness so it is not relied upon to
 	// publish or sign with stale material. A transient reload failure keeps the
 	// replica ready, since the last-good CA is retained and signing works.
-	if err := mgr.AddReadyzCheck("readyz", caReadyzCheck(ca)); err != nil {
+	if err := mgr.AddReadyzCheck("readyz", readyzCheck(ca)); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
 	// Also gate readiness on the ClusterTrustBundle publisher: a leader whose
 	// publishes keep failing must be pulled from readiness so the failure is
 	// visible and traffic/leadership can move elsewhere.
-	if err := mgr.AddReadyzCheck("clustertrustbundle", caReadyzCheck(ctbUpdater)); err != nil {
+	if err := mgr.AddReadyzCheck("clustertrustbundle", readyzCheck(ctbPublisher)); err != nil {
 		setupLog.Error(err, "unable to set up ClusterTrustBundle ready check")
 		os.Exit(1)
 	}
@@ -384,215 +386,19 @@ func metricsServerOptions(cfg managerConfig) server.Options {
 	return opts
 }
 
-// caHealthChecker is the CA health surface consumed by the readiness probe.
-type caHealthChecker interface {
-	// Healthy returns a non-nil error when the CA can no longer track its
-	// on-disk material (watcher dead or reload persistently failing).
-	Healthy() error
+// healthChecker is anything that can report, through HealthCheck, that it is
+// no longer doing its job: the CA that lost track of its on-disk material, or
+// the publisher whose writes keep failing.
+type healthChecker interface {
+	HealthCheck() error
 }
 
-// caReadyzCheck adapts a caHealthChecker into a controller-runtime readiness
-// check, so a degraded CA removes the replica from readiness.
-func caReadyzCheck(ca caHealthChecker) healthz.Checker {
+// readyzCheck adapts a healthChecker into a controller-runtime readiness
+// check, so a degraded component removes the replica from readiness.
+func readyzCheck(h healthChecker) healthz.Checker {
 	return func(_ *http.Request) error {
-		return ca.Healthy()
+		return h.HealthCheck()
 	}
-}
-
-// caWatchRunnable reloads the in-memory CA whenever the mounted certificate or
-// key files change. It runs on every replica, independent of leader election,
-// so that a standby replica keeps its CA current and never signs or publishes
-// with stale material immediately after being promoted to leader.
-type caWatchRunnable struct {
-	ca     *authority.CertificateAuthority
-	notify chan<- struct{}
-}
-
-// Start blocks watching the CA files until ctx is canceled. A failed watch is
-// fatal: without it CA rotations would silently never be observed.
-func (r *caWatchRunnable) Start(ctx context.Context) error {
-	if err := r.ca.Watch(ctx, r.notify); err != nil {
-		return fmt.Errorf("ca-watcher failed: %w", err)
-	}
-	return nil
-}
-
-// NeedLeaderElection reports false so the CA watcher runs on every replica.
-func (*caWatchRunnable) NeedLeaderElection() bool { return false }
-
-// ctbDriftRepairInterval is how often the publisher re-publishes the
-// ClusterTrustBundle even without a CA reload event, to repair external drift
-// (e.g. a manual edit or a lost event).
-const ctbDriftRepairInterval = 10 * time.Minute
-
-// ctbPublisher reconciles the signer's ClusterTrustBundle towards the current
-// CA. It publishes when it starts, on every CA reload event, and on a periodic
-// drift-repair tick. Publishes are retried with exponential backoff and are
-// single-flight (a reconcile triggered while one is in flight is coalesced). It
-// is leader-gated so only the elected leader writes the shared resource.
-type ctbPublisher struct {
-	client   client.Client
-	signer   *signer.Signer
-	ca       *authority.CertificateAuthority
-	events   <-chan struct{}
-	interval time.Duration
-	backoff  wait.Backoff
-	// publishes counts every publish attempt by its result, so a leader that
-	// stopped publishing is distinguishable from one that is publishing
-	// successfully - which a failure-only counter never was.
-	publishes *prometheus.CounterVec
-
-	// runMu is a single-flight guard: TryLock lets a reconcile skip when
-	// another is already publishing.
-	runMu sync.Mutex
-
-	// healthMu guards the most recent publish outcome, polled by readiness.
-	healthMu       sync.Mutex
-	lastPublishErr error
-}
-
-// Start publishes the ClusterTrustBundle on startup, so a newly-elected leader
-// publishes from the current in-memory CA, then on every CA reload event and on
-// a periodic drift-repair tick, until ctx is canceled.
-func (r *ctbPublisher) Start(ctx context.Context) error {
-	logger := log.FromContext(ctx).WithName("cluster-trust-bundle")
-	logger.Info("starting ClusterTrustBundle publisher", "driftRepairInterval", r.interval)
-
-	ticker := time.NewTicker(r.interval)
-	defer ticker.Stop()
-
-	r.reconcile(ctx, logger)
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-r.events:
-			r.reconcile(ctx, logger)
-		case <-ticker.C:
-			// Periodic drift repair, independent of fsnotify events.
-			r.reconcile(ctx, logger)
-		}
-	}
-}
-
-// NeedLeaderElection reports true so only the elected leader writes the
-// ClusterTrustBundle.
-func (*ctbPublisher) NeedLeaderElection() bool { return true }
-
-// reconcile publishes the current CA trust bundle to the ClusterTrustBundle,
-// retrying with exponential backoff. It is single-flight: if a publish is
-// already in flight the call is skipped, since the in-flight publish will use
-// the latest in-memory CA state anyway. It returns true if a publish ran and
-// false if it was skipped.
-func (r *ctbPublisher) reconcile(ctx context.Context, logger logr.Logger) bool {
-	if !r.runMu.TryLock() {
-		logger.V(1).Info("ClusterTrustBundle publish already in progress, skipping")
-		return false
-	}
-	defer r.runMu.Unlock()
-
-	var op controllerutil.OperationResult
-	// The retriable predicate is keyed on ctx, not on the error. retry.OnError
-	// takes no context and sleeps between attempts with a bare time.Sleep, so a
-	// predicate that retried everything spent the whole backoff schedule
-	// re-failing after ctx was canceled - a delay paid on leader handover,
-	// since controller-runtime releases the Lease only once every runnable has
-	// returned. Matching the error against context.Canceled instead would be
-	// wrong in the other direction: a transport or per-request deadline
-	// surfaces as an error wrapping context.DeadlineExceeded while ctx is still
-	// live, and that is exactly the transient failure this backoff exists for.
-	err := retry.OnError(r.backoff, func(error) bool { return ctx.Err() == nil }, func() error {
-		var perr error
-		op, perr = r.publishOnce(ctx, logger)
-		return perr
-	})
-	r.recordPublishResult(err)
-	if err != nil {
-		r.publishes.WithLabelValues(signermetrics.ResultFailed).Inc()
-		logger.Error(err, "unable to update ClusterTrustBundle after retries")
-		return true
-	}
-	r.publishes.WithLabelValues(publishResult(op)).Inc()
-	return true
-}
-
-// publishResult maps CreateOrPatch's OperationResult onto the bounded result
-// label. OperationResult is a closed set of Go constants, and the mutate
-// function touches only .spec, so the status results cannot occur; they are
-// folded into "updated" rather than minting a label value the surface does not
-// budget for.
-func publishResult(op controllerutil.OperationResult) string {
-	switch op {
-	case controllerutil.OperationResultNone:
-		return signermetrics.ResultUnchanged
-	case controllerutil.OperationResultCreated:
-		return signermetrics.ResultCreated
-	default:
-		return signermetrics.ResultUpdated
-	}
-}
-
-// publishOnce performs a single CreateOrPatch of the ClusterTrustBundle to the
-// current CA trust bundle. The mutate function overwrites (never merges) the
-// trust bundle, so CA pruning in the rolling window is preserved.
-func (r *ctbPublisher) publishOnce(ctx context.Context, logger logr.Logger) (controllerutil.OperationResult, error) {
-	bundle := r.signer.ClusterTrustBundle()
-	// Use the direct API client: reading through the manager's cache-backed
-	// client would start an informer for ClusterTrustBundles, which requires
-	// list/watch RBAC permissions this controller does not need.
-	op, err := controllerutil.CreateOrPatch(ctx, r.client, bundle, func() error {
-		bundle.Spec.TrustBundle = string(r.ca.TrustBundlePEM())
-		return nil
-	})
-	if err != nil {
-		return op, err
-	}
-	logger.Info("reconciled ClusterTrustBundle", "name", bundle.Name, "operation", op)
-	return op, nil
-}
-
-// recordPublishResult stores the outcome of the most recent reconcile.
-func (r *ctbPublisher) recordPublishResult(err error) {
-	r.healthMu.Lock()
-	defer r.healthMu.Unlock()
-	r.lastPublishErr = err
-}
-
-// Healthy reports a non-nil error when the most recent ClusterTrustBundle
-// publish failed after retries, so a persistently failing publisher fails
-// readiness. It is safe for concurrent use.
-func (r *ctbPublisher) Healthy() error {
-	r.healthMu.Lock()
-	defer r.healthMu.Unlock()
-	return r.lastPublishErr
-}
-
-// ctbPublishBackoff bounds the retries a single ClusterTrustBundle publish
-// spends on transient API errors before the outcome is recorded as failed.
-// Package-level so tests exercise the same policy the binary ships with.
-var ctbPublishBackoff = wait.Backoff{
-	Steps:    5,
-	Duration: 500 * time.Millisecond,
-	Factor:   2.0,
-	Jitter:   0.1,
-}
-
-// newCARunnables wires the CA file watcher and the ClusterTrustBundle publisher
-// so that CA reload events flow from the watcher to the publisher over a shared
-// channel. The watcher runs on every replica; the publisher is leader-gated.
-func newCARunnables(c client.Client, s *signer.Signer, ca *authority.CertificateAuthority) (*caWatchRunnable, *ctbPublisher) {
-	events := make(chan struct{}, 2)
-	watcher := &caWatchRunnable{ca: ca, notify: events}
-	publisher := &ctbPublisher{
-		client:    c,
-		signer:    s,
-		ca:        ca,
-		events:    events,
-		interval:  ctbDriftRepairInterval,
-		backoff:   ctbPublishBackoff,
-		publishes: signermetrics.ClusterTrustBundlePublishAttempts,
-	}
-	return watcher, publisher
 }
 
 // displayCommandlineFlags visits all CLI flags and prints them.
@@ -603,112 +409,4 @@ func displayCommandlineFlags() {
 			"value", f.Value.String(),
 			"default", f.DefValue)
 	})
-}
-
-// errCAHistoryBundleAbsent reports that the signer's ClusterTrustBundle does
-// not exist. It is a distinct outcome from a failed read: retrying will not
-// make an absent object appear, and whether absence is fatal is the caller's
-// policy (see loadPreviousCAHistory), not this function's.
-var errCAHistoryBundleAbsent = errors.New("the signer's ClusterTrustBundle does not exist")
-
-// bootstrapBackoff bounds the retries spent reading the previous-CA history
-// before startup gives up and fails closed.
-var bootstrapBackoff = wait.Backoff{
-	Steps:    5,
-	Duration: 500 * time.Millisecond,
-	Factor:   2.0,
-	Jitter:   0.1,
-}
-
-// loadPreviousCAHistory reads the previous-CA history the signer published
-// before this process started, with bounded retry. A transient read error must
-// not fall through to an empty history: publishing an empty bundle would drop
-// previously-trusted CAs, and every certificate issued under a retired CA would
-// stop verifying. Such errors fail closed.
-//
-// Absence is the case that cannot be decided from the cluster. A bundle that
-// has never existed (a first install) and one that was deleted look identical,
-// and the controller keeps no other record of its own history, so treating
-// absence as fatal would break every first install while treating it as empty
-// makes a deleted bundle a permanent, controller-endorsed loss of history.
-// The default keeps first installs working; requireHistory lets an operator who
-// knows the bundle should exist turn absence into a startup failure. Either way
-// the loss is announced rather than logged as routine. See
-// docs/adr/0004-bootstrapped-previous-ca-history.md.
-func loadPreviousCAHistory(ctx context.Context, c client.Client, signerName string, requireHistory bool) ([]*x509.Certificate, error) {
-	var previousCAs []*x509.Certificate
-	err := retry.OnError(bootstrapBackoff,
-		func(err error) bool { return !errors.Is(err, errCAHistoryBundleAbsent) },
-		func() error {
-			var ferr error
-			previousCAs, ferr = fetchPreviousCAs(ctx, c, signerName)
-
-			return ferr
-		})
-
-	switch {
-	case err == nil:
-		return previousCAs, nil
-	case !errors.Is(err, errCAHistoryBundleAbsent):
-		return nil, err
-	case requireHistory:
-		return nil, err
-	}
-
-	setupLog.Info("WARNING: no ClusterTrustBundle exists for this signer, so the previous-CA history starts empty. "+
-		"This is expected on a first install. If the signer has published its bundle before, the history it held is "+
-		"now lost and certificates issued under a retired CA will stop verifying once the bundle is republished; "+
-		"restore the bundle before this controller publishes, or run with --require-ca-history to make this fatal",
-		"bundle", signer.ClusterTrustBundleName(signerName))
-
-	return nil, nil
-}
-
-// fetchPreviousCAs reads the existing ClusterTrustBundle for the given signer
-// and parses its PEM certificates, so previously-trusted CAs are retained
-// across a restart.
-//
-// A missing bundle is reported as errCAHistoryBundleAbsent rather than as an
-// empty history, so the decision of what absence means is taken once, by
-// loadPreviousCAHistory. Any other read error is returned so the caller can
-// retry or fail closed: silently returning an empty history would overwrite the
-// bundle on startup and drop previously-trusted CAs.
-func fetchPreviousCAs(ctx context.Context, c client.Client, signerName string) ([]*x509.Certificate, error) {
-	bundleName := signer.ClusterTrustBundleName(signerName)
-
-	bundle := &certificatesv1.ClusterTrustBundle{}
-	if err := c.Get(ctx, client.ObjectKey{Name: bundleName}, bundle); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("read existing ClusterTrustBundle %q: %w", bundleName, errCAHistoryBundleAbsent)
-		}
-		return nil, fmt.Errorf("read existing ClusterTrustBundle %q: %w", bundleName, err)
-	}
-
-	certs := parsePEMCertificates([]byte(bundle.Spec.TrustBundle))
-	setupLog.Info("bootstrapped previous CA certificates from ClusterTrustBundle", "name", bundleName, "count", len(certs))
-
-	return certs, nil
-}
-
-// parsePEMCertificates extracts x509 certificates from a PEM-encoded bundle.
-func parsePEMCertificates(data []byte) []*x509.Certificate {
-	var certs []*x509.Certificate
-	for {
-		var block *pem.Block
-		block, data = pem.Decode(data)
-		if block == nil {
-			break
-		}
-		if block.Type != "CERTIFICATE" {
-			continue
-		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			setupLog.Error(err, "failed to parse certificate from trust bundle, skipping")
-			continue
-		}
-		certs = append(certs, cert)
-	}
-
-	return certs
 }

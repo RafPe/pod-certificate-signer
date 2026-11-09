@@ -37,8 +37,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/signer"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/signer"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
 	// +kubebuilder:scaffold:imports
 )
@@ -164,16 +165,10 @@ func startTestManager() {
 	})
 	Expect(err).NotTo(HaveOccurred())
 
-	err = (&PodCertificateRequestReconciler{
-		Client:        mgr.GetClient(),
-		APIReader:     mgr.GetAPIReader(),
-		Log:           ctrl.Log.WithName("envtest"),
-		Scheme:        mgr.GetScheme(),
-		Signer:        pcrSigner,
-		ClusterFqdn:   "cluster.local",
-		EventRecorder: mgr.GetEventRecorder("podcertificate-signer"),
-	}).SetupWithManager(mgr)
+	reconciler, err := NewPodCertificateRequestReconciler(mgr, "envtest", pcrSigner,
+		podcertificate.Options{ClusterFQDN: "cluster.local"})
 	Expect(err).NotTo(HaveOccurred())
+	Expect(reconciler.SetupWithManager(mgr)).To(Succeed())
 
 	go func() {
 		defer GinkgoRecover()

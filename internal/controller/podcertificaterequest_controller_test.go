@@ -106,7 +106,7 @@ var _ = Describe("PodCertificateRequest Controller", func() {
 
 			By("waiting for the controller to record the Denied condition")
 			denied := waitForCondition(pcr, certificatesv1.PodCertificateRequestConditionTypeDenied)
-			Expect(denied.Reason).To(Equal(string(ReasonInvalidUserAnnotations)))
+			Expect(denied.Reason).To(Equal(string(ReasonInvalidUserConfig)))
 
 			By("checking the API server accepted the terminal write with cleared certificate fields")
 			var got certificatesv1.PodCertificateRequest

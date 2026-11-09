@@ -138,9 +138,10 @@ starts once it merges.
 2. **Issuance counters (M1, M1b, M1c).** Increment at the existing outcome sites
    in `podcertificaterequest_controller.go`. Pre-initialise **only the valid
    `outcome`/`reason` pairs** — hand-curated, not derived from the `const Reason`
-   block, because `ReasonAssociatedPodNotFound` (`:55`) is declared and never
-   used and would otherwise ship a permanent zero series for an impossible
-   outcome.
+   block, because the reasons do not form a cross product (at the time of
+   writing one, `ReasonAssociatedPodNotFound`, was declared and never used; it
+   has since been deleted) and deriving the table would ship a permanent zero
+   series for an impossible outcome.
 3. **CA reload counters and gauges (M2, M3, M4).** M2 increments in
    `reconcileOnce` and the event path, whose three results map to the existing
    `changed`/`unchanged`/`failed` branches. M3 and M4 read state already held

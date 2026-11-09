@@ -170,7 +170,7 @@ func resolveControllerPod() {
 // manifest to get DNS or IP SANs into the CSR the signer reads. The behavior the
 // flag gates - CSR DNS SANs run through the verified-identity allowlist, CSR IP
 // SANs denied outright - is therefore unreachable end to end and is covered by
-// unit tests instead (internal/kubernetes/podcertificate). What is reachable, and
+// unit tests instead (internal/podcertificate). What is reachable, and
 // what this container asserts, is that turning the flag on does not disturb
 // issuance: with an inert CSR the certificate is built from the annotations and
 // the controller defaults exactly as with the flag off. Convert these specs into

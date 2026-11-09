@@ -152,15 +152,21 @@ annotation becomes the override.
 ### Configuration via pod annotations (deprecated)
 
 > [!WARNING]
-> Configuration via pod `annotations` is deprecated and will be removed in a
-> future release — use `unverifiedUserAnnotations` instead. When both are set,
-> `unverifiedUserAnnotations` take precedence.
+> Configuration via pod `annotations` is deprecated and is removed in 4.0.0 —
+> use `unverifiedUserAnnotations` instead. When both are set,
+> `unverifiedUserAnnotations` take precedence. Every value the signer still
+> reads from a pod annotation is logged at startup verbosity, so remaining
+> users can be found with
+> `kubectl logs ... | grep "read from a pod annotation"` before upgrading.
 
 The same items (`cn`/`san`/`ip-san`/`eku`/`uris`/`duration`/`refresh`) can be
 set as pod [`annotations`](https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/)
 with the same `<signer>/<name>-<item>` keys, e.g.
 `coolcert.example.com/foo-cn: some-name.example.com`. This path predates
-`userAnnotations` and is kept only for compatibility.
+`userAnnotations` and is kept only for compatibility. It is validated like the
+request path: a pod annotation that carries the signer's prefix but is not one
+of the items above denies the request, exactly as the same key would on
+`unverifiedUserAnnotations`.
 
 ## Identity constraints
 

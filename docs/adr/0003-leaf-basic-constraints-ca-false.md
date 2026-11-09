@@ -8,7 +8,7 @@ decision-makers: RafPe
 
 ## Context and Problem Statement
 
-The signing template in `internal/kubernetes/authority/authority.go` (`Sign`) set
+The signing template in `internal/authority/authority.go` (`Sign`) set
 neither `BasicConstraintsValid` nor `IsCA`:
 
 ```go
@@ -112,11 +112,11 @@ removed.
 ## Implementation Plan
 
 * **Affected paths**:
-  * `internal/kubernetes/authority/authority.go` — `BasicConstraintsValid: true`
+  * `internal/authority/authority.go` — `BasicConstraintsValid: true`
     on the `Sign` template. `IsCA` is deliberately *not* written: the pair of a
     present extension and a false `cA` is what produces `cA:FALSE`, and a
     comment at the field says so, with the `ADR-0003` reference.
-  * `internal/kubernetes/authority/authority_test.go` —
+  * `internal/authority/authority_test.go` —
     `TestSignAssertsBasicConstraintsCAFalse`.
   * `test/e2e/key_semantics_test.go` — `expectConformantLeaf`, the assertion
     that pinned the absence.

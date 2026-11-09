@@ -20,44 +20,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/kubernetes/authority"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
 )
-
-// The reason label is meant to grep identically against the object: a value
-// read off a graph must be the string that was written into the condition. The
-// metrics package cannot import this one (that is the import cycle the package
-// exists to avoid), so the strings are duplicated there and pinned here.
-func TestMetricReasonsMatchControllerConstants(t *testing.T) {
-	pairs := []struct {
-		metric string
-		reason Reason
-	}{
-		{metrics.ReasonCertificateIssued, ReasonCertificateIssued},
-		{metrics.ReasonUnsupportedKeyType, ReasonUnsupportedKeyType},
-		{metrics.ReasonInvalidUserConfig, ReasonInvalidUserAnnotations},
-		{metrics.ReasonSigningFailed, ReasonSigningFailed},
-		{metrics.ReasonAssociatedPodGone, ReasonAssociatedPodGone},
-	}
-	for _, p := range pairs {
-		if p.metric != string(p.reason) {
-			t.Errorf("metric label value %q does not match the reason written onto the object, %q", p.metric, p.reason)
-		}
-	}
-}
-
-// TestIssuanceOutcomesExcludeTheDeadReason guards the one curation decision the
-// table exists to make. ReasonAssociatedPodNotFound is declared and never used
-// - a missing pod is dropped, not failed - so pre-initialising a pair for it
-// would advertise a permanently-zero series for an outcome that cannot occur.
-func TestIssuanceOutcomesExcludeTheDeadReason(t *testing.T) {
-	for _, pair := range metrics.IssuanceOutcomes {
-		if pair[1] == string(ReasonAssociatedPodNotFound) {
-			t.Errorf("pre-initialised pair %v uses %s, which the reconciler never records",
-				pair, ReasonAssociatedPodNotFound)
-		}
-	}
-}
 
 // A terminal outcome must be counted once, under the outcome and reason the
 // object records.
@@ -88,7 +53,7 @@ func TestTerminalOutcomesAreCounted(t *testing.T) {
 			}
 
 			before := outcomeCount(tc.wantOutcome, tc.reason)
-			if err := r.recordOutcome(context.Background(), pcr,
+			if _, err := r.recordOutcome(context.Background(), pcr,
 				tc.conditionType, tc.reason, "message", corev1.EventTypeNormal); err != nil {
 				t.Fatalf("recordOutcome: %v", err)
 			}
@@ -126,7 +91,7 @@ func TestOutcomeNotCountedWhenStatusWriteIsLost(t *testing.T) {
 						Type:               certificatesv1.PodCertificateRequestConditionTypeDenied,
 						Status:             metav1.ConditionTrue,
 						LastTransitionTime: metav1.Now(),
-						Reason:             string(ReasonInvalidUserAnnotations),
+						Reason:             string(ReasonInvalidUserConfig),
 						Message:            "denied by a concurrent writer",
 					}}
 					if err := c.Status().Update(ctx, concurrent); err != nil {
@@ -143,7 +108,7 @@ func TestOutcomeNotCountedWhenStatusWriteIsLost(t *testing.T) {
 	}
 
 	before := outcomeCount(metrics.OutcomeIssued, ReasonCertificateIssued)
-	if err := r.recordOutcome(context.Background(), pcr,
+	if _, err := r.recordOutcome(context.Background(), pcr,
 		certificatesv1.PodCertificateRequestConditionTypeIssued, ReasonCertificateIssued, "issued", corev1.EventTypeNormal); err != nil {
 		t.Fatalf("recordOutcome: %v", err)
 	}
@@ -158,7 +123,7 @@ func TestRequeuesAreClassified(t *testing.T) {
 	cases := []struct {
 		name       string
 		err        error
-		wantReason string
+		wantReason Reason
 	}{
 		{"ca unusable", fmt.Errorf("cannot sign: %w", authority.ErrCASignerUnusable), metrics.ReasonCASignerUnusable},
 		{"anything else", errors.New("etcdserver: request timed out"), metrics.ReasonTransient},
@@ -298,12 +263,12 @@ func outcomeCount(outcome string, reason Reason) float64 {
 	return promtestutil.ToFloat64(metrics.PodCertificateRequests.WithLabelValues(outcome, string(reason)))
 }
 
-func requeueCount(reason string) float64 {
-	return promtestutil.ToFloat64(metrics.PodCertificateRequestRequeues.WithLabelValues(reason))
+func requeueCount(reason Reason) float64 {
+	return promtestutil.ToFloat64(metrics.PodCertificateRequestRequeues.WithLabelValues(string(reason)))
 }
 
 func dropCount() float64 {
-	return promtestutil.ToFloat64(metrics.PodCertificateRequestDrops.WithLabelValues(metrics.ReasonAssociatedPodGone))
+	return promtestutil.ToFloat64(metrics.PodCertificateRequestDrops.WithLabelValues(string(metrics.ReasonAssociatedPodGone)))
 }
 
 // seriesCount reports how many time series reg currently exposes.

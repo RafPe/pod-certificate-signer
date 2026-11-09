@@ -26,7 +26,7 @@ leaves that fail chain verification on every peer.
 
 ## Coverage and E2E
 
-`make test` is green across the repository. `internal/kubernetes/authority`
+`make test` is green across the repository. `internal/authority`
 sits at 86.8% statement coverage with `validateCACertificate` itself at 100%
 (`go tool cover -func`). `make lint` (golangci-lint, including
 `--build-tags=e2e`) reports 0 issues.

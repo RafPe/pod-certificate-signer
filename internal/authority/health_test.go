@@ -1,0 +1,177 @@
+package authority
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
+)
+
+// newTestCA returns a CA backed by freshly generated material on disk, along
+// with the directory holding that material so tests can rewrite it. Tests that
+// need time to pass run inside a synctest bubble and call time.Sleep; the CA
+// reads time.Now, which is the bubble's fake clock there.
+func newTestCA(t *testing.T) (*CertificateAuthority, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	writeCA(t, dir, "ca.example.org", 24*time.Hour)
+	ca, err := New(dir+"/tls.crt", dir+"/tls.key")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	return ca, dir
+}
+
+// Readiness must tolerate a transient CA reload failure: the last-good CA is
+// retained and signing keeps working, so pulling the replica out of the Service
+// on the first blip only causes flapping. Readiness fails only once the CA has
+// been unloadable persistently, which is both at least 3 consecutive failed
+// reload attempts and at least 10 minutes since the first of them.
+func TestHealthyGracePeriodForReloadFailures(t *testing.T) {
+	reloadErr := errors.New("failed to load key pair")
+
+	tests := []struct {
+		name         string
+		failures     int
+		elapsed      time.Duration
+		thenSucceeds bool
+		wantHealthy  bool
+	}{
+		{
+			name:        "single transient failure stays ready",
+			failures:    1,
+			wantHealthy: true,
+		},
+		{
+			name:        "single failure long past the grace period stays ready",
+			failures:    1,
+			elapsed:     30 * time.Minute,
+			wantHealthy: true,
+		},
+		{
+			name:        "threshold reached within the grace period stays ready",
+			failures:    3,
+			elapsed:     5 * time.Minute,
+			wantHealthy: true,
+		},
+		{
+			name:        "threshold reached and grace period elapsed fails readiness",
+			failures:    3,
+			elapsed:     10 * time.Minute,
+			wantHealthy: false,
+		},
+		{
+			name:        "sustained failures well past the grace period fail readiness",
+			failures:    5,
+			elapsed:     30 * time.Minute,
+			wantHealthy: false,
+		},
+		{
+			name:         "successful reload resets the failure streak",
+			failures:     5,
+			elapsed:      30 * time.Minute,
+			thenSucceeds: true,
+			wantHealthy:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ca, _ := newTestCA(t)
+
+				// Record the first failure, let the clock run, then record the
+				// remaining ones: the elapsed guard must be measured from the
+				// first failure and must not be reset by later failures.
+				if tt.failures > 0 {
+					ca.recordReloadResult(reloadErr)
+					time.Sleep(tt.elapsed)
+					for i := 1; i < tt.failures; i++ {
+						ca.recordReloadResult(reloadErr)
+					}
+				}
+				if tt.thenSucceeds {
+					ca.recordReloadResult(nil)
+				}
+
+				err := ca.HealthCheck()
+				if gotHealthy := err == nil; gotHealthy != tt.wantHealthy {
+					t.Errorf("HealthCheck() after %d failure(s) over %v = %v, want healthy = %t",
+						tt.failures, tt.elapsed, err, tt.wantHealthy)
+				}
+			})
+		})
+	}
+}
+
+// The grace period must be reachable in production, not just by poking the
+// health bookkeeping directly: a CA that stays unloadable across a full retry
+// budget must eventually fail readiness once the grace period elapses.
+func TestPersistentlyUnloadableCAEventuallyFailsReadiness(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ca, dir := newTestCA(t)
+		ca.reloadAttempts = 3
+
+		// Permanently bad material on disk: a non-CA certificate.
+		nonCA, err := testutil.NewNonCA("not-a-ca.example.org", time.Hour)
+		if err != nil {
+			t.Fatalf("generate non-CA: %v", err)
+		}
+		if _, _, err := nonCA.WriteFiles(dir); err != nil {
+			t.Fatalf("write non-CA files: %v", err)
+		}
+
+		if _, err := ca.reloadWithRetry(t.Context(), log.FromContext(t.Context())); err == nil {
+			t.Fatal("reloadWithRetry() = nil, want error for a permanently unloadable CA")
+		}
+
+		// Still inside the grace window: the last-good CA keeps signing, so the
+		// replica must stay ready.
+		if err := ca.HealthCheck(); err != nil {
+			t.Errorf("HealthCheck() immediately after a failed reload = %v, want nil", err)
+		}
+
+		time.Sleep(reloadFailureGracePeriod)
+		if err := ca.HealthCheck(); err == nil {
+			t.Error("HealthCheck() = nil after the grace period elapsed, want an error")
+		}
+	})
+}
+
+// A dead watcher is a real failure rather than a transient file blip: the CA
+// can no longer observe rotations at all, so readiness must fail immediately
+// without waiting out the reload grace period.
+func TestHealthyFailsImmediatelyOnWatcherExit(t *testing.T) {
+	ca, _ := newTestCA(t)
+
+	events := make(chan fsnotify.Event)
+	errs := make(chan error) // open, never sends
+	close(events)
+
+	ctx := context.Background()
+	done := make(chan error, 1)
+	go func() { done <- ca.watchLoop(ctx, log.FromContext(ctx), events, errs, nil) }()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, errWatchChannelClosed) {
+			t.Fatalf("watchLoop() = %v, want %v", err, errWatchChannelClosed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("watchLoop did not return after the events channel closed")
+	}
+
+	// No time passes here: the watcher error is not subject to the grace
+	// period.
+	if err := ca.HealthCheck(); !errors.Is(err, errWatchChannelClosed) {
+		t.Errorf("HealthCheck() after the watcher exited = %v, want %v", err, errWatchChannelClosed)
+	}
+}

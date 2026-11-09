@@ -68,10 +68,6 @@ all: build
 $(LOCALBIN):
 	mkdir -p $(LOCALBIN)
 
-.PHONY: generate
-generate:  ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
-	$(GO_TOOL) controller-gen object:headerFile="$(HACK_DIR)/boilerplate.go.txt" paths="./..."
-
 .PHONY: fmt
 fmt: ## Run go fmt against code.
 	$(GOCMD) fmt ./...
@@ -87,7 +83,7 @@ vet-e2e: ## Run go vet against the e2e package, which is behind //go:build e2e.
 	$(GOCMD) vet -tags=e2e ./test/e2e/...
 
 .PHONY: test
-test: generate vet  ## Run tests. Formatting is enforced separately (make fmt / CI gofmt gate), not auto-applied here.
+test: vet  ## Run tests. Formatting is enforced separately (make fmt / CI gofmt gate), not auto-applied here.
 	@KUBEBUILDER_ASSETS="$$( $(GO_TOOL) setup-envtest use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path )" \
 		$(GOCMD) test \
 			-v \
@@ -129,7 +125,7 @@ E2E_NIGHTLY_GINKGO_TIMEOUT ?= 60m
 E2E_NIGHTLY_GO_TEST_TIMEOUT ?= 65m
 
 .PHONY: test-e2e
-test-e2e: generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
+test-e2e: fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
 	# grep -qx, not a bare grep: `kind get clusters` prints one name per line and
 	# an unanchored match is satisfied by any cluster whose name merely contains
 	# this one. A leftover `pcs-e2e-stage3` would make the guard skip creating
@@ -228,11 +224,11 @@ kind-stop:  ## Tear down the local development Kind cluster.
 ##@ Build
 
 .PHONY: build
-build: generate fmt vet | $(LOCALBIN)  ## Build manager binary.
+build: fmt vet | $(LOCALBIN)  ## Build manager binary.
 	$(GOCMD) build -o $(LOCALBIN)/manager cmd/podcertificate-signer/main.go
 
 .PHONY: run
-run: generate fmt vet ## Run a controller from your host.
+run: fmt vet ## Run a controller from your host.
 	$(GOCMD) run ./cmd/podcertificate-signer/main.go
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.

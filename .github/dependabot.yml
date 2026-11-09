@@ -27,7 +27,7 @@ updates:
           - "k8s.io/*"
           - "sigs.k8s.io/*"
 
-  # Tool-only module (golangci-lint, helm, controller-gen, setup-envtest,
+  # Tool-only module (golangci-lint, helm, setup-envtest,
   # kind). One grouped PR — golangci-lint alone drags in hundreds of
   # indirect dependencies.
   - package-ecosystem: "gomod"

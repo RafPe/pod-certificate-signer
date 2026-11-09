@@ -10,7 +10,7 @@ decision-makers: RafPe
 
 A `cn`, `san` or `uris` value is authored on a pod template, so it is byte-identical
 for every replica the template produces. The signer's `${...}` interpolation
-(`internal/kubernetes/podcertificate/podcertificate.go`, `interpolate` /
+(`internal/podcertificate/podcertificate.go`, `interpolate` /
 `interpolationVars`) exists because of that: `${pod.name}` is the only way to write
 a per-pod identity into a shared Deployment at all, and `${pod.namespace}` /
 `${cluster.fqdn}` are the only way to write a manifest that is correct in more than
@@ -114,7 +114,7 @@ configuration with its own tests and its own e2e install profile.
   * `charts/pod-certificate-signer/values.yaml` —
     `signer.enable_annotation_interpolation`. `templates/deployment.yaml` renders
     the flag unconditionally, so `false` still reaches the controller as `=false`.
-  * `internal/kubernetes/podcertificate/podcertificate.go` — **unchanged**. The
+  * `internal/podcertificate/podcertificate.go` — **unchanged**. The
     flip is a default, not a behaviour: `Options.EnableInterpolation` is a struct
     field the controller passes through, and nothing in the package reads a flag
     default.
