@@ -1,4 +1,10 @@
 {{- if .Values.admissionPolicies.dnsSANValidation.enabled }}
+{{/*
+This policy inspects the san item in the projected volume's userAnnotations
+only. It deliberately does not cover the deprecated pod-annotation fallback
+(signer.allow_pod_annotations): that path is removed in 4.0.0, and operators
+who need admission-time coverage for it can switch it off today instead.
+*/}}
 {{- $name := printf "%s-dns-san-validation" (include "pod-certificate-signer.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- $sanKey := printf "%s-san" .Values.signer.name }}
 apiVersion: admissionregistration.k8s.io/v1

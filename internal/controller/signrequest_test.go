@@ -21,35 +21,33 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/outcome"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
 )
 
 // stubSigner is a test double for the podSigner seam on the reconciler. It
 // records whether it was invoked and the configuration it received, so tests
 // can assert the signing path was actually reached (and with which config).
+// name is the signer name the reconciler built around it answers for.
 type stubSigner struct {
 	name      string
-	cert      *podcertificate.PodCertificate
+	cert      *podcertificate.Certificate
 	err       error
 	called    bool
 	signings  int
-	gotConfig *podcertificate.PodCertificateConfig
+	gotConfig *podcertificate.Config
 }
 
-func (s *stubSigner) SignPodCertificate(cfg *podcertificate.PodCertificateConfig) (*podcertificate.PodCertificate, error) {
+func (s *stubSigner) Sign(cfg *podcertificate.Config) (*podcertificate.Certificate, error) {
 	s.called = true
 	s.signings++
 	s.gotConfig = cfg
 	return s.cert, s.err
 }
 
-func (s *stubSigner) IsSignerNameMatching(n string) bool { return s.name == n }
-
-func (s *stubSigner) Name() string { return s.name }
-
 // newSigningHarness wires a reconciler to the given stub with a pod present and
 // a PCR carrying a valid stub CSR, so signRequest() runs the full pipeline
-// and reaches SignPodCertificate. The returned context carries a discard logger
+// and reaches Sign. The returned context carries a discard logger
 // for the config resolver.
 func newSigningHarness(t *testing.T, stub *stubSigner) (*PodCertificateRequestReconciler, *certificatesv1.PodCertificateRequest, context.Context) {
 	t.Helper()
@@ -67,7 +65,7 @@ func newSigningHarness(t *testing.T, stub *stubSigner) (*PodCertificateRequestRe
 	}
 
 	cl := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(pod).Build()
-	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), Signer: stub}
+	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), Signer: stub, SignerName: stub.name}
 	ctx := logr.NewContext(context.Background(), logr.Discard())
 	return r, pcr, ctx
 }
@@ -76,10 +74,7 @@ func newSigningHarness(t *testing.T, stub *stubSigner) (*PodCertificateRequestRe
 // substitute a stub. With a stub returning a certificate, signRequest() runs the
 // full pipeline and hands back exactly that certificate.
 func TestProcessReachesSigner(t *testing.T) {
-	want := podcertificate.NewPodCertificate("pem-chain",
-		&podcertificate.PodCertificateConfig{},
-		time.Now(), time.Now().Add(time.Hour),
-	)
+	want := &podcertificate.Certificate{CertificateChain: "pem-chain", Config: &podcertificate.Config{}, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour)}
 	stub := &stubSigner{name: "example.org/signer", cert: want}
 	r, pcr, ctx := newSigningHarness(t, stub)
 
@@ -111,7 +106,7 @@ func TestProcessLongPodNameEmitsDefaultSANWarning(t *testing.T) {
 	stub := &stubSigner{name: "example.org/signer", cert: stubCert()}
 	rec := events.NewFakeRecorder(10)
 	r := &PodCertificateRequestReconciler{
-		Client: cache, APIReader: cache, Log: logr.Discard(), Signer: stub, EventRecorder: rec,
+		Client: cache, APIReader: cache, Log: logr.Discard(), Signer: stub, SignerName: stub.name, EventRecorder: rec,
 	}
 	ctx := logr.NewContext(context.Background(), logr.Discard())
 
@@ -128,8 +123,8 @@ func TestProcessLongPodNameEmitsDefaultSANWarning(t *testing.T) {
 		if !strings.Contains(e, corev1.EventTypeWarning) {
 			t.Errorf("event = %q, want a %s event", e, corev1.EventTypeWarning)
 		}
-		if !strings.Contains(e, string(ReasonDefaultSANSkipped)) {
-			t.Errorf("event = %q, want reason %s", e, ReasonDefaultSANSkipped)
+		if !strings.Contains(e, string(outcome.DefaultSANSkipped)) {
+			t.Errorf("event = %q, want reason %s", e, outcome.DefaultSANSkipped)
 		}
 		if !strings.Contains(e, "DNS label limit") {
 			t.Errorf("event = %q, want it to explain the DNS label limit", e)
@@ -210,11 +205,8 @@ func livePCR(t *testing.T, requestUID, podUID types.UID) (*certificatesv1.PodCer
 	return pcr, pod
 }
 
-func stubCert() *podcertificate.PodCertificate {
-	return podcertificate.NewPodCertificate("pem-chain",
-		&podcertificate.PodCertificateConfig{},
-		time.Now(), time.Now().Add(time.Hour),
-	)
+func stubCert() *podcertificate.Certificate {
+	return &podcertificate.Certificate{CertificateChain: "pem-chain", Config: &podcertificate.Config{}, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour)}
 }
 
 // When the manager cache misses but the pod exists on a live read, the
@@ -225,7 +217,7 @@ func TestProcessCacheMissReadsLive(t *testing.T) {
 	cache := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build() // pod absent from cache
 	live := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(pod).Build()
 	stub := &stubSigner{name: "example.org/signer", cert: stubCert()}
-	r := &PodCertificateRequestReconciler{Client: cache, APIReader: live, Log: logr.Discard(), Signer: stub}
+	r := &PodCertificateRequestReconciler{Client: cache, APIReader: live, Log: logr.Discard(), Signer: stub, SignerName: stub.name}
 	ctx := logr.NewContext(context.Background(), logr.Discard())
 
 	cert, err := r.signRequest(ctx, pcr)
@@ -245,7 +237,7 @@ func TestProcessCacheMissReadsLive(t *testing.T) {
 }
 
 // When the pod that exists has a UID different from the request's PodUID, the
-// request is stale: the controller must drop it (nil, nil) and must NOT sign
+// request is stale: the controller must drop it (errDropRequest) and must NOT sign
 // with the wrong pod's identity.
 func TestProcessStalePodUIDDropped(t *testing.T) {
 	pcr, stalePod := livePCR(t, "uid-1", "uid-stale")
@@ -254,13 +246,13 @@ func TestProcessStalePodUIDDropped(t *testing.T) {
 	stub := &stubSigner{name: "example.org/signer", cert: stubCert()}
 	// The drop path emits an event; see TestReconcileDroppedGonePodEmitsEvent.
 	r := &PodCertificateRequestReconciler{
-		Client: cache, APIReader: live, Log: logr.Discard(), Signer: stub, EventRecorder: events.NewFakeRecorder(10),
+		Client: cache, APIReader: live, Log: logr.Discard(), Signer: stub, SignerName: stub.name, EventRecorder: events.NewFakeRecorder(10),
 	}
 	ctx := logr.NewContext(context.Background(), logr.Discard())
 
 	cert, err := r.signRequest(ctx, pcr)
-	if cert != nil || err != nil {
-		t.Fatalf("got (%v, %v), want (nil, nil) drop for a UID-mismatched pod", cert, err)
+	if cert != nil || !errors.Is(err, errDropRequest) {
+		t.Fatalf("got (%v, %v), want (nil, errDropRequest) for a UID-mismatched pod", cert, err)
 	}
 	if stub.called {
 		t.Fatal("signer must not run for a UID-mismatched (stale) pod")
@@ -274,7 +266,7 @@ func testPCR() *certificatesv1.PodCertificateRequest {
 	}
 }
 
-// signRequest() must drop (nil, nil) when the pod is absent from both the cache and
+// signRequest() must drop (errDropRequest) when the pod is absent from both the cache and
 // a live read: the request is stale, not a terminal failure to sign.
 func TestProcessPodNotFoundDropsAsStale(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
@@ -284,8 +276,8 @@ func TestProcessPodNotFoundDropsAsStale(t *testing.T) {
 	}
 
 	cert, err := r.signRequest(context.Background(), testPCR())
-	if cert != nil || err != nil {
-		t.Fatalf("got (%v, %v), want (nil, nil) drop for a stale request", cert, err)
+	if cert != nil || !errors.Is(err, errDropRequest) {
+		t.Fatalf("got (%v, %v), want (nil, errDropRequest) for a stale request", cert, err)
 	}
 }
 
@@ -299,7 +291,7 @@ func TestProcessPodGetErrorIsTransient(t *testing.T) {
 			},
 		}).
 		Build()
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard()}
+	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard()}
 
 	cert, err := r.signRequest(context.Background(), testPCR())
 	if cert != nil {
@@ -314,7 +306,7 @@ func TestProcessPodGetErrorIsTransient(t *testing.T) {
 	}
 }
 
-// signRequest() must skip (nil, nil) when the associated pod is being deleted.
+// signRequest() must drop (errDropRequest) when the associated pod is being deleted.
 func TestProcessPodBeingDeletedSkips(t *testing.T) {
 	now := metav1.Now()
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
@@ -324,15 +316,15 @@ func TestProcessPodBeingDeletedSkips(t *testing.T) {
 		Finalizers:        []string{"keep"}, // fake client requires a finalizer to retain DeletionTimestamp
 	}}
 	cl := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(pod).Build()
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard()}
+	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard()}
 
 	cert, err := r.signRequest(context.Background(), testPCR())
-	if cert != nil || err != nil {
-		t.Fatalf("got (%v, %v), want (nil, nil)", cert, err)
+	if cert != nil || !errors.Is(err, errDropRequest) {
+		t.Fatalf("got (%v, %v), want (nil, errDropRequest)", cert, err)
 	}
 }
 
-// recordFailure: a terminal error writes a condition and does not requeue.
+// requeueOrRecordTerminal: a terminal error writes a condition and does not requeue.
 func TestRecordFailureTerminalWritesCondition(t *testing.T) {
 	pcr := testPCR()
 	cl := fake.NewClientBuilder().
@@ -340,11 +332,11 @@ func TestRecordFailureTerminalWritesCondition(t *testing.T) {
 		WithObjects(pcr).
 		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
 		Build()
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
+	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
 
-	res, err := r.recordFailure(context.Background(), pcr, failed(errors.New("x")))
+	res, err := r.requeueOrRecordTerminal(context.Background(), pcr, failed(errors.New("x")))
 	if err != nil {
-		t.Fatalf("recordFailure returned err = %v, want nil", err)
+		t.Fatalf("requeueOrRecordTerminal returned err = %v, want nil", err)
 	}
 	if res != (ctrl.Result{}) {
 		t.Fatalf("result = %+v, want empty (no requeue)", res)
@@ -358,7 +350,7 @@ func TestRecordFailureTerminalWritesCondition(t *testing.T) {
 	}
 }
 
-// recordFailure: a transient error is returned (requeue) and writes no condition.
+// requeueOrRecordTerminal: a transient error is returned (requeue) and writes no condition.
 func TestRecordFailureTransientRequeues(t *testing.T) {
 	pcr := testPCR()
 	cl := fake.NewClientBuilder().
@@ -366,10 +358,10 @@ func TestRecordFailureTransientRequeues(t *testing.T) {
 		WithObjects(pcr).
 		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
 		Build()
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
+	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
 
 	sentinel := errors.New("apiserver blip")
-	if _, err := r.recordFailure(context.Background(), pcr, sentinel); !errors.Is(err, sentinel) {
+	if _, err := r.requeueOrRecordTerminal(context.Background(), pcr, sentinel); !errors.Is(err, sentinel) {
 		t.Fatalf("err = %v, want sentinel returned for requeue", err)
 	}
 	got := &certificatesv1.PodCertificateRequest{}
@@ -381,7 +373,7 @@ func TestRecordFailureTransientRequeues(t *testing.T) {
 	}
 }
 
-// recordFailure: when recording a terminal outcome fails because the status
+// requeueOrRecordTerminal: when recording a terminal outcome fails because the status
 // write itself errors, that write error is returned so the reconcile requeues
 // (the Failed condition is never silently lost).
 func TestRecordFailureWriteErrorRequeues(t *testing.T) {
@@ -397,9 +389,9 @@ func TestRecordFailureWriteErrorRequeues(t *testing.T) {
 			},
 		}).
 		Build()
-	r := &PodCertificateRequestReconciler{Client: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
+	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
 
-	if _, err := r.recordFailure(context.Background(), pcr, failed(errors.New("boom"))); !errors.Is(err, writeErr) {
+	if _, err := r.requeueOrRecordTerminal(context.Background(), pcr, failed(errors.New("boom"))); !errors.Is(err, writeErr) {
 		t.Fatalf("err = %v, want the status-write error returned for requeue", err)
 	}
 }

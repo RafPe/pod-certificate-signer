@@ -64,8 +64,8 @@ repaired by the next publish instead of becoming permanent history
 ([ADR-0004](./adr/0004-bootstrapped-previous-ca-history.md)).
 
 > [!IMPORTANT]
-> **Set `signer.require_ca_history: true` once the signer has published its
-> bundle.** A bundle that has never existed and one that was *deleted* look
+> **Set `signer.require_ca_history: true` (the `--require-ca-history` flag)
+> once the signer has published its bundle.** A bundle that has never existed and one that was *deleted* look
 > identical to the controller, so by default a missing bundle starts an empty
 > history — which is right for a first install and, after one, means the retained
 > CAs are gone for good the next time the controller restarts. With the flag on,
@@ -128,11 +128,13 @@ kubectl get events -A --field-selector reason=CASignerUnusable
 The chart runs `replicaCount: 2` with `leader_election.enabled: true`. Work is
 split deliberately between every-replica and leader-only duties:
 
-- **CA watching and signing run on every replica.** A standby keeps its
-  in-memory CA current, so it never signs with stale material immediately after
-  being promoted.
-- **`ClusterTrustBundle` publication is leader-gated.** Only the elected leader
-  writes the shared resource, so replicas cannot fight over it.
+- **CA watching runs on every replica.** A standby keeps its in-memory CA
+  current, so it never signs with stale material immediately after being
+  promoted.
+- **Signing and `ClusterTrustBundle` publication are leader-gated.**
+  controller-runtime gates controllers on leader election by default, and the
+  publisher opts in explicitly, so one replica issues certificates and writes
+  the shared resource at a time ([ADR-0006](adr/0006-release-leader-lease-on-cancel.md)).
 
 Autoscaling (`autoscaling.enabled`) is of limited use for a leader-elected
 controller — extra replicas are warm standbys, not additional throughput.

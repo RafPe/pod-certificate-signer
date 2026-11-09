@@ -18,7 +18,6 @@ import (
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/signer"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
 )
 
@@ -42,30 +41,24 @@ func newTestPublisher(t *testing.T, c client.Client) *Publisher {
 	if err != nil {
 		t.Fatalf("authority.New: %v", err)
 	}
-	s, err := signer.New(testSignerName, ca)
-	if err != nil {
-		t.Fatalf("signer.New: %v", err)
-	}
-
-	_, p := NewRunnables(c, s, ca)
-	return p
+	return NewPublisher(c, testSignerName, ca)
 }
 
 // publishCounts snapshots the publish-attempt counter per result, so a test can
 // assert on the publishes it caused rather than on the package-level total.
-type publishCounts map[string]float64
+type publishCounts map[metrics.PublishResult]float64
 
 func snapshotPublishCounts() publishCounts {
 	counts := publishCounts{}
-	for _, result := range []string{metrics.ResultUnchanged, metrics.ResultCreated, metrics.ResultUpdated, metrics.ResultFailed} {
-		counts[result] = promtestutil.ToFloat64(metrics.ClusterTrustBundlePublishAttempts.WithLabelValues(result))
+	for _, result := range []metrics.PublishResult{metrics.PublishUnchanged, metrics.PublishCreated, metrics.PublishUpdated, metrics.PublishFailed} {
+		counts[result] = promtestutil.ToFloat64(metrics.ClusterTrustBundlePublishAttempts.WithLabelValues(string(result)))
 	}
 	return counts
 }
 
 // delta reports how far the counter for result moved since the snapshot.
-func (before publishCounts) delta(result string) float64 {
-	return promtestutil.ToFloat64(metrics.ClusterTrustBundlePublishAttempts.WithLabelValues(result)) - before[result]
+func (before publishCounts) delta(result metrics.PublishResult) float64 {
+	return promtestutil.ToFloat64(metrics.ClusterTrustBundlePublishAttempts.WithLabelValues(string(result))) - before[result]
 }
 
 // A publish that fails transiently must be retried (with backoff) until it
@@ -88,9 +81,7 @@ func TestReconcileRetriesTransientFailure(t *testing.T) {
 		p := newTestPublisher(t, c)
 		before := snapshotPublishCounts()
 		ctx := t.Context()
-		if !p.reconcile(ctx, log.FromContext(ctx)) {
-			t.Fatal("reconcile should have run")
-		}
+		p.publish(ctx, log.FromContext(ctx))
 
 		if got := getCalls.Load(); got != 3 {
 			t.Errorf("Get was called %d times, want 3 (two transient failures, then success)", got)
@@ -98,10 +89,10 @@ func TestReconcileRetriesTransientFailure(t *testing.T) {
 		if err := p.HealthCheck(); err != nil {
 			t.Errorf("HealthCheck = %v, want nil after a successful retry", err)
 		}
-		if got := before.delta(metrics.ResultFailed); got != 0 {
+		if got := before.delta(metrics.PublishFailed); got != 0 {
 			t.Errorf("publish attempts {result=failed} = %v, want 0 after eventual success", got)
 		}
-		if got := before.delta(metrics.ResultCreated); got != 1 {
+		if got := before.delta(metrics.PublishCreated); got != 1 {
 			t.Errorf("publish attempts {result=created} = %v, want 1 after the first successful publish", got)
 		}
 	})
@@ -151,37 +142,67 @@ func TestReconcileTickerRepairsDrift(t *testing.T) {
 	})
 }
 
-// Only one publish may run at a time: a reconcile triggered while another is in
-// flight must be skipped (coalesced), not run concurrently.
-func TestReconcileSingleFlight(t *testing.T) {
-	entered := make(chan struct{}, 1)
-	release := make(chan struct{})
-	c := fake.NewClientBuilder().
-		WithScheme(clientgoscheme.Scheme).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-				entered <- struct{}{}
-				<-release
-				return cl.Get(ctx, key, obj, opts...)
-			},
-		}).
-		Build()
+// A CA change reported on Notify must trigger a publish while the publisher
+// runs, without waiting for the drift-repair tick; and changes that arrive
+// while a publish is in flight are coalesced by the channel's two slots rather
+// than queued one publish per change.
+func TestPublisherPublishesOnNotify(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var getCalls atomic.Int32
+		var holdPublish atomic.Bool
+		release := make(chan struct{})
+		c := fake.NewClientBuilder().
+			WithScheme(clientgoscheme.Scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					getCalls.Add(1)
+					if holdPublish.Load() {
+						<-release
+					}
+					return cl.Get(ctx, key, obj, opts...)
+				},
+			}).
+			Build()
 
-	p := newTestPublisher(t, c)
-	ctx := context.Background()
+		p := newTestPublisher(t, c)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go func() { _ = p.Start(ctx) }()
+		synctest.Wait() // the startup publish
+		if got := getCalls.Load(); got != 1 {
+			t.Fatalf("Get called %d times after startup, want 1", got)
+		}
 
-	ran := make(chan bool, 1)
-	go func() { ran <- p.reconcile(ctx, log.FromContext(ctx)) }()
+		// One change, held mid-publish so the burst below lands while a
+		// publish is in flight.
+		holdPublish.Store(true)
+		p.Notify() <- struct{}{}
+		synctest.Wait()
+		if got := getCalls.Load(); got != 2 {
+			t.Fatalf("Get called %d times after one change notification, want 2", got)
+		}
 
-	<-entered // first reconcile is inside the publish, holding the single-flight lock
-	if p.reconcile(ctx, log.FromContext(ctx)) {
-		t.Error("a concurrent reconcile must be skipped while a publish is in flight")
-	}
+		// Five more changes, sent the way the CA watcher sends them: without
+		// blocking. Only two fit; the rest are dropped.
+		queued := 0
+		for range 5 {
+			select {
+			case p.Notify() <- struct{}{}:
+				queued++
+			default:
+			}
+		}
+		if queued != 2 {
+			t.Fatalf("%d of five notifications were queued during a publish, want 2", queued)
+		}
 
-	close(release)
-	if got := <-ran; !got {
-		t.Error("the first reconcile should report that it ran")
-	}
+		holdPublish.Store(false)
+		close(release)
+		synctest.Wait()
+		if got := getCalls.Load(); got != 4 {
+			t.Errorf("Get called %d times, want 4: the held publish plus one per queued change", got)
+		}
+	})
 }
 
 // A publish that keeps failing must be surfaced: the publisher becomes
@@ -201,12 +222,12 @@ func TestReconcilePersistentFailureSurfaced(t *testing.T) {
 		p := newTestPublisher(t, c)
 		before := snapshotPublishCounts()
 		ctx := t.Context()
-		p.reconcile(ctx, log.FromContext(ctx))
+		p.publish(ctx, log.FromContext(ctx))
 
 		if p.HealthCheck() == nil {
 			t.Error("HealthCheck must report an error after a persistent publish failure")
 		}
-		if got := before.delta(metrics.ResultFailed); got != 1 {
+		if got := before.delta(metrics.PublishFailed); got != 1 {
 			t.Errorf("publish attempts {result=failed} = %v, want 1 after the retry budget is exhausted", got)
 		}
 	})
@@ -221,13 +242,13 @@ func TestReconcileCountsUnchangedPublish(t *testing.T) {
 	p := newTestPublisher(t, c)
 	before := snapshotPublishCounts()
 	ctx := context.Background()
-	p.reconcile(ctx, log.FromContext(ctx))
-	p.reconcile(ctx, log.FromContext(ctx))
+	p.publish(ctx, log.FromContext(ctx))
+	p.publish(ctx, log.FromContext(ctx))
 
-	if got := before.delta(metrics.ResultCreated); got != 1 {
+	if got := before.delta(metrics.PublishCreated); got != 1 {
 		t.Errorf("publish attempts {result=created} = %v, want 1", got)
 	}
-	if got := before.delta(metrics.ResultUnchanged); got != 1 {
+	if got := before.delta(metrics.PublishUnchanged); got != 1 {
 		t.Errorf("publish attempts {result=unchanged} = %v, want 1 on a republish of the same bundle", got)
 	}
 }
@@ -252,24 +273,26 @@ func TestReconcileClearsHealthOnSuccess(t *testing.T) {
 		p := newTestPublisher(t, c)
 		ctx := t.Context()
 
-		p.reconcile(ctx, log.FromContext(ctx))
+		p.publish(ctx, log.FromContext(ctx))
 		if p.HealthCheck() == nil {
 			t.Fatal("HealthCheck must report an error while publishing keeps failing")
 		}
 
 		fail.Store(false)
-		p.reconcile(ctx, log.FromContext(ctx))
+		p.publish(ctx, log.FromContext(ctx))
 		if err := p.HealthCheck(); err != nil {
 			t.Errorf("HealthCheck = %v, want nil after a successful publish", err)
 		}
 	})
 }
 
-// A reconcile in flight when the manager's context is canceled must abandon its
+// A publish in flight when the manager's context is canceled must abandon its
 // retries immediately instead of sleeping out the backoff schedule. The delay
 // is paid on leader handover - controller-runtime releases the leader Lease only
 // after every runnable has returned - so a predicate that treated a dead
-// context as transient held the Lease for the whole schedule.
+// context as transient held the Lease for the whole schedule. The abandoned
+// publish is a shutdown, not a failure: it must not flip readiness or count as
+// a failed publish.
 //
 // Get blocks until the context is canceled, so cancellation lands during an
 // attempt rather than during a bare time.Sleep that no cancel can interrupt.
@@ -292,7 +315,7 @@ func TestReconcileStopsRetryingOnCancel(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			p.reconcile(ctx, log.FromContext(ctx))
+			p.publish(ctx, log.FromContext(ctx))
 		}()
 
 		synctest.Wait()
@@ -307,11 +330,11 @@ func TestReconcileStopsRetryingOnCancel(t *testing.T) {
 				ctxCancelReturnBound)
 		}
 
-		if p.HealthCheck() == nil {
-			t.Error("HealthCheck must report an error after a publish abandoned on cancellation")
+		if err := p.HealthCheck(); err != nil {
+			t.Errorf("HealthCheck = %v, want nil: a publish abandoned on shutdown is not a failure", err)
 		}
-		if got := before.delta(metrics.ResultFailed); got != 1 {
-			t.Errorf("publish attempts {result=failed} = %v, want 1", got)
+		if got := before.delta(metrics.PublishFailed); got != 0 {
+			t.Errorf("publish attempts {result=failed} = %v, want 0 for a publish abandoned on shutdown", got)
 		}
 	})
 }
@@ -344,7 +367,7 @@ func TestReconcileRetriesTimeoutWhileContextIsLive(t *testing.T) {
 
 		p := newTestPublisher(t, c)
 		ctx := t.Context()
-		p.reconcile(ctx, log.FromContext(ctx))
+		p.publish(ctx, log.FromContext(ctx))
 
 		if got := getCalls.Load(); got != 3 {
 			t.Errorf("Get was called %d times, want 3 (two timeouts, then success)", got)

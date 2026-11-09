@@ -1,0 +1,2 @@
+kind: Changed
+body: 'Controller log lines are reworded as lowercase fragments (for example `request is already terminal; nothing to do`, `published ClusterTrustBundle`), a transient reconcile error is logged once by controller-runtime instead of twice, a denial is logged at info rather than error level, and an absent ClusterTrustBundle at startup is logged at error level instead of as an info line prefixed `WARNING:`. Log-based alerts or searches that match the old wording need updating.'

@@ -1,0 +1,2 @@
+kind: Changed
+body: 'A request denied because it has neither a common name nor a SAN - a pod name too long for both - now says in the denial message why the default DNS SANs were dropped, instead of in a separate warning event emitted before the denial.'

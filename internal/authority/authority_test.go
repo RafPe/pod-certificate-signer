@@ -184,7 +184,7 @@ func TestValidateCACertificate(t *testing.T) {
 func TestTrustBundleRotation(t *testing.T) {
 	dir := t.TempDir()
 	ca1 := writeCA(t, dir, "ca-1.example.org", 24*time.Hour)
-	ca, err := New(dir+"/tls.crt", dir+"/tls.key", WithMaxPreviousCertificates(2))
+	ca, err := New(dir+"/tls.crt", dir+"/tls.key", WithMaxPreviousCAs(2))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestWithPreviousCABundleSeedsBundle(t *testing.T) {
 	dir := t.TempDir()
 	current := writeCA(t, dir, "current-ca.example.org", 24*time.Hour)
 	ca, err := New(dir+"/tls.crt", dir+"/tls.key",
-		WithPreviousCABundle([]*x509.Certificate{previous.Cert}),
+		WithPreviousCAs([]*x509.Certificate{previous.Cert}),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -261,7 +261,7 @@ func TestWithPreviousCABundleDeduplicatesCurrent(t *testing.T) {
 	dir := t.TempDir()
 	current := writeCA(t, dir, "current-ca.example.org", 24*time.Hour)
 	ca, err := New(dir+"/tls.crt", dir+"/tls.key",
-		WithPreviousCABundle([]*x509.Certificate{current.Cert}),
+		WithPreviousCAs([]*x509.Certificate{current.Cert}),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -273,11 +273,11 @@ func TestWithPreviousCABundleDeduplicatesCurrent(t *testing.T) {
 	}
 }
 
-func TestWithMaxPreviousCertificatesRejectsNegative(t *testing.T) {
+func TestWithMaxPreviousCAsRejectsNegative(t *testing.T) {
 	dir := t.TempDir()
 	writeCA(t, dir, "ca.example.org", time.Hour)
 
-	if _, err := New(dir+"/tls.crt", dir+"/tls.key", WithMaxPreviousCertificates(-1)); err == nil {
+	if _, err := New(dir+"/tls.crt", dir+"/tls.key", WithMaxPreviousCAs(-1)); err == nil {
 		t.Fatal("want error for negative max previous certificates")
 	}
 }

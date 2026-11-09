@@ -15,32 +15,36 @@ import (
 	"github.com/go-logr/logr"
 )
 
-// Well-known configuration annotation suffixes understood by the signer.
-//
-// Keys are formed as <signer-name>-<suffix>, e.g. coolcert.example.com/mysigner-cn,
+// AnnotationSuffix names one configuration item the signer understands. Keys
+// are formed as <signer-name>-<suffix>, e.g. coolcert.example.com/mysigner-cn,
 // and are read from the PodCertificateRequest spec.unverifiedUserAnnotations.
+// The resolver takes the type rather than a string so only a declared item can
+// be looked up.
+type AnnotationSuffix string
+
+// Well-known configuration annotation suffixes understood by the signer.
 const (
 	// AnnotationSuffixCN configures the certificate common name.
-	AnnotationSuffixCN = "cn"
+	AnnotationSuffixCN AnnotationSuffix = "cn"
 	// AnnotationSuffixSAN configures the certificate DNS names (comma-separated).
-	AnnotationSuffixSAN = "san"
+	AnnotationSuffixSAN AnnotationSuffix = "san"
 	// AnnotationSuffixIPSAN configures the certificate IP SANs (comma-separated).
-	AnnotationSuffixIPSAN = "ip-san"
+	AnnotationSuffixIPSAN AnnotationSuffix = "ip-san"
 	// AnnotationSuffixEKU configures the certificate extended key usage
 	// (comma-separated tokens: "client", "server").
-	AnnotationSuffixEKU = "eku"
+	AnnotationSuffixEKU AnnotationSuffix = "eku"
 	// AnnotationSuffixDuration configures the certificate duration.
-	AnnotationSuffixDuration = "duration"
+	AnnotationSuffixDuration AnnotationSuffix = "duration"
 	// AnnotationSuffixRefreshBefore configures how long before expiry the
 	// certificate should be refreshed.
-	AnnotationSuffixRefreshBefore = "refresh"
+	AnnotationSuffixRefreshBefore AnnotationSuffix = "refresh"
 	// AnnotationSuffixURIs configures the certificate URI SANs (comma-separated).
-	AnnotationSuffixURIs = "uris"
+	AnnotationSuffixURIs AnnotationSuffix = "uris"
 )
 
 // annotationSuffixes is every suffix the signer understands, and so the
 // closed set of keys it accepts under its own prefix.
-var annotationSuffixes = []string{
+var annotationSuffixes = []AnnotationSuffix{
 	AnnotationSuffixCN,
 	AnnotationSuffixSAN,
 	AnnotationSuffixIPSAN,
@@ -52,33 +56,30 @@ var annotationSuffixes = []string{
 
 // annotationKey builds the full annotation key for a configuration suffix,
 // e.g. coolcert.example.com/mysigner-cn.
-func annotationKey(signerName, suffix string) string {
-	return signerName + "-" + suffix
+func annotationKey(signerName string, suffix AnnotationSuffix) string {
+	return signerName + "-" + string(suffix)
 }
 
-// podAnnotation returns the value of the given pod annotation. It reports false
-// when the pod is nil, or the annotation is absent or empty.
+// podAnnotation returns the value of the given pod annotation. It reports
+// false when the annotation is absent or empty.
+//
+// Deprecated: pod-annotation configuration is removed in 4.0.0; configure the
+// signer through spec.unverifiedUserAnnotations. This is the only function the
+// legacy path calls.
 func podAnnotation(pod *corev1.Pod, key string) (string, bool) {
-	if pod == nil || pod.Annotations == nil {
-		return "", false
-	}
 	value, ok := pod.Annotations[key]
-	if !ok || value == "" {
-		return "", false
-	}
-
-	return value, true
+	return value, ok
 }
 
-// checkUnrecognizedUserAnnotations rejects unverifiedUserAnnotations keys the
-// signer does not recognize. Signers should deny such requests, see
+// validateAnnotationKeys rejects unverifiedUserAnnotations keys the signer
+// does not recognize. Signers should deny such requests, see
 // https://pkg.go.dev/k8s.io/api/certificates/v1#PodCertificateRequestSpec
 //
 // Pod annotations are deliberately not checked: they are shared with every
 // other consumer of the pod, and a signer-name prefix cannot tell a typo from
 // a key belonging to another signer whose name extends this one (example.com/pod
 // versus example.com/pod-client).
-func checkUnrecognizedUserAnnotations(annotations map[string]string, signerName string) error {
+func validateAnnotationKeys(annotations map[string]string, signerName string) error {
 	known := make(map[string]struct{}, len(annotationSuffixes))
 	for _, suffix := range annotationSuffixes {
 		known[annotationKey(signerName, suffix)] = struct{}{}
@@ -124,31 +125,39 @@ type annotationResolver struct {
 	verified map[string]struct{}
 }
 
-// lookup resolves a configuration value, preferring the request
-// spec.unverifiedUserAnnotations over the deprecated pod annotations.
+// rawValue resolves a configuration value before interpolation: the request
+// spec.unverifiedUserAnnotations first, then - while Options.AllowPodAnnotations
+// is set - the pod's own annotations. A key that is present with an empty value
+// is an error rather than a fallback, from either source: an explicitly empty
+// value is a misconfiguration, and treating it as absent would silently route
+// it onto the deprecated pod path or the default.
 //
-// Deprecated: the pod-annotation fallback is removed in 4.0.0; configure the
-// signer through spec.unverifiedUserAnnotations. Every value still taken from
-// a pod annotation is logged so remaining users can be found before then.
-func (r *annotationResolver) lookup(suffix string) (string, bool) {
+// The pod-annotation fallback is deprecated and removed in 4.0.0. Every value
+// still taken from it is logged so remaining users can be found before then.
+func (r *annotationResolver) rawValue(suffix AnnotationSuffix) (string, bool, error) {
 	key := annotationKey(r.signerName, suffix)
-	if value, ok := r.pcr.Spec.UnverifiedUserAnnotations[key]; ok && value != "" {
-		return value, true
+	value, ok := r.pcr.Spec.UnverifiedUserAnnotations[key]
+	if !ok && r.opts.AllowPodAnnotations {
+		if value, ok = podAnnotation(r.pod, key); ok {
+			r.logger.Info("certificate configuration read from a pod annotation, which is deprecated and will be removed in 4.0.0; "+
+				"move it to spec.unverifiedUserAnnotations", "annotation", key)
+		}
 	}
-	value, ok := podAnnotation(r.pod, key)
-	if ok {
-		r.logger.Info("certificate configuration read from a pod annotation, which is deprecated and will be removed in 4.0.0; "+
-			"move it to spec.unverifiedUserAnnotations", "annotation", key)
-	}
-	return value, ok
-}
-
-// value looks up a configuration value and expands ${...} placeholders in it
-// from the apiserver-verified fields of the request.
-func (r *annotationResolver) value(suffix string) (string, bool, error) {
-	raw, ok := r.lookup(suffix)
 	if !ok {
 		return "", false, nil
+	}
+	if value == "" {
+		return "", true, r.annotationError(suffix, errors.New("must not be empty"))
+	}
+	return value, true, nil
+}
+
+// value resolves a configuration value and expands ${...} placeholders in it
+// from the apiserver-verified fields of the request.
+func (r *annotationResolver) value(suffix AnnotationSuffix) (string, bool, error) {
+	raw, ok, err := r.rawValue(suffix)
+	if err != nil || !ok {
+		return "", ok, err
 	}
 	expanded, err := interpolate(raw, r.vars, r.opts.EnableInterpolation)
 	if err != nil {
@@ -158,7 +167,7 @@ func (r *annotationResolver) value(suffix string) (string, bool, error) {
 }
 
 // annotationError names the annotation an error came from.
-func (r *annotationResolver) annotationError(suffix string, err error) error {
+func (r *annotationResolver) annotationError(suffix AnnotationSuffix, err error) error {
 	return fmt.Errorf("annotation %q: %w", annotationKey(r.signerName, suffix), err)
 }
 
@@ -169,8 +178,8 @@ func (r *annotationResolver) commonName(def string) (string, error) {
 	if err != nil || !ok {
 		return def, err
 	}
-	if err := assertVerifiedIdentities("common name", []string{cn}, r.verified); err != nil {
-		return "", err
+	if err := validateVerifiedIdentities("common name", []string{cn}, r.verified); err != nil {
+		return "", r.annotationError(AnnotationSuffixCN, err)
 	}
 	return cn, nil
 }
@@ -179,60 +188,66 @@ func (r *annotationResolver) commonName(def string) (string, error) {
 // DNS SANs, validates the selected names, and, when identity constraints are
 // enforced, verifies each name against the pod's identity.
 func (r *annotationResolver) dnsNames(defaults []string) ([]string, error) {
-	san, ok, err := r.value(AnnotationSuffixSAN)
+	san, fromAnnotation, err := r.value(AnnotationSuffixSAN)
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		if r.opts.HonorCSRSANs && len(r.csr.DNSNames) > 0 {
-			if err := validateDNSNames(r.csr.DNSNames); err != nil {
-				return nil, err
-			}
-			// CSR-requested SANs are attacker-influenced just like annotation
-			// values, so they must clear the same verified-identity allowlist.
-			if err := assertVerifiedIdentities("CSR DNS name", r.csr.DNSNames, r.verified); err != nil {
-				return nil, err
-			}
-			return r.csr.DNSNames, nil
+
+	// Select the source, then hold every source to the same two checks. Each
+	// source labels its errors so a denial names what the requester must fix.
+	var names []string
+	var attribute func(error) error
+	switch {
+	case fromAnnotation:
+		names = splitAndTrim(san)
+		attribute = func(err error) error { return r.annotationError(AnnotationSuffixSAN, err) }
+		if len(names) == 0 {
+			return nil, attribute(errors.New("contains no DNS names"))
 		}
-		if err := validateDNSNames(defaults); err != nil {
-			return nil, err
-		}
-		return defaults, nil
+	case r.opts.HonorCSRSANs && len(r.csr.DNSNames) > 0:
+		// CSR-requested SANs are attacker-influenced just like annotation
+		// values, so they clear the same verified-identity allowlist.
+		names = r.csr.DNSNames
+		attribute = func(err error) error { return fmt.Errorf("CSR DNS names: %w", err) }
+	default:
+		// The defaults are the signer's own verified forms, so they always
+		// clear the allowlist; the syntax check still applies.
+		names = defaults
+		attribute = func(err error) error { return err }
 	}
-	names := splitAndTrim(san)
-	if len(names) == 0 {
-		return nil, r.annotationError(AnnotationSuffixSAN, errors.New("contains no DNS names"))
-	}
+
 	if err := validateDNSNames(names); err != nil {
-		return nil, err
+		return nil, attribute(err)
 	}
-	if err := assertVerifiedIdentities("DNS name", names, r.verified); err != nil {
-		return nil, err
+	if err := validateVerifiedIdentities("DNS name", names, r.verified); err != nil {
+		return nil, attribute(err)
 	}
 	return names, nil
 }
 
+// errUnverifiedIPSAN states the one IP SAN policy: an IP has no verified
+// derivation from the request fields, so whichever source asks for one is
+// denied unless unverified identities are allowed.
+var errUnverifiedIPSAN = errors.New("IP SANs are not derived from a verified pod identity and are denied; start the controller with --allow-unverified-identities to allow them")
+
 // ipAddresses applies the ip-san-annotation > CSR-requested > none precedence
-// for IP SANs. An IP has no verified derivation from the request fields, so
-// both sources are denied unless unverified identities are allowed.
+// for IP SANs, under errUnverifiedIPSAN.
 func (r *annotationResolver) ipAddresses() ([]net.IP, error) {
-	ipSAN, ok := r.lookup(AnnotationSuffixIPSAN)
+	ipSAN, ok, err := r.value(AnnotationSuffixIPSAN)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		if r.opts.HonorCSRSANs && len(r.csr.IPAddresses) > 0 {
 			if r.verified != nil {
-				return nil, errors.New("CSR IP SANs are not derived from a verified pod identity and are denied; start the controller with --allow-unverified-identities to allow them")
+				return nil, fmt.Errorf("CSR %w", errUnverifiedIPSAN)
 			}
 			return r.csr.IPAddresses, nil
 		}
 		return nil, nil
 	}
 	if r.verified != nil {
-		return nil, r.annotationError(AnnotationSuffixIPSAN, errors.New("IP SANs are not derived from a verified pod identity and are denied; start the controller with --allow-unverified-identities to allow them"))
-	}
-	ipSAN, err := interpolate(ipSAN, r.vars, r.opts.EnableInterpolation)
-	if err != nil {
-		return nil, r.annotationError(AnnotationSuffixIPSAN, err)
+		return nil, r.annotationError(AnnotationSuffixIPSAN, errUnverifiedIPSAN)
 	}
 	ips, err := parseIPs(ipSAN)
 	if err != nil {
@@ -270,15 +285,15 @@ func (r *annotationResolver) uris() ([]*url.URL, error) {
 	for _, uri := range parsed {
 		literals = append(literals, uri.String())
 	}
-	if err := assertVerifiedIdentities("URI", literals, r.verified); err != nil {
-		return nil, err
+	if err := validateVerifiedIdentities("URI", literals, r.verified); err != nil {
+		return nil, r.annotationError(AnnotationSuffixURIs, err)
 	}
 	return parsed, nil
 }
 
 // duration resolves a duration-valued annotation (duration, refresh), falling
 // back to def when it is absent.
-func (r *annotationResolver) duration(suffix string, def time.Duration) (time.Duration, error) {
+func (r *annotationResolver) duration(suffix AnnotationSuffix, def time.Duration) (time.Duration, error) {
 	value, ok, err := r.value(suffix)
 	if err != nil || !ok {
 		return def, err

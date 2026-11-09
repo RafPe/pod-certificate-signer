@@ -308,12 +308,12 @@ func expectTerminalConditionStable(ref podRef, want metav1.Condition) {
 	}).Should(Succeed())
 
 	By("nudging the controller to reconcile the terminal request once more")
-	before := controllerLogLineCount(requestName, "PodCertificateRequest is immutable")
+	before := controllerLogLineCount(requestName, terminalRequestLine)
 	annotateReconcileNudge(ref.namespace, requestName)
 
 	By("waiting for the controller to observe the nudged request")
 	Eventually(func() int {
-		return controllerLogLineCount(requestName, "PodCertificateRequest is immutable")
+		return controllerLogLineCount(requestName, terminalRequestLine)
 	}, time.Minute).Should(BeNumerically(">", before),
 		"the annotation must produce a further reconcile of request %s, otherwise this proves nothing", requestName)
 

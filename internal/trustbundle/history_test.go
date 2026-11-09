@@ -15,7 +15,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/signer"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
 )
 
@@ -139,7 +138,7 @@ func TestFetchPreviousCAsParsesExistingBundle(t *testing.T) {
 	}
 
 	bundle := &certificatesv1.ClusterTrustBundle{
-		ObjectMeta: metav1.ObjectMeta{Name: signer.ClusterTrustBundleName(testSignerName)},
+		ObjectMeta: metav1.ObjectMeta{Name: Name(testSignerName)},
 		Spec: certificatesv1.ClusterTrustBundleSpec{
 			SignerName:  testSignerName,
 			TrustBundle: string(ca.CertPEM),
@@ -164,7 +163,7 @@ func TestFetchPreviousCAsParsesExistingBundle(t *testing.T) {
 // silently shortened history would be written back on the next publish.
 func TestFetchPreviousCAsCorruptCertificateFailsClosed(t *testing.T) {
 	bundle := &certificatesv1.ClusterTrustBundle{
-		ObjectMeta: metav1.ObjectMeta{Name: signer.ClusterTrustBundleName(testSignerName)},
+		ObjectMeta: metav1.ObjectMeta{Name: Name(testSignerName)},
 		Spec: certificatesv1.ClusterTrustBundleSpec{
 			SignerName:  testSignerName,
 			TrustBundle: "-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n",

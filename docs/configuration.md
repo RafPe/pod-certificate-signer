@@ -163,10 +163,22 @@ The same items (`cn`/`san`/`ip-san`/`eku`/`uris`/`duration`/`refresh`) can be
 set as pod [`annotations`](https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/)
 with the same `<signer>/<name>-<item>` keys, e.g.
 `coolcert.example.com/foo-cn: some-name.example.com`. This path predates
-`userAnnotations` and is kept only for compatibility. It is validated like the
-request path: a pod annotation that carries the signer's prefix but is not one
-of the items above denies the request, exactly as the same key would on
-`unverifiedUserAnnotations`.
+`userAnnotations` and is kept only for compatibility. Values read from it are
+validated like request values, and an item present with an empty value is
+denied rather than ignored, but unknown keys are ignored rather than denied:
+pod annotations are shared with every other consumer of the pod, and a
+signer-name prefix cannot tell a typo from the key of a sibling signer whose
+name extends this one (a signer `example.org/signer` would otherwise see
+`example.org/signer-x-cn`, belonging to `example.org/signer-x`, as an unknown
+item). A misspelled pod annotation therefore falls back to the default; use
+`unverifiedUserAnnotations`, where unknown keys deny the request.
+
+Operators who have moved every workload to `unverifiedUserAnnotations` can
+close the fallback now with `--allow-pod-annotations=false` (Helm:
+`signer.allow_pod_annotations: false`), so pod annotations stop being a second
+requester-controlled input. The flag defaults to `true` until 4.0.0 removes the
+fallback. An item that is present on the request with an empty value is a
+misconfiguration and denies the request rather than falling back to the pod.
 
 ## Identity constraints
 
@@ -210,8 +222,8 @@ admission time, which pods may set signer-prefixed `userAnnotations`:
 
 - `cn`, `san`, `ip-san` and `uris` claim an identity, so they are rejected unless
   the pod's namespace carries an allowlist label — on the deprecated pod
-  `annotations` path too, which no flag disables and which would otherwise be an
-  open bypass;
+  `annotations` path too, which is on by default and would otherwise be an open
+  bypass (`--allow-pod-annotations=false` closes it at the signer instead);
 - `eku`, `duration` and `refresh` only shape a certificate the pod is already
   entitled to, so any namespace may set them;
 - any other key using the signer's prefix is rejected as a typo.
@@ -292,6 +304,10 @@ The controller performs these validations by default:
 The chart renders these from Helm values; you rarely set them directly.
 
 ```
+  -allow-pod-annotations
+        Fall back to the pod's own annotations for items the request's
+        userAnnotations do not carry. Deprecated; removed in 4.0.0. On by
+        default until then; set false to close the pod-annotation path.
   -allow-unverified-identities
         Allow cn/san/ip-san/uris values that do not resolve to the pod's verified
         identity. Off by default.
@@ -306,7 +322,7 @@ The chart renders these from Helm values; you rarely set them directly.
   -honor-csr-sans             Honor DNS/IP SANs from the kubelet PKCS#10 CSR.
   -kubeconfig string          Kubeconfig path; only for out-of-cluster runs.
   -leader-elect               Enable leader election.
-  -leader-election-id string  Leader-election ConfigMap name (default "pcs-leader-election").
+  -leader-election-id string  Leader-election Lease name (default "pcs-leader-election").
   -leader-election-namespace string   Leader-election namespace (default: pod's namespace).
   -max-concurrent-reconciles int      Max concurrent reconciles (default 5).
   -max-previous-ca-certs int  Previous CAs retained across rotation (default 2).
@@ -316,6 +332,10 @@ The chart renders these from Helm values; you rarely set them directly.
         (SubjectAccessReview) for every scrape. On by default; set false for the
         legacy unauthenticated plaintext endpoint.
   -reconcile-timeout duration Per-reconcile timeout (default 5m0s).
+  -require-ca-history
+        Refuse to start when the signer's ClusterTrustBundle does not exist,
+        instead of starting with an empty previous-CA history. Off by default;
+        turn it on once the bundle has been published (see ADR-0004).
   -signer-name string         Only sign requests with this .spec.signerName. Required.
   -zap-* ...                  Standard zap logging flags (encoder, level, time encoding).
 ```

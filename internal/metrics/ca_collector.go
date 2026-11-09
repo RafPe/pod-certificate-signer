@@ -53,7 +53,7 @@ func NewCACollector(ca CAState) prometheus.Collector {
 		lastSuccess: prometheus.NewDesc(
 			prometheus.BuildFQName(Namespace, "", "ca_reload_last_success_timestamp_seconds"),
 			"When the CA was last read successfully, as a Unix timestamp. Seeded at startup from the initial load. "+
-				"time() minus this exceeding the 60s reconcile interval by a margin means the reload loop has stopped, "+
+				"time() minus this exceeding the 60s reload interval by a margin means the reload loop has stopped, "+
 				"which no failure-based signal can show.",
 			nil, nil),
 		expiration: prometheus.NewDesc(

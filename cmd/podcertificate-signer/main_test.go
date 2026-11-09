@@ -13,6 +13,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
+
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
 )
 
 // An empty --signer-name must be rejected fast, before the controller attempts
@@ -49,7 +51,7 @@ func TestValidateFlagsRejectsInvalidClusterFQDN(t *testing.T) {
 // cluster-wide pod informer wastes memory and forces list/watch RBAC the
 // controller does not otherwise need.
 func TestManagerOptionsDisablesPodCache(t *testing.T) {
-	opts := managerOptions(k8sruntime.NewScheme(), managerConfig{baseContext: context.Background()})
+	opts := managerOptions(k8sruntime.NewScheme(), context.Background(), managerConfig{})
 
 	if opts.Client.Cache == nil {
 		t.Fatal("Client.Cache is nil, want pod caching disabled via DisableFor")
@@ -72,7 +74,7 @@ func TestManagerOptionsDisablesPodCache(t *testing.T) {
 // assertion an edit to the options literal could revert the decision silently
 // (docs/adr/0006-release-leader-lease-on-cancel.md).
 func TestManagerOptionsReleasesLeaseOnCancel(t *testing.T) {
-	opts := managerOptions(k8sruntime.NewScheme(), managerConfig{baseContext: context.Background()})
+	opts := managerOptions(k8sruntime.NewScheme(), context.Background(), managerConfig{})
 
 	if !opts.LeaderElectionReleaseOnCancel {
 		t.Error("LeaderElectionReleaseOnCancel = false, want true: " +
@@ -86,10 +88,7 @@ func TestManagerOptionsReleasesLeaseOnCancel(t *testing.T) {
 // SubjectAccessReview filter) and to serve over HTTPS. This is the behaviour
 // that rejects an unauthenticated scrape.
 func TestManagerOptionsSecuresMetrics(t *testing.T) {
-	opts := managerOptions(k8sruntime.NewScheme(), managerConfig{
-		baseContext:   context.Background(),
-		metricsSecure: true,
-	})
+	opts := managerOptions(k8sruntime.NewScheme(), context.Background(), managerConfig{metricsSecure: true})
 
 	if !opts.Metrics.SecureServing {
 		t.Error("Metrics.SecureServing = false, want true so the endpoint is served over HTTPS")
@@ -103,10 +102,7 @@ func TestManagerOptionsSecuresMetrics(t *testing.T) {
 // hatch turns the auth filter and HTTPS off, restoring the legacy plaintext,
 // unauthenticated metrics endpoint for operators who opt into it.
 func TestManagerOptionsInsecureMetricsEscapeHatch(t *testing.T) {
-	opts := managerOptions(k8sruntime.NewScheme(), managerConfig{
-		baseContext:   context.Background(),
-		metricsSecure: false,
-	})
+	opts := managerOptions(k8sruntime.NewScheme(), context.Background(), managerConfig{metricsSecure: false})
 
 	if opts.Metrics.SecureServing {
 		t.Error("Metrics.SecureServing = true, want false when the insecure escape hatch is set")
@@ -173,6 +169,7 @@ func TestChartSecurityDefaultsMatchBinary(t *testing.T) {
 		Signer struct {
 			EnableAnnotationInterpolation *bool `json:"enable_annotation_interpolation"`
 			AllowUnverifiedIdentities     *bool `json:"allow_unverified_identities"`
+			AllowPodAnnotations           *bool `json:"allow_pod_annotations"`
 		} `json:"signer"`
 		Metrics struct {
 			Insecure *bool `json:"insecure"`
@@ -189,6 +186,7 @@ func TestChartSecurityDefaultsMatchBinary(t *testing.T) {
 	}{
 		{"signer.enable_annotation_interpolation", values.Signer.EnableAnnotationInterpolation, defaultEnableAnnotationInterpolation},
 		{"signer.allow_unverified_identities", values.Signer.AllowUnverifiedIdentities, defaultAllowUnverifiedIdentities},
+		{"signer.allow_pod_annotations", values.Signer.AllowPodAnnotations, defaultAllowPodAnnotations},
 		// metrics.insecure is the inverse of --metrics-secure.
 		{"metrics.insecure", values.Metrics.Insecure, !defaultMetricsSecure},
 	}
@@ -218,11 +216,15 @@ func TestRegisterFlagsDefaults(t *testing.T) {
 		got  bool
 		want bool
 	}{
-		{"enable-annotation-interpolation", f.certificate.EnableInterpolation, defaultEnableAnnotationInterpolation},
-		{"allow-unverified-identities", f.certificate.AllowUnverifiedIdentities, defaultAllowUnverifiedIdentities},
-		{"metrics-secure", f.metricsSecure, defaultMetricsSecure},
+		{"enable-annotation-interpolation", f.certOpts.EnableInterpolation, defaultEnableAnnotationInterpolation},
+		{"allow-unverified-identities", f.certOpts.AllowUnverifiedIdentities, defaultAllowUnverifiedIdentities},
+		{"metrics-secure", f.manager.metricsSecure, defaultMetricsSecure},
+		{"allow-pod-annotations", f.certOpts.AllowPodAnnotations, defaultAllowPodAnnotations},
 		// Kubelet CSR SANs are opt-in.
-		{"honor-csr-sans", f.certificate.HonorCSRSANs, false},
+		{"honor-csr-sans", f.certOpts.HonorCSRSANs, false},
+	}
+	if f.certOpts.ClusterFQDN != podcertificate.DefaultClusterFQDN {
+		t.Errorf("--cluster-fqdn defaults to %q, want %q", f.certOpts.ClusterFQDN, podcertificate.DefaultClusterFQDN)
 	}
 	for _, d := range defaults {
 		if d.got != d.want {

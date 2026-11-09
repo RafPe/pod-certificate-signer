@@ -1,4 +1,4 @@
-package signer
+package trustbundle
 
 import (
 	"strings"
@@ -9,9 +9,18 @@ import (
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
 )
 
-// ClusterTrustBundle must derive the resource from the signer name and embed
-// the full CA trust bundle, including previously known CAs.
-func TestClusterTrustBundleObject(t *testing.T) {
+// Name must follow the <domain>:<path>:<name> convention.
+func TestName(t *testing.T) {
+	got := Name("example.org/signer")
+	want := "example.org:signer:bundle"
+	if got != want {
+		t.Fatalf("Name = %q, want %q", got, want)
+	}
+}
+
+// desiredBundle must derive the resource from the signer name and embed the full CA
+// trust bundle, including previously known CAs.
+func TestDesiredBundle(t *testing.T) {
 	dir := t.TempDir()
 	kp, err := testutil.NewCA("ca.example.org", 24*time.Hour)
 	if err != nil {
@@ -26,12 +35,7 @@ func TestClusterTrustBundleObject(t *testing.T) {
 		t.Fatalf("authority.New: %v", err)
 	}
 
-	s, err := New("example.org/signer", ca)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	bundle := s.ClusterTrustBundle()
+	bundle := desiredBundle("example.org/signer", ca)
 	if bundle.Name != "example.org:signer:bundle" {
 		t.Errorf("Name = %q, want example.org:signer:bundle", bundle.Name)
 	}
@@ -43,15 +47,5 @@ func TestClusterTrustBundleObject(t *testing.T) {
 	}
 	if !strings.Contains(bundle.Spec.TrustBundle, string(kp.CertPEM)) {
 		t.Error("TrustBundle must contain the CA certificate")
-	}
-}
-
-// New must reject incomplete input.
-func TestNewValidatesInput(t *testing.T) {
-	if _, err := New("", nil); err == nil {
-		t.Error("want error for empty signer name")
-	}
-	if _, err := New("example.org/signer", nil); err == nil {
-		t.Error("want error for nil CA")
 	}
 }

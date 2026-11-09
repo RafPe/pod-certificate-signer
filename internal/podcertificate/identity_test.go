@@ -44,7 +44,7 @@ func TestUnverifiedIdentitiesDeniedByDefault(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			pcr := verifiedPCR(tc.annotations)
-			if _, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, tc.opts); err == nil {
+			if _, err := NewConfig(context.Background(), pcr, testPod(nil), nil, tc.opts); err == nil {
 				t.Fatalf("want denial for unverified identity %v, got nil", tc.annotations)
 			}
 		})
@@ -59,9 +59,9 @@ func TestVerifiedIdentitiesAccepted(t *testing.T) {
 		testSignerName + "-san": "${pod.serviceAccountName}.${pod.namespace}",
 	})
 
-	config, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true})
+	config, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true})
 	if err != nil {
-		t.Fatalf("NewPodCertificateConfig: %v", err)
+		t.Fatalf("NewConfig: %v", err)
 	}
 	if config.CommonName != "mypod" {
 		t.Errorf("CommonName = %q, want verified pod name", config.CommonName)
@@ -77,12 +77,12 @@ func TestVerifiedIdentitiesAccepted(t *testing.T) {
 func TestNodeAndUIDNotClaimable(t *testing.T) {
 	pcr := verifiedPCR(map[string]string{testSignerName + "-cn": "${node.name}"})
 	pcr.Spec.NodeName = "node-1"
-	if _, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true}); err == nil {
+	if _, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true}); err == nil {
 		t.Error("want denial for cn=${node.name}, got nil")
 	}
 
 	pcr = verifiedPCR(map[string]string{testSignerName + "-cn": "${pod.uid}"})
-	if _, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true}); err == nil {
+	if _, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true}); err == nil {
 		t.Error("want denial for cn=${pod.uid}, got nil")
 	}
 }
@@ -108,7 +108,7 @@ func TestServiceAccountServiceDNSFormsDenied(t *testing.T) {
 	} {
 		t.Run(san, func(t *testing.T) {
 			pcr := verifiedPCR(map[string]string{testSignerName + "-san": san})
-			if _, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true}); err == nil {
+			if _, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true}); err == nil {
 				t.Fatalf("want denial for san=%q, got nil", san)
 			}
 		})
@@ -125,9 +125,9 @@ func TestServiceAccountSPIFFEIDAccepted(t *testing.T) {
 		testSignerName + "-uris": "spiffe://${cluster.fqdn}/ns/${pod.namespace}/sa/${pod.serviceAccountName}",
 	})
 
-	config, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true})
+	config, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true})
 	if err != nil {
-		t.Fatalf("NewPodCertificateConfig: %v", err)
+		t.Fatalf("NewConfig: %v", err)
 	}
 	if len(config.URIs) != 1 || config.URIs[0].String() != "spiffe://cluster.local/ns/myns/sa/mysa" {
 		t.Errorf("URIs = %v, want the service-account SPIFFE ID", config.URIs)
@@ -151,9 +151,9 @@ func TestPodServiceDNSFormsAccepted(t *testing.T) {
 	} {
 		t.Run(san, func(t *testing.T) {
 			pcr := verifiedPCR(map[string]string{testSignerName + "-san": san})
-			config, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true})
+			config, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true})
 			if err != nil {
-				t.Fatalf("NewPodCertificateConfig(san=%q): %v", san, err)
+				t.Fatalf("NewConfig(san=%q): %v", san, err)
 			}
 			if len(config.DNSNames) != 1 || config.DNSNames[0] != want {
 				t.Errorf("DNSNames = %v, want [%s]", config.DNSNames, want)
@@ -165,18 +165,18 @@ func TestPodServiceDNSFormsAccepted(t *testing.T) {
 // (3): The default extended key usage must be ServerAuth only; ClientAuth is an
 // explicit opt-in via the eku annotation.
 func TestDefaultEKUServerAuthOnly(t *testing.T) {
-	config, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(nil), nil, Options{})
+	config, err := NewConfig(context.Background(), testPCR(nil), testPod(nil), nil, Options{})
 	if err != nil {
-		t.Fatalf("NewPodCertificateConfig: %v", err)
+		t.Fatalf("NewConfig: %v", err)
 	}
 	want := []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
 	if !reflect.DeepEqual(config.ExtKeyUsage, want) {
 		t.Errorf("default ExtKeyUsage = %v, want ServerAuth only %v", config.ExtKeyUsage, want)
 	}
 
-	optIn, err := NewPodCertificateConfig(context.Background(), testPCR(map[string]string{testSignerName + "-eku": "client"}), testPod(nil), nil, Options{})
+	optIn, err := NewConfig(context.Background(), testPCR(map[string]string{testSignerName + "-eku": "client"}), testPod(nil), nil, Options{})
 	if err != nil {
-		t.Fatalf("NewPodCertificateConfig: %v", err)
+		t.Fatalf("NewConfig: %v", err)
 	}
 	if !reflect.DeepEqual(optIn.ExtKeyUsage, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}) {
 		t.Errorf("opt-in ExtKeyUsage = %v, want ClientAuth", optIn.ExtKeyUsage)
@@ -187,8 +187,8 @@ func TestDefaultEKUServerAuthOnly(t *testing.T) {
 // truncated, collision-prone default SAN. At 64 characters the common name still
 // carries the identity, so the certificate issues with no default DNS SANs. Past
 // the 64-character CN limit as well, with no annotation to supply an identity,
-// the configuration is denied at validation rather than issued without a
-// verifiable subject.
+// the configuration is denied rather than issued without a verifiable subject,
+// and the denial says why the default SANs were dropped.
 func TestLongPodNameIdentityFallback(t *testing.T) {
 	t.Run("64 chars: CN carries identity, config validates", func(t *testing.T) {
 		name := strings.Repeat("a", 64)
@@ -197,9 +197,9 @@ func TestLongPodNameIdentityFallback(t *testing.T) {
 		pcr := testPCR(nil)
 		pcr.Spec.PodName = name
 
-		config, err := NewPodCertificateConfig(context.Background(), pcr, pod, nil, Options{})
+		config, err := NewConfig(context.Background(), pcr, pod, nil, Options{})
 		if err != nil {
-			t.Fatalf("NewPodCertificateConfig: %v", err)
+			t.Fatalf("NewConfig: %v", err)
 		}
 		if config.CommonName != name {
 			t.Errorf("CommonName = %q, want the 64-char pod name", config.CommonName)
@@ -207,27 +207,21 @@ func TestLongPodNameIdentityFallback(t *testing.T) {
 		if len(config.DNSNames) != 0 {
 			t.Errorf("DNSNames = %v, want none for an over-long label", config.DNSNames)
 		}
-		if err := config.Validate(); err != nil {
-			t.Errorf("Validate() = %v, want nil (the CN carries the identity)", err)
-		}
 	})
 
-	t.Run("65 chars, no annotation: denied at validation", func(t *testing.T) {
+	t.Run("65 chars, no annotation: denied, with the reason", func(t *testing.T) {
 		name := strings.Repeat("a", 65)
 		pod := testPod(nil)
 		pod.Name = name
 		pcr := testPCR(nil)
 		pcr.Spec.PodName = name
 
-		config, err := NewPodCertificateConfig(context.Background(), pcr, pod, nil, Options{})
-		if err != nil {
-			t.Fatalf("NewPodCertificateConfig: %v", err)
+		_, err := NewConfig(context.Background(), pcr, pod, nil, Options{})
+		if err == nil {
+			t.Fatal("NewConfig() error = nil, want a denial when there is neither a CN nor a SAN")
 		}
-		if config.CommonName != "" {
-			t.Errorf("CommonName = %q, want empty for a pod name over the CN limit", config.CommonName)
-		}
-		if err := config.Validate(); err == nil {
-			t.Error("Validate() = nil, want denial when there is neither a CN nor a SAN")
+		if !strings.Contains(err.Error(), "DNS label limit") {
+			t.Errorf("denial = %q, want it to say why the default DNS SANs were dropped", err)
 		}
 	})
 }
@@ -246,7 +240,8 @@ func TestLongPodNameOmitsDefaultDNSSANs(t *testing.T) {
 	}{
 		{"exactly 63 chars kept", strings.Repeat("a", 63), true, false},
 		{"64 chars omitted", strings.Repeat("a", 64), false, true},
-		{"65 chars omitted", strings.Repeat("a", 65), false, true},
+		// 65 characters is also over the CN limit, so with no SAN annotation
+		// the request is denied; TestLongPodNameIdentityFallback covers it.
 		{"multi-label within limit kept", strings.Repeat("a", 40) + "." + strings.Repeat("b", 40), true, false},
 	}
 	for _, tc := range cases {
@@ -256,9 +251,9 @@ func TestLongPodNameOmitsDefaultDNSSANs(t *testing.T) {
 			pcr := testPCR(nil)
 			pcr.Spec.PodName = tc.podName
 
-			config, err := NewPodCertificateConfig(context.Background(), pcr, pod, nil, Options{})
+			config, err := NewConfig(context.Background(), pcr, pod, nil, Options{})
 			if err != nil {
-				t.Fatalf("NewPodCertificateConfig: %v", err)
+				t.Fatalf("NewConfig: %v", err)
 			}
 			// Whatever survives must be a valid label - no empty or >63 label.
 			for _, dns := range config.DNSNames {
@@ -289,14 +284,14 @@ func TestLongPodNameOmitsDefaultDNSSANs(t *testing.T) {
 // pod's certificate impersonate the other. Each simply gets no default DNS SANs.
 func TestLongPodNameNoDefaultSANCollision(t *testing.T) {
 	prefix := strings.Repeat("a", 63)
-	build := func(podName string) *PodCertificateConfig {
+	build := func(podName string) *Config {
 		pod := testPod(nil)
 		pod.Name = podName
 		pcr := testPCR(nil)
 		pcr.Spec.PodName = podName
-		config, err := NewPodCertificateConfig(context.Background(), pcr, pod, nil, Options{})
+		config, err := NewConfig(context.Background(), pcr, pod, nil, Options{})
 		if err != nil {
-			t.Fatalf("NewPodCertificateConfig(%q): %v", podName, err)
+			t.Fatalf("NewConfig(%q): %v", podName, err)
 		}
 		return config
 	}

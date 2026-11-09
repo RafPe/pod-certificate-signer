@@ -17,13 +17,13 @@ import (
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
 )
 
-func testConfig(t *testing.T) *podcertificate.PodCertificateConfig {
+func testConfig(t *testing.T) *podcertificate.Config {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate leaf key: %v", err)
 	}
-	return &podcertificate.PodCertificateConfig{
+	return &podcertificate.Config{
 		CommonName:         "mypod",
 		DNSNames:           []string{"mypod.myns.svc.cluster.local"},
 		Duration:           time.Hour,
@@ -49,7 +49,7 @@ func TestSignIssuesCertificateChain(t *testing.T) {
 		t.Fatalf("Sign: %v", err)
 	}
 
-	chain := parseChain(t, []byte(pc.CertificateChain()))
+	chain := parseChain(t, []byte(pc.CertificateChain))
 	if len(chain) != 2 {
 		t.Fatalf("chain has %d certificates, want leaf + CA", len(chain))
 	}
@@ -72,16 +72,16 @@ func TestSignIssuesCertificateChain(t *testing.T) {
 	}
 
 	// x509 encodes validity with one-second resolution, so compare truncated.
-	if !pc.NotBefore().Truncate(time.Second).Equal(leaf.NotBefore) ||
-		!pc.NotAfter().Truncate(time.Second).Equal(leaf.NotAfter) {
+	if !pc.NotBefore.Truncate(time.Second).Equal(leaf.NotBefore) ||
+		!pc.NotAfter.Truncate(time.Second).Equal(leaf.NotAfter) {
 		t.Error("PodCertificate validity must match the leaf certificate")
 	}
 	if got := leaf.NotAfter.Sub(leaf.NotBefore); got != config.Duration {
 		t.Errorf("lifetime = %v, want %v", got, config.Duration)
 	}
 	now := time.Now()
-	if !now.After(pc.NotBefore()) || !now.Before(pc.NotAfter()) {
-		t.Errorf("freshly issued certificate validity [%v, %v] must include now", pc.NotBefore(), pc.NotAfter())
+	if !now.After(pc.NotBefore) || !now.Before(pc.NotAfter) {
+		t.Errorf("freshly issued certificate validity [%v, %v] must include now", pc.NotBefore, pc.NotAfter)
 	}
 }
 
@@ -105,7 +105,7 @@ func TestSignAssertsBasicConstraintsCAFalse(t *testing.T) {
 		t.Fatalf("Sign: %v", err)
 	}
 
-	leaf := parseChain(t, []byte(pc.CertificateChain()))[0]
+	leaf := parseChain(t, []byte(pc.CertificateChain))[0]
 
 	if !leaf.BasicConstraintsValid {
 		t.Error("issued leaf must carry the basicConstraints extension")
@@ -156,7 +156,7 @@ func TestSignIncludesIPAddresses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	leaf := parseChain(t, []byte(pc.CertificateChain()))[0]
+	leaf := parseChain(t, []byte(pc.CertificateChain))[0]
 	if len(leaf.IPAddresses) != 1 || !leaf.IPAddresses[0].Equal(config.IPAddresses[0]) {
 		t.Errorf("leaf IPAddresses = %v, want %v", leaf.IPAddresses, config.IPAddresses)
 	}
@@ -178,7 +178,7 @@ func TestSignHonorsExtKeyUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	leaf := parseChain(t, []byte(pc.CertificateChain()))[0]
+	leaf := parseChain(t, []byte(pc.CertificateChain))[0]
 	if len(leaf.ExtKeyUsage) != 1 || leaf.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
 		t.Errorf("leaf ExtKeyUsage = %v, want [ClientAuth] only", leaf.ExtKeyUsage)
 	}

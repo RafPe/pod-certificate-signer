@@ -15,94 +15,65 @@
 //
 // The declarations live in their own package rather than in package main so
 // that internal/controller, internal/authority and internal/trustbundle can
-// all increment without an import cycle.
+// all increment without an import cycle. The request-outcome vocabulary the
+// labels carry is not telemetry's to own; it lives in internal/outcome.
+//
+// The counters are process-global. A test that asserts on one must snapshot
+// it before the action and compare the delta after, and the tests of one
+// package must not run in parallel with each other, since two tests moving
+// the same counter cannot tell their increments apart.
 package metrics
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
-	certificatesv1 "k8s.io/api/certificates/v1"
+
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/outcome"
 )
 
 // Namespace prefixes every metric this package declares. It is the application
 // name with its separators removed, following cert-manager's certmanager_.
 const Namespace = "podcertificatesigner"
 
-// Result values for the ClusterTrustBundle publish counter. The first three are
-// controller-runtime's CreateOrPatch outcomes, which are a closed set of Go
-// constants; the fourth is ours.
-const (
-	ResultUnchanged = "unchanged"
-	ResultCreated   = "created"
-	ResultUpdated   = "updated"
-	ResultFailed    = "failed"
-
-	// ResultChanged is the CA reload counter's third value: the material on
-	// disk differed from what was loaded, i.e. a rotation actually took.
-	ResultChanged = "changed"
-)
-
-// Outcome values for the terminal-outcome counter. They name what happened to
-// the request, not which condition type carried it, so an outcome stays
-// aggregatable if the API ever grows a fourth condition.
-const (
-	OutcomeIssued = "issued"
-	OutcomeDenied = "denied"
-	OutcomeFailed = "failed"
-)
-
-// Reason identifies why a PodCertificateRequest ended up where it did: the
-// reason written onto its terminal condition, or the event-only outcome of a
-// requeue or a drop.
-//
-// The terminal ones are the certificates API's own condition reasons, spelled
-// exactly as they are written onto the object, so a value read off a graph
-// greps identically against `kubectl get podcertificaterequest -o yaml`. The
-// requeue and drop reasons name conditions the API has no vocabulary for, so
-// the signer defines them; they are still a closed set declared here, never a
-// passthrough of an error string. They are declared in this package, the leaf
-// of the import graph, so the controller that writes them and the metrics
-// that count them share one definition.
-type Reason string
+// ReloadResult is the value of the result label on the CA reload counter.
+type ReloadResult string
 
 const (
-	ReasonCertificateIssued  Reason = "CertificateIssued"
-	ReasonUnsupportedKeyType Reason = Reason(certificatesv1.PodCertificateRequestConditionUnsupportedKeyType)
-	ReasonInvalidUserConfig  Reason = Reason(certificatesv1.PodCertificateRequestConditionInvalidUserConfig)
-	ReasonSigningFailed      Reason = "SigningFailed"
-
-	// ReasonCASignerUnusable is event-only and is deliberately never written as
-	// a condition: the CA cannot sign this request right now (it has expired,
-	// or its remaining validity is shorter than the requested lifetime), but a
-	// CA rotation can make the same request succeed, so the reconcile requeues
-	// rather than recording an outcome. Writing a condition would make the
-	// request immutable and turn a recoverable wait into a permanent failure.
-	ReasonCASignerUnusable Reason = "CASignerUnusable"
-	// ReasonTransient classifies every other requeue: an API read failure, a
-	// conflicted write. The controller's own retry loop is doing its job.
-	ReasonTransient Reason = "Transient"
-	// ReasonAssociatedPodGone is event-only and is never written as a
-	// condition: a request whose pod a live read confirms is gone (absent, or
-	// replaced by a different pod) is dropped, not failed.
-	ReasonAssociatedPodGone Reason = "AssociatedPodGone"
+	// ReloadChanged: the material on disk differed from what was loaded, i.e.
+	// a rotation actually took.
+	ReloadChanged   ReloadResult = "changed"
+	ReloadUnchanged ReloadResult = "unchanged"
+	ReloadFailed    ReloadResult = "failed"
 )
 
-// IssuanceOutcome is one outcome/reason pair the reconciler can record.
-type IssuanceOutcome struct {
-	Outcome string
-	Reason  Reason
+// PublishResult is the value of the result label on the ClusterTrustBundle
+// publish counter. The first three are controller-runtime's CreateOrPatch
+// outcomes, which are a closed set of Go constants; the fourth is ours.
+type PublishResult string
+
+const (
+	PublishUnchanged PublishResult = "unchanged"
+	PublishCreated   PublishResult = "created"
+	PublishUpdated   PublishResult = "updated"
+	PublishFailed    PublishResult = "failed"
+)
+
+// issuanceOutcome is one outcome/reason pair the reconciler can record.
+type issuanceOutcome struct {
+	kind   outcome.Kind
+	reason outcome.ConditionReason
 }
 
-// IssuanceOutcomes is every outcome/reason pair the reconciler can record, and
-// the only ones pre-initialised. It is hand-curated rather than derived from
+// issuanceOutcomes is every outcome/reason pair the reconciler can record, and
+// the only ones pre-initialized. It is hand-curated rather than derived from
 // the reason constants because they do not form a cross product: deriving the
 // table would ship a permanent zero series for pairs that cannot occur, which
 // is worse than no series at all - it makes an operator believe a category is
 // being watched.
-var IssuanceOutcomes = []IssuanceOutcome{
-	{OutcomeIssued, ReasonCertificateIssued},
-	{OutcomeDenied, ReasonUnsupportedKeyType},
-	{OutcomeDenied, ReasonInvalidUserConfig},
-	{OutcomeFailed, ReasonSigningFailed},
+var issuanceOutcomes = []issuanceOutcome{
+	{outcome.Issued, outcome.CertificateIssued},
+	{outcome.Denied, outcome.UnsupportedKeyType},
+	{outcome.Denied, outcome.InvalidUserConfig},
+	{outcome.Failed, outcome.SigningFailed},
 }
 
 // PodCertificateRequests counts terminal PodCertificateRequest outcomes (M1).
@@ -196,30 +167,30 @@ func Register(r prometheus.Registerer, extra ...prometheus.Collector) error {
 			return err
 		}
 	}
-	preInitialise()
+	preInitialize()
 
 	return nil
 }
 
-// preInitialise exports a zero for every series that can exist, so an alert
+// preInitialize exports a zero for every series that can exist, so an alert
 // written as rate(...) > 0 has a series to evaluate against from the first
 // scrape rather than from the first occurrence. Only combinations the code can
 // actually produce are listed: a permanent zero for an impossible one would be
 // worse than none at all.
 //
 // If a label's values cannot be enumerated here, the label was never bounded.
-func preInitialise() {
-	for _, result := range []string{ResultChanged, ResultUnchanged, ResultFailed} {
-		CAReloadAttempts.WithLabelValues(result)
+func preInitialize() {
+	for _, result := range []ReloadResult{ReloadChanged, ReloadUnchanged, ReloadFailed} {
+		CAReloadAttempts.WithLabelValues(string(result))
 	}
-	for _, pair := range IssuanceOutcomes {
-		PodCertificateRequests.WithLabelValues(pair.Outcome, string(pair.Reason))
+	for _, pair := range issuanceOutcomes {
+		PodCertificateRequests.WithLabelValues(string(pair.kind), string(pair.reason))
 	}
-	for _, reason := range []Reason{ReasonCASignerUnusable, ReasonTransient} {
+	for _, reason := range []outcome.EventReason{outcome.CASignerUnusable, outcome.Transient} {
 		PodCertificateRequestRequeues.WithLabelValues(string(reason))
 	}
-	PodCertificateRequestDrops.WithLabelValues(string(ReasonAssociatedPodGone))
-	for _, result := range []string{ResultUnchanged, ResultCreated, ResultUpdated, ResultFailed} {
-		ClusterTrustBundlePublishAttempts.WithLabelValues(result)
+	PodCertificateRequestDrops.WithLabelValues(string(outcome.AssociatedPodGone))
+	for _, result := range []PublishResult{PublishUnchanged, PublishCreated, PublishUpdated, PublishFailed} {
+		ClusterTrustBundlePublishAttempts.WithLabelValues(string(result))
 	}
 }

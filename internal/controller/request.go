@@ -33,13 +33,12 @@ func terminalConditionType(status *certificatesv1.PodCertificateRequestStatus) s
 	return ""
 }
 
-// getPod fetches the pod with the given name and namespace. It takes a
-// client.Reader so callers can pass either the cached manager client or the
-// cache-bypassing APIReader.
-func getPod(ctx context.Context, c client.Reader, podName, podNamespace string) (*corev1.Pod, error) {
+// getPod reads the request's pod through reader and wraps a failure with the
+// pod's key. The reconciler passes its APIReader, so the read is live.
+func getPod(ctx context.Context, reader client.Reader, podName, podNamespace string) (*corev1.Pod, error) {
 	var pod corev1.Pod
 	key := types.NamespacedName{Name: podName, Namespace: podNamespace}
-	if err := c.Get(ctx, key, &pod); err != nil {
+	if err := reader.Get(ctx, key, &pod); err != nil {
 		return nil, fmt.Errorf("get pod %s/%s: %w", podNamespace, podName, err)
 	}
 

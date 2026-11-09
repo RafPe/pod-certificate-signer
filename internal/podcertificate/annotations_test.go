@@ -21,9 +21,9 @@ func TestEKUAnnotation(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			pcr := testPCR(map[string]string{testSignerName + "-eku": tc.value})
-			config, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{})
+			config, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{})
 			if err != nil {
-				t.Fatalf("NewPodCertificateConfig: %v", err)
+				t.Fatalf("NewConfig: %v", err)
 			}
 			if !reflect.DeepEqual(config.ExtKeyUsage, tc.want) {
 				t.Errorf("ExtKeyUsage = %v, want %v", config.ExtKeyUsage, tc.want)
@@ -39,7 +39,7 @@ func TestEKUAnnotationInvalid(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			pcr := testPCR(map[string]string{testSignerName + "-eku": value})
-			if _, err := NewPodCertificateConfig(context.Background(), pcr, testPod(nil), nil, Options{}); err == nil {
+			if _, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{}); err == nil {
 				t.Fatalf("want error for eku %q, got nil", value)
 			}
 		})
@@ -47,9 +47,9 @@ func TestEKUAnnotationInvalid(t *testing.T) {
 }
 
 func TestEKUDefaultServerAuthOnly(t *testing.T) {
-	config, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(nil), nil, Options{})
+	config, err := NewConfig(context.Background(), testPCR(nil), testPod(nil), nil, Options{})
 	if err != nil {
-		t.Fatalf("NewPodCertificateConfig: %v", err)
+		t.Fatalf("NewConfig: %v", err)
 	}
 	// ClientAuth is an explicit opt-in (via the eku annotation); the default is
 	// ServerAuth only, so a leaked pod certificate cannot be replayed as a
@@ -70,9 +70,9 @@ func TestKeyUsagePerAlgorithm(t *testing.T) {
 		{x509.Ed25519, x509.KeyUsageDigitalSignature},
 	}
 	for _, tc := range cases {
-		config, err := NewPodCertificateConfig(context.Background(), testPCR(nil), testPod(nil), &CSR{PublicKeyAlgorithm: tc.alg}, Options{})
+		config, err := NewConfig(context.Background(), testPCR(nil), testPod(nil), &CSR{PublicKeyAlgorithm: tc.alg}, Options{})
 		if err != nil {
-			t.Fatalf("NewPodCertificateConfig: %v", err)
+			t.Fatalf("NewConfig: %v", err)
 		}
 		if config.KeyUsage != tc.want {
 			t.Errorf("alg %v: KeyUsage = %v, want %v", tc.alg, config.KeyUsage, tc.want)

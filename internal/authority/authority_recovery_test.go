@@ -55,7 +55,7 @@ func TestReloadRetainsLastGoodCAOnFailure(t *testing.T) {
 // A mismatched cert/key pair on disk (e.g. observed mid-rotation, before the
 // key catches up) must be retried, not abandoned, so an eventually-consistent
 // good pair is picked up.
-func TestReloadWithRetryRecoversFromTransientBadPair(t *testing.T) {
+func TestLoadWithRetryRecoversFromTransientBadPair(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		dir := t.TempDir()
 		writeCA(t, dir, "good-ca.example.org", 24*time.Hour)
@@ -99,8 +99,8 @@ func TestReloadWithRetryRecoversFromTransientBadPair(t *testing.T) {
 			_ = os.WriteFile(filepath.Join(dir, "tls.crt"), rotated.CertPEM, 0o600)
 		}()
 
-		if _, err := ca.reloadWithRetry(t.Context(), log.FromContext(t.Context())); err != nil {
-			t.Fatalf("reloadWithRetry did not recover from a transient bad pair: %v", err)
+		if _, err := ca.loadWithRetry(t.Context(), log.FromContext(t.Context()), ca.reloadAttempts); err != nil {
+			t.Fatalf("loadWithRetry did not recover from a transient bad pair: %v", err)
 		}
 		<-writerDone
 		if got := parseChain(t, ca.TrustBundlePEM()); !got[0].Equal(rotated.Cert) {
@@ -109,9 +109,9 @@ func TestReloadWithRetryRecoversFromTransientBadPair(t *testing.T) {
 	})
 }
 
-// reloadWithRetry must give up (and stop looping) once ctx is canceled, rather
+// loadWithRetry must give up (and stop looping) once ctx is canceled, rather
 // than blocking forever on a permanently bad pair.
-func TestReloadWithRetryHonorsContextCancellation(t *testing.T) {
+func TestLoadWithRetryHonorsContextCancellation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		dir := t.TempDir()
 		writeCA(t, dir, "good-ca.example.org", 24*time.Hour)
@@ -133,7 +133,7 @@ func TestReloadWithRetryHonorsContextCancellation(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
 		go func() {
-			_, err := ca.reloadWithRetry(ctx, log.FromContext(ctx))
+			_, err := ca.loadWithRetry(ctx, log.FromContext(ctx), ca.reloadAttempts)
 			done <- err
 		}()
 
@@ -146,10 +146,10 @@ func TestReloadWithRetryHonorsContextCancellation(t *testing.T) {
 		select {
 		case err := <-done:
 			if !errors.Is(err, context.Canceled) {
-				t.Fatalf("reloadWithRetry() after cancellation = %v, want %v", err, context.Canceled)
+				t.Fatalf("loadWithRetry() after cancellation = %v, want %v", err, context.Canceled)
 			}
 		case <-time.After(ca.reloadBackoff / 2):
-			t.Fatal("reloadWithRetry did not return after context cancellation")
+			t.Fatal("loadWithRetry did not return after context cancellation")
 		}
 	})
 }

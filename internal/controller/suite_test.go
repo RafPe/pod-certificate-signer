@@ -39,7 +39,6 @@ import (
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/signer"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
 	// +kubebuilder:scaffold:imports
 )
@@ -150,9 +149,6 @@ func startTestManager() {
 	certificateAuthority, err := authority.New(certPath, keyPath)
 	Expect(err).NotTo(HaveOccurred())
 
-	pcrSigner, err := signer.New(testSignerName, certificateAuthority)
-	Expect(err).NotTo(HaveOccurred())
-
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme.Scheme,
 		Metrics:                server.Options{BindAddress: "0"},
@@ -165,7 +161,7 @@ func startTestManager() {
 	})
 	Expect(err).NotTo(HaveOccurred())
 
-	reconciler, err := NewPodCertificateRequestReconciler(mgr, "envtest", pcrSigner,
+	reconciler, err := NewPodCertificateRequestReconciler(mgr, "envtest", testSignerName, certificateAuthority,
 		podcertificate.Options{ClusterFQDN: "cluster.local"})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(reconciler.SetupWithManager(mgr)).To(Succeed())

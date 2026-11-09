@@ -10,17 +10,20 @@ import (
 	"time"
 )
 
-// PodCertificate is a certificate issued for a pod, together with the
-// configuration it was issued from and its validity bounds.
-type PodCertificate struct {
-	certificateChain string
-	config           *PodCertificateConfig
-	notBefore        time.Time
-	notAfter         time.Time
+// Certificate is a certificate issued for a pod, together with the
+// configuration it was issued from and its validity bounds. It is built once
+// by the authority and read by the reconciler; nothing mutates it afterwards.
+type Certificate struct {
+	// CertificateChain is the PEM-encoded chain: the issued certificate
+	// followed by the CA certificate that signed it.
+	CertificateChain string
+	Config           *Config
+	NotBefore        time.Time
+	NotAfter         time.Time
 }
 
-// PodCertificateConfig describes the certificate to be issued for a pod.
-type PodCertificateConfig struct {
+// Config describes the certificate to be issued for a pod.
+type Config struct {
 	CommonName    string
 	DNSNames      []string
 	IPAddresses   []net.IP
@@ -29,9 +32,13 @@ type PodCertificateConfig struct {
 	RefreshBefore time.Duration
 	// MaxExpiration is the maximum certificate lifetime permitted by the
 	// PodCertificateRequest spec.maxExpirationSeconds. Zero means no limit.
-	MaxExpiration      time.Duration
-	KeyUsage           x509.KeyUsage      // TODO: Customizable Key Usage via Policies
-	ExtKeyUsage        []x509.ExtKeyUsage // TODO: Customizable Ext Key Usage via Policies or other aliases i.e. client-server-auth , ssl ,
+	MaxExpiration time.Duration
+	// KeyUsage is derived from the key type (see keyUsageFor) and is not
+	// configurable by the requester.
+	KeyUsage x509.KeyUsage
+	// ExtKeyUsage is server auth by default; the eku annotation overrides it
+	// (client, server).
+	ExtKeyUsage        []x509.ExtKeyUsage
 	PublicKey          crypto.PublicKey
 	PublicKeyAlgorithm x509.PublicKeyAlgorithm
 	// Warnings are non-fatal notices about how the configuration was resolved
@@ -83,42 +90,11 @@ const (
 	RefreshMargin = 10 * time.Minute
 )
 
-// NewPodCertificate creates a new [PodCertificate].
-func NewPodCertificate(certificateChain string, config *PodCertificateConfig, notBefore, notAfter time.Time) *PodCertificate {
-	return &PodCertificate{
-		certificateChain: certificateChain,
-		config:           config,
-		notBefore:        notBefore,
-		notAfter:         notAfter,
-	}
-}
-
-// CertificateChain returns the PEM-encoded certificate chain: the issued
-// certificate followed by the CA certificate that signed it.
-func (pc *PodCertificate) CertificateChain() string {
-	return pc.certificateChain
-}
-
-// Config returns the configuration the certificate was issued from.
-func (pc *PodCertificate) Config() *PodCertificateConfig {
-	return pc.config
-}
-
-// NotBefore returns the start of the certificate validity period.
-func (pc *PodCertificate) NotBefore() time.Time {
-	return pc.notBefore
-}
-
-// NotAfter returns the end of the certificate validity period.
-func (pc *PodCertificate) NotAfter() time.Time {
-	return pc.notAfter
-}
-
 // Validate checks that the configuration can be used to issue a certificate
 // which kube-apiserver will accept on the status subresource. Validating up
 // front turns misconfigurations into an immediate denial instead of an
 // endless requeue loop caused by rejected status updates.
-func (pcc *PodCertificateConfig) Validate() error {
+func (pcc *Config) Validate() error {
 	if pcc.CommonName == "" {
 		// An empty common name is valid as long as the certificate still
 		// carries a subject alternative name to identify by. Go marks the SAN

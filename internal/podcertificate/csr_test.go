@@ -1,4 +1,4 @@
-package signer
+package podcertificate
 
 import (
 	"crypto"
@@ -10,6 +10,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"net"
 	"testing"
 )
@@ -114,5 +115,16 @@ func TestParseCSREmptyCSR(t *testing.T) {
 	}
 	if len(info.DNSNames) != 0 || len(info.IPAddresses) != 0 {
 		t.Errorf("empty CSR must yield no SANs, got DNS=%v IP=%v", info.DNSNames, info.IPAddresses)
+	}
+}
+
+// ParseCSR must wrap the underlying x509 error so it can be unwrapped.
+func TestParseCSRWraps(t *testing.T) {
+	_, err := ParseCSR([]byte("not-a-der-encoded-csr"))
+	if err == nil {
+		t.Fatal("expected an error parsing junk input")
+	}
+	if errors.Unwrap(err) == nil {
+		t.Fatal("error should wrap the underlying cause (%w), got an unwrappable error")
 	}
 }

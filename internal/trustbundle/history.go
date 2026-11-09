@@ -12,8 +12,6 @@ import (
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	"github.com/rafpe/kubernetes-podcertificate-signer/internal/signer"
 )
 
 // ErrHistoryBundleAbsent reports that the signer's ClusterTrustBundle does not
@@ -37,34 +35,37 @@ var ErrHistoryBundleAbsent = errors.New("the signer's ClusterTrustBundle does no
 // knows the bundle should exist turn absence into a startup failure. Either way
 // the loss is announced rather than logged as routine. See
 // docs/adr/0004-bootstrapped-previous-ca-history.md.
-func LoadPreviousCAHistory(ctx context.Context, c client.Client, signerName string, requireHistory bool) ([]*x509.Certificate, error) {
+func LoadPreviousCAHistory(ctx context.Context, c client.Reader, signerName string, requireHistory bool) ([]*x509.Certificate, error) {
 	logger := log.FromContext(ctx)
 
 	var previousCAs []*x509.Certificate
-	err := retry.OnError(apiRetryBackoff,
-		func(err error) bool { return !errors.Is(err, ErrHistoryBundleAbsent) },
-		func() error {
-			var ferr error
-			previousCAs, ferr = fetchPreviousCAs(ctx, c, signerName)
+	// Retry transient read errors, but not absence (retrying cannot make the
+	// bundle appear) and not once ctx has ended - the same rule the publisher
+	// applies to the same backoff.
+	retriable := func(err error) bool { return ctx.Err() == nil && !errors.Is(err, ErrHistoryBundleAbsent) }
+	err := retry.OnError(apiRetryBackoff, retriable, func() error {
+		var ferr error
+		previousCAs, ferr = fetchPreviousCAs(ctx, c, signerName)
 
-			return ferr
-		})
+		return ferr
+	})
 
-	switch {
-	case err == nil:
+	if err == nil {
 		logger.Info("bootstrapped previous CA certificates from ClusterTrustBundle",
-			"name", signer.ClusterTrustBundleName(signerName), "count", len(previousCAs))
+			"name", Name(signerName), "count", len(previousCAs))
 		return previousCAs, nil
-	case !errors.Is(err, ErrHistoryBundleAbsent) || requireHistory:
+	}
+	if !errors.Is(err, ErrHistoryBundleAbsent) || requireHistory {
 		// A real read error, or an absence the operator declared fatal.
 		return nil, err
 	}
 
-	logger.Info("WARNING: no ClusterTrustBundle exists for this signer, so the previous-CA history starts empty. "+
-		"This is expected on a first install. If the signer has published its bundle before, the history it held is "+
-		"now lost and certificates issued under a retired CA will stop verifying once the bundle is republished; "+
-		"restore the bundle before this controller publishes, or run with --require-ca-history to make this fatal",
-		"bundle", signer.ClusterTrustBundleName(signerName))
+	// Expected on a first install; after one, the retained history is gone
+	// and certificates issued under a retired CA stop verifying once the
+	// bundle is republished. docs/operations.md says what to do about it.
+	logger.Error(err, "previous-CA history starts empty: a deleted bundle is indistinguishable from a first install; "+
+		"restore it before this controller publishes, or run with --require-ca-history to make this fatal",
+		"bundle", Name(signerName))
 
 	return nil, nil
 }
@@ -78,8 +79,8 @@ func LoadPreviousCAHistory(ctx context.Context, c client.Client, signerName stri
 // LoadPreviousCAHistory. Any other read error is returned so the caller can
 // retry or fail closed: silently returning an empty history would overwrite the
 // bundle on startup and drop previously-trusted CAs.
-func fetchPreviousCAs(ctx context.Context, c client.Client, signerName string) ([]*x509.Certificate, error) {
-	bundleName := signer.ClusterTrustBundleName(signerName)
+func fetchPreviousCAs(ctx context.Context, c client.Reader, signerName string) ([]*x509.Certificate, error) {
+	bundleName := Name(signerName)
 
 	bundle := &certificatesv1.ClusterTrustBundle{}
 	if err := c.Get(ctx, client.ObjectKey{Name: bundleName}, bundle); err != nil {

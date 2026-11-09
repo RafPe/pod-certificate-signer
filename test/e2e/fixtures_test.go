@@ -90,7 +90,7 @@ type certTestPod struct {
 
 	// podAnnotations are annotations on the pod object itself. The signer reads
 	// configuration from the request's unverifiedUserAnnotations first and falls
-	// back to these (a deprecated path, see NewPodCertificateConfig).
+	// back to these (a deprecated path, see podcertificate.NewConfig).
 	//
 	// One spec needs that fallback rather than the projection: the DNS SAN
 	// ValidatingAdmissionPolicy inspects only the projection's userAnnotations,

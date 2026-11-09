@@ -138,6 +138,14 @@ signer:
   # Helm escape hatch for the --allow-unverified-identities controller flag.
   allow_unverified_identities: false
 
+  # Deprecated fallback: read configuration items the PodCertificateRequest
+  # does not carry in spec.unverifiedUserAnnotations from the pod's own
+  # annotations. On by default until the fallback is removed in 4.0.0. Set to
+  # false once every workload has moved to spec.unverifiedUserAnnotations, so
+  # pod annotations stop being a second requester-controlled input. Keep in
+  # sync with defaultAllowPodAnnotations in cmd/podcertificate-signer/main.go.
+  allow_pod_annotations: true
+
 # Optional, independently selectable ValidatingAdmissionPolicies. These
 # cluster-scoped policies provide preventive feedback when Pods are admitted;
 # signer-side validation remains authoritative even when every policy is off.

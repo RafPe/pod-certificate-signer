@@ -48,7 +48,7 @@ func defineCAFailureModeTests() {
 				By("waiting for the controller to reject the replacement, naming why")
 				// Both the classification and the detail are required. The
 				// first three cases all fail inside tls.LoadX509KeyPair and
-				// share the "failed to load key pair" wrapper, so a spec that
+				// share the "load key pair" wrapper, so a spec that
 				// matched only the wrapper would pass for the wrong reason -
 				// an invalid key would satisfy the mismatched-pair case.
 				Eventually(func(g Gomega) {
@@ -132,19 +132,19 @@ func defineCAFailureModeTests() {
 					// case a PEM-shape check would miss.
 					return currentCA().CertPEM, newLifecycleCA("ca-lifecycle-mismatch").KeyPEM
 				},
-				"failed to load key pair", "private key does not match public key"),
+				"load key pair", "private key does not match public key"),
 			Entry("a certificate that is not PEM at all",
 				"pcs-ca-bad-cert-pem",
 				func() ([]byte, []byte) {
 					return []byte("this is not a certificate\n"), currentCA().KeyPEM
 				},
-				"failed to load key pair", "failed to find any PEM data in certificate input"),
+				"load key pair", "failed to find any PEM data in certificate input"),
 			Entry("a key that is not PEM at all",
 				"pcs-ca-bad-key-pem",
 				func() ([]byte, []byte) {
 					return currentCA().CertPEM, []byte("this is not a private key\n")
 				},
-				"failed to load key pair", "failed to find any PEM data in key input"),
+				"load key pair", "failed to find any PEM data in key input"),
 			Entry("a well-formed certificate that is not a CA",
 				"pcs-ca-bad-non-ca",
 				func() ([]byte, []byte) {

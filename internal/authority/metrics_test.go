@@ -1,6 +1,7 @@
 package authority
 
 import (
+	"context"
 	"os"
 	"testing"
 	"testing/synctest"
@@ -24,29 +25,29 @@ func TestReconcileOnceCountsReloadResults(t *testing.T) {
 
 	// A pass over material that has not moved.
 	before := reloadCounts()
-	ca.reconcileOnce(logr.Discard(), nil, "test")
-	assertReloadDelta(t, before, map[string]float64{metrics.ResultUnchanged: 1})
+	ca.reload(context.Background(), logr.Discard(), nil, "test", 1)
+	assertReloadDelta(t, before, map[metrics.ReloadResult]float64{metrics.ReloadUnchanged: 1})
 
 	// A rotation.
 	writeCA(t, dir, "ca-rotated.example.org", 24*time.Hour)
 	before = reloadCounts()
-	ca.reconcileOnce(logr.Discard(), nil, "test")
-	assertReloadDelta(t, before, map[string]float64{metrics.ResultChanged: 1})
+	ca.reload(context.Background(), logr.Discard(), nil, "test", 1)
+	assertReloadDelta(t, before, map[metrics.ReloadResult]float64{metrics.ReloadChanged: 1})
 
 	// Material that cannot be loaded at all.
 	if err := os.WriteFile(dir+"/tls.crt", []byte("not a certificate\n"), 0o600); err != nil {
 		t.Fatalf("write bad cert: %v", err)
 	}
 	before = reloadCounts()
-	ca.reconcileOnce(logr.Discard(), nil, "test")
-	assertReloadDelta(t, before, map[string]float64{metrics.ResultFailed: 1})
+	ca.reload(context.Background(), logr.Discard(), nil, "test", 1)
+	assertReloadDelta(t, before, map[metrics.ReloadResult]float64{metrics.ReloadFailed: 1})
 }
 
-// reloadWithRetry records every attempt, not just the burst, because a CA that
+// loadWithRetry records every attempt, not just the burst, because a CA that
 // stays unloadable must be able to cross the readiness threshold without
 // another filesystem event. The counter is named _attempts_ for exactly this
 // reason, and this pins it.
-func TestReloadWithRetryCountsEveryAttempt(t *testing.T) {
+func TestLoadWithRetryCountsEveryAttempt(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		dir := t.TempDir()
 		writeCA(t, dir, "ca.example.org", 24*time.Hour)
@@ -61,10 +62,10 @@ func TestReloadWithRetryCountsEveryAttempt(t *testing.T) {
 		}
 
 		before := reloadCounts()
-		if _, err := ca.reloadWithRetry(t.Context(), logr.Discard()); err == nil {
-			t.Fatal("reloadWithRetry() error = nil, want the reload to fail")
+		if _, err := ca.loadWithRetry(t.Context(), logr.Discard(), ca.reloadAttempts); err == nil {
+			t.Fatal("loadWithRetry() error = nil, want the reload to fail")
 		}
-		assertReloadDelta(t, before, map[string]float64{metrics.ResultFailed: 3})
+		assertReloadDelta(t, before, map[metrics.ReloadResult]float64{metrics.ReloadFailed: 3})
 	})
 }
 
@@ -101,8 +102,8 @@ func TestReloadHealthTracksTheFailureStreak(t *testing.T) {
 		if err := os.WriteFile(dir+"/tls.crt", []byte("not a certificate\n"), 0o600); err != nil {
 			t.Fatalf("write bad cert: %v", err)
 		}
-		ca.reconcileOnce(logr.Discard(), nil, "test")
-		ca.reconcileOnce(logr.Discard(), nil, "test")
+		ca.reload(context.Background(), logr.Discard(), nil, "test", 1)
+		ca.reload(context.Background(), logr.Discard(), nil, "test", 1)
 
 		failures, _ := ca.ReloadHealth()
 		if failures != 2 {
@@ -115,7 +116,7 @@ func TestReloadHealthTracksTheFailureStreak(t *testing.T) {
 		writeCA(t, dir, "ca.example.org", 24*time.Hour)
 		time.Sleep(time.Minute)
 		recoveredAt := time.Now()
-		ca.reconcileOnce(logr.Discard(), nil, "test")
+		ca.reload(context.Background(), logr.Discard(), nil, "test", 1)
 
 		failures, lastSuccess := ca.ReloadHealth()
 		if failures != 0 {
@@ -132,7 +133,7 @@ func TestReloadHealthTracksTheFailureStreak(t *testing.T) {
 func TestTrustBundleSizeCountsRetainedCAs(t *testing.T) {
 	dir := t.TempDir()
 	kp := writeCA(t, dir, "ca.example.org", 24*time.Hour)
-	ca, err := New(dir+"/tls.crt", dir+"/tls.key", WithMaxPreviousCertificates(2))
+	ca, err := New(dir+"/tls.crt", dir+"/tls.key", WithMaxPreviousCAs(2))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -145,7 +146,7 @@ func TestTrustBundleSizeCountsRetainedCAs(t *testing.T) {
 	}
 
 	rotated := writeCA(t, dir, "ca-rotated.example.org", 48*time.Hour)
-	ca.reconcileOnce(logr.Discard(), nil, "test")
+	ca.reload(context.Background(), logr.Discard(), nil, "test", 1)
 
 	if got := ca.TrustBundleSize(); got != 2 {
 		t.Errorf("trust bundle size = %d after one rotation, want 2 (current plus the retained previous CA)", got)
@@ -156,10 +157,10 @@ func TestTrustBundleSizeCountsRetainedCAs(t *testing.T) {
 }
 
 // reloadCounts snapshots the reload attempt counter for each result.
-func reloadCounts() map[string]float64 {
-	counts := make(map[string]float64, 3)
-	for _, result := range []string{metrics.ResultChanged, metrics.ResultUnchanged, metrics.ResultFailed} {
-		counts[result] = promtestutil.ToFloat64(metrics.CAReloadAttempts.WithLabelValues(result))
+func reloadCounts() map[metrics.ReloadResult]float64 {
+	counts := make(map[metrics.ReloadResult]float64, 3)
+	for _, result := range []metrics.ReloadResult{metrics.ReloadChanged, metrics.ReloadUnchanged, metrics.ReloadFailed} {
+		counts[result] = promtestutil.ToFloat64(metrics.CAReloadAttempts.WithLabelValues(string(result)))
 	}
 
 	return counts
@@ -167,7 +168,7 @@ func reloadCounts() map[string]float64 {
 
 // assertReloadDelta checks how far each result moved since before, treating an
 // unnamed result as expected not to have moved at all.
-func assertReloadDelta(t *testing.T, before map[string]float64, want map[string]float64) {
+func assertReloadDelta(t *testing.T, before, want map[metrics.ReloadResult]float64) {
 	t.Helper()
 
 	for result, gotAfter := range reloadCounts() {
