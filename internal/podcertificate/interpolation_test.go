@@ -19,7 +19,7 @@ func TestInterpolationResolvesFromPCR(t *testing.T) {
 	pcr.Spec.PodUID = types.UID("abc-123")
 	pcr.Spec.NodeName = types.NodeName("node-1")
 
-	config, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true})
+	config, err := NewConfig(context.Background(), pcr, testPod(nil), testCSR(nil), Options{EnableInterpolation: true})
 	if err != nil {
 		t.Fatalf("NewConfig: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestInterpolationDisabledRejectsPlaceholders(t *testing.T) {
 		testSignerName + "-cn": "${pod.name}.${pod.namespace}",
 	})
 
-	_, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{})
+	_, err := NewConfig(context.Background(), pcr, testPod(nil), testCSR(nil), Options{})
 	if err == nil || !strings.Contains(err.Error(), "disabled") {
 		t.Fatalf("err = %v, want interpolation-disabled error", err)
 	}
@@ -56,7 +56,7 @@ func TestInterpolationDisabledPassesPlainValues(t *testing.T) {
 	})
 
 	// A plain literal value requires the unverified-identities opt-in.
-	config, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{AllowUnverifiedIdentities: true})
+	config, err := NewConfig(context.Background(), pcr, testPod(nil), testCSR(nil), Options{AllowUnverifiedIdentities: true})
 	if err != nil {
 		t.Fatalf("NewConfig: %v", err)
 	}
@@ -114,6 +114,7 @@ func TestValidateCommonNameLength(t *testing.T) {
 		CommonName:    strings.Repeat("a", 65),
 		Duration:      DefaultDuration,
 		RefreshBefore: DefaultRefreshBefore,
+		PublicKey:     testPublicKey,
 	}
 	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "64") {
 		t.Fatalf("err = %v, want common name length error", err)

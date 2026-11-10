@@ -2,6 +2,8 @@ package hygiene
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/x509"
 	"os"
 	"path/filepath"
 	"testing"
@@ -92,7 +94,13 @@ func TestWorkloadPodExampleIssuesUnderIdentityConstraints(t *testing.T) {
 			// property under test. EnableInterpolation is on because the
 			// example is written in ${...}; the chart shipping it on is what
 			// the cmd-side test named above asserts.
-			config, err := podcertificate.NewConfig(context.Background(), pcr, workload, nil,
+			// The kubelet's CSR carries no SANs, only a key; the key is never
+			// signed with here.
+			csr := &podcertificate.CSR{
+				PublicKey:          ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public(),
+				PublicKeyAlgorithm: x509.Ed25519,
+			}
+			config, err := podcertificate.NewConfig(context.Background(), pcr, workload, csr,
 				podcertificate.Options{EnableInterpolation: true})
 			if err != nil {
 				t.Fatalf("%s requests an identity the signer does not grant: %v\n"+

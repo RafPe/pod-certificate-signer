@@ -1,0 +1,2 @@
+kind: Changed
+body: 'The denial for an unrecognized signer annotation key now reads `unrecognized key "<key>" in spec.unverifiedUserAnnotations`, naming where the key was found, instead of `unrecognized user annotation key "<key>"`. Alerts or searches matching the old wording need updating.'

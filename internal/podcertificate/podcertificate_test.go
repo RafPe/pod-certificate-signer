@@ -2,6 +2,8 @@ package podcertificate
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/x509"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,25 @@ import (
 )
 
 const testSignerName = "example.org/signer"
+
+// testPublicKey is a fixed Ed25519 key. NewConfig requires a CSR carrying a
+// public key, and these tests never sign anything with it.
+var testPublicKey = ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public()
+
+// testCSR fills in testPublicKey (and its algorithm) on csr, or on an empty
+// CSR when csr is nil, so each test spells out only the fields it exercises.
+func testCSR(csr *CSR) *CSR {
+	if csr == nil {
+		csr = &CSR{}
+	}
+	if csr.PublicKey == nil {
+		csr.PublicKey = testPublicKey
+	}
+	if csr.PublicKeyAlgorithm == x509.UnknownPublicKeyAlgorithm {
+		csr.PublicKeyAlgorithm = x509.Ed25519
+	}
+	return csr
+}
 
 func testPod(annotations map[string]string) *corev1.Pod {
 	return &corev1.Pod{
@@ -35,7 +56,7 @@ func testPCR(userAnnotations map[string]string) *certificatesv1.PodCertificateRe
 }
 
 func TestNewConfigDefaults(t *testing.T) {
-	config, err := NewConfig(context.Background(), testPCR(nil), testPod(nil), nil, Options{})
+	config, err := NewConfig(context.Background(), testPCR(nil), testPod(nil), testCSR(nil), Options{})
 	if err != nil {
 		t.Fatalf("NewConfig: %v", err)
 	}
@@ -57,7 +78,7 @@ func TestNewConfigDefaults(t *testing.T) {
 
 // The -cluster-fqdn flag must be honored in the default DNS names.
 func TestNewConfigClusterFQDN(t *testing.T) {
-	config, err := NewConfig(context.Background(), testPCR(nil), testPod(nil), nil, Options{ClusterFQDN: "corp.example.com"})
+	config, err := NewConfig(context.Background(), testPCR(nil), testPod(nil), testCSR(nil), Options{ClusterFQDN: "corp.example.com"})
 	if err != nil {
 		t.Fatalf("NewConfig: %v", err)
 	}
@@ -72,7 +93,7 @@ func TestNewConfigUserAnnotationsPrecedence(t *testing.T) {
 	pcr := testPCR(map[string]string{testSignerName + "-cn": "from-pcr"})
 
 	// Literal values require the unverified-identities opt-in.
-	config, err := NewConfig(context.Background(), pcr, pod, nil,
+	config, err := NewConfig(context.Background(), pcr, pod, testCSR(nil),
 		Options{AllowUnverifiedIdentities: true, AllowPodAnnotations: true})
 	if err != nil {
 		t.Fatalf("NewConfig: %v", err)
@@ -94,7 +115,7 @@ func TestNewConfigPodAnnotationFallback(t *testing.T) {
 	})
 
 	// These are literal (non-derived) values, allowed only with the opt-in.
-	config, err := NewConfig(context.Background(), testPCR(nil), pod, nil,
+	config, err := NewConfig(context.Background(), testPCR(nil), pod, testCSR(nil),
 		Options{AllowUnverifiedIdentities: true, AllowPodAnnotations: true})
 	if err != nil {
 		t.Fatalf("NewConfig: %v", err)
@@ -131,7 +152,7 @@ func TestNewConfigMalformedValues(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := NewConfig(context.Background(), testPCR(tc.annotations), testPod(nil), nil, Options{}); err == nil {
+			if _, err := NewConfig(context.Background(), testPCR(tc.annotations), testPod(nil), testCSR(nil), Options{}); err == nil {
 				t.Fatalf("want error for %v, got nil", tc.annotations)
 			}
 		})
@@ -143,7 +164,7 @@ func TestNewConfigMalformedValues(t *testing.T) {
 func TestNewConfigUnrecognizedUserAnnotation(t *testing.T) {
 	pcr := testPCR(map[string]string{testSignerName + "-bogus": "value"})
 
-	_, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{})
+	_, err := NewConfig(context.Background(), pcr, testPod(nil), testCSR(nil), Options{})
 	if err == nil || !strings.Contains(err.Error(), "unrecognized") {
 		t.Fatalf("err = %v, want unrecognized key error", err)
 	}
@@ -156,7 +177,7 @@ func TestNewConfigMaxExpirationClampsDefault(t *testing.T) {
 	maxExpirationSeconds := int32(7200)
 	pcr.Spec.MaxExpirationSeconds = &maxExpirationSeconds
 
-	config, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{})
+	config, err := NewConfig(context.Background(), pcr, testPod(nil), testCSR(nil), Options{})
 	if err != nil {
 		t.Fatalf("NewConfig: %v", err)
 	}
@@ -165,5 +186,14 @@ func TestNewConfigMaxExpirationClampsDefault(t *testing.T) {
 	}
 	if config.MaxExpiration != 2*time.Hour {
 		t.Errorf("MaxExpiration = %v, want 2h", config.MaxExpiration)
+	}
+}
+
+// A request without a parsed CSR has no public key to certify, so NewConfig
+// must refuse it rather than build a config that can never be signed.
+func TestNewConfigRequiresCSR(t *testing.T) {
+	_, err := NewConfig(context.Background(), testPCR(nil), testPod(nil), nil, Options{})
+	if err == nil || !strings.Contains(err.Error(), "certificate signing request is required") {
+		t.Fatalf("err = %v, want a missing-CSR error", err)
 	}
 }

@@ -47,7 +47,7 @@ func TestRecordOutcomeNoEventWhenStatusWriteFails(t *testing.T) {
 	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: rec}
 
 	_, err := r.recordOutcome(context.Background(), pcr,
-		certificatesv1.PodCertificateRequestConditionTypeIssued, outcome.CertificateIssued, "issued", corev1.EventTypeNormal)
+		outcome.Issued, outcome.CertificateIssued, "issued")
 	if err == nil {
 		t.Fatal("recordOutcome() error = nil, want the status write error to propagate")
 	}
@@ -237,7 +237,7 @@ func TestRecordTerminal(t *testing.T) {
 			rec := events.NewFakeRecorder(10)
 			r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: rec}
 
-			var te *TerminalError
+			var te *terminalError
 			if !errors.As(tc.err, &te) {
 				t.Fatalf("test error is not terminal: %v", tc.err)
 			}
@@ -256,11 +256,11 @@ func TestRecordTerminal(t *testing.T) {
 			if cond.Type != tc.wantType {
 				t.Errorf("condition type = %s, want %s", cond.Type, tc.wantType)
 			}
-			if cond.Reason != string(te.Reason) {
-				t.Errorf("condition reason = %s, want %s", cond.Reason, te.Reason)
+			if cond.Reason != string(te.reason) {
+				t.Errorf("condition reason = %s, want %s", cond.Reason, te.reason)
 			}
-			if cond.Message != te.Err.Error() {
-				t.Errorf("condition message = %q, want the error text %q", cond.Message, te.Err.Error())
+			if cond.Message != te.err.Error() {
+				t.Errorf("condition message = %q, want the error text %q", cond.Message, te.err.Error())
 			}
 			if got.Status.CertificateChain != "" {
 				t.Error("certificate fields must be cleared on a terminal failure")
@@ -336,7 +336,7 @@ func TestRecordTerminalEventMessageIsNotAFormat(t *testing.T) {
 	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: rec}
 
 	const message = `annotation "example.org/signer-cn": value "100%d of %s" is not a verified identity`
-	if err := r.recordTerminal(context.Background(), pcr, denied(outcome.InvalidUserConfig, errors.New(message)).(*TerminalError)); err != nil {
+	if err := r.recordTerminal(context.Background(), pcr, denied(outcome.InvalidUserConfig, errors.New(message)).(*terminalError)); err != nil {
 		t.Fatalf("recordTerminal: %v", err)
 	}
 
@@ -347,5 +347,58 @@ func TestRecordTerminalEventMessageIsNotAFormat(t *testing.T) {
 		}
 	default:
 		t.Fatal("no event was emitted")
+	}
+}
+
+// The terminal condition type decides whether a request is still the
+// reconciler's to act on: any of the three terminal types wins, regardless of
+// where it sits among non-terminal conditions, and a request without one is
+// still open.
+func TestTerminalConditionType(t *testing.T) {
+	cond := func(conditionType string) metav1.Condition {
+		return metav1.Condition{Type: conditionType, Status: metav1.ConditionTrue}
+	}
+	cases := []struct {
+		name       string
+		conditions []metav1.Condition
+		want       string
+	}{
+		{"no conditions", nil, ""},
+		{"issued", []metav1.Condition{cond(certificatesv1.PodCertificateRequestConditionTypeIssued)}, certificatesv1.PodCertificateRequestConditionTypeIssued},
+		{"denied", []metav1.Condition{cond(certificatesv1.PodCertificateRequestConditionTypeDenied)}, certificatesv1.PodCertificateRequestConditionTypeDenied},
+		{"failed", []metav1.Condition{cond(certificatesv1.PodCertificateRequestConditionTypeFailed)}, certificatesv1.PodCertificateRequestConditionTypeFailed},
+		{"non-terminal only", []metav1.Condition{cond("SomethingElse")}, ""},
+		{"terminal after non-terminal", []metav1.Condition{cond("SomethingElse"), cond(certificatesv1.PodCertificateRequestConditionTypeDenied)}, certificatesv1.PodCertificateRequestConditionTypeDenied},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pcr := &certificatesv1.PodCertificateRequest{Status: certificatesv1.PodCertificateRequestStatus{Conditions: tc.conditions}}
+			if got := terminalConditionType(&pcr.Status); got != tc.want {
+				t.Errorf("terminalConditionType() = %q, want %q", got, tc.want)
+			}
+			if got, want := isTerminal(pcr), tc.want != ""; got != want {
+				t.Errorf("isTerminal() = %t, want %t", got, want)
+			}
+		})
+	}
+}
+
+// Each outcome kind maps to its own condition type; only issuance is a
+// Normal event.
+func TestConditionFor(t *testing.T) {
+	for _, tc := range []struct {
+		kind          outcome.Kind
+		wantCondition string
+		wantEvent     string
+	}{
+		{outcome.Issued, certificatesv1.PodCertificateRequestConditionTypeIssued, corev1.EventTypeNormal},
+		{outcome.Denied, certificatesv1.PodCertificateRequestConditionTypeDenied, corev1.EventTypeWarning},
+		{outcome.Failed, certificatesv1.PodCertificateRequestConditionTypeFailed, corev1.EventTypeWarning},
+	} {
+		condition, event := conditionFor(tc.kind)
+		if condition != tc.wantCondition || event != tc.wantEvent {
+			t.Errorf("conditionFor(%q) = %q, %q, want %q, %q", tc.kind, condition, event, tc.wantCondition, tc.wantEvent)
+		}
 	}
 }

@@ -1,7 +1,6 @@
 package authority
 
 import (
-	"context"
 	"os"
 	"testing"
 	"testing/synctest"
@@ -25,13 +24,13 @@ func TestReconcileOnceCountsReloadResults(t *testing.T) {
 
 	// A pass over material that has not moved.
 	before := reloadCounts()
-	ca.reload(context.Background(), logr.Discard(), nil, "test", 1)
+	reloadOnce(ca, logr.Discard())
 	assertReloadDelta(t, before, map[metrics.ReloadResult]float64{metrics.ReloadUnchanged: 1})
 
 	// A rotation.
 	writeCA(t, dir, "ca-rotated.example.org", 24*time.Hour)
 	before = reloadCounts()
-	ca.reload(context.Background(), logr.Discard(), nil, "test", 1)
+	reloadOnce(ca, logr.Discard())
 	assertReloadDelta(t, before, map[metrics.ReloadResult]float64{metrics.ReloadChanged: 1})
 
 	// Material that cannot be loaded at all.
@@ -39,11 +38,11 @@ func TestReconcileOnceCountsReloadResults(t *testing.T) {
 		t.Fatalf("write bad cert: %v", err)
 	}
 	before = reloadCounts()
-	ca.reload(context.Background(), logr.Discard(), nil, "test", 1)
+	reloadOnce(ca, logr.Discard())
 	assertReloadDelta(t, before, map[metrics.ReloadResult]float64{metrics.ReloadFailed: 1})
 }
 
-// loadWithRetry records every attempt, not just the burst, because a CA that
+// reloadWithRetry records every attempt, not just the burst, because a CA that
 // stays unloadable must be able to cross the readiness threshold without
 // another filesystem event. The counter is named _attempts_ for exactly this
 // reason, and this pins it.
@@ -62,8 +61,8 @@ func TestLoadWithRetryCountsEveryAttempt(t *testing.T) {
 		}
 
 		before := reloadCounts()
-		if _, err := ca.loadWithRetry(t.Context(), logr.Discard(), ca.reloadAttempts); err == nil {
-			t.Fatal("loadWithRetry() error = nil, want the reload to fail")
+		if _, err := ca.reloadWithRetry(t.Context(), logr.Discard(), ca.reloadAttempts); err == nil {
+			t.Fatal("reloadWithRetry() error = nil, want the reload to fail")
 		}
 		assertReloadDelta(t, before, map[metrics.ReloadResult]float64{metrics.ReloadFailed: 3})
 	})
@@ -102,8 +101,8 @@ func TestReloadHealthTracksTheFailureStreak(t *testing.T) {
 		if err := os.WriteFile(dir+"/tls.crt", []byte("not a certificate\n"), 0o600); err != nil {
 			t.Fatalf("write bad cert: %v", err)
 		}
-		ca.reload(context.Background(), logr.Discard(), nil, "test", 1)
-		ca.reload(context.Background(), logr.Discard(), nil, "test", 1)
+		reloadOnce(ca, logr.Discard())
+		reloadOnce(ca, logr.Discard())
 
 		failures, _ := ca.ReloadHealth()
 		if failures != 2 {
@@ -116,7 +115,7 @@ func TestReloadHealthTracksTheFailureStreak(t *testing.T) {
 		writeCA(t, dir, "ca.example.org", 24*time.Hour)
 		time.Sleep(time.Minute)
 		recoveredAt := time.Now()
-		ca.reload(context.Background(), logr.Discard(), nil, "test", 1)
+		reloadOnce(ca, logr.Discard())
 
 		failures, lastSuccess := ca.ReloadHealth()
 		if failures != 0 {
@@ -146,7 +145,7 @@ func TestTrustBundleSizeCountsRetainedCAs(t *testing.T) {
 	}
 
 	rotated := writeCA(t, dir, "ca-rotated.example.org", 48*time.Hour)
-	ca.reload(context.Background(), logr.Discard(), nil, "test", 1)
+	reloadOnce(ca, logr.Discard())
 
 	if got := ca.TrustBundleSize(); got != 2 {
 		t.Errorf("trust bundle size = %d after one rotation, want 2 (current plus the retained previous CA)", got)

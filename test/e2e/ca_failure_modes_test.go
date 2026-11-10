@@ -240,7 +240,7 @@ func defineCAFailureModeTests() {
 	Context("ClusterTrustBundle drift", Label(nightlyLabel), func() {
 		// The publisher does not watch the ClusterTrustBundle. It publishes
 		// when it starts, on every CA reload event, and on a ten-minute
-		// drift-repair tick (ctbDriftRepairInterval). Ten minutes is far
+		// drift-repair tick (driftRepairInterval). Ten minutes is far
 		// longer than any spec here can wait, so both specs cause a CA reload
 		// and assert the repair that follows it. What they can assert
 		// unconditionally, and do, is that damaged trust anchors never stop

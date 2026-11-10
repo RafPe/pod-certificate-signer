@@ -20,6 +20,11 @@ import (
 // (see LoadPreviousCAHistory), not this package's.
 var ErrHistoryBundleAbsent = errors.New("the signer's ClusterTrustBundle does not exist")
 
+// errHistoryBundleCorrupt reports that the bundle was read but holds a
+// CERTIFICATE block that does not parse. Rereading the same object cannot fix
+// it, so it is not retried; startup fails closed (see parsePEMCertificates).
+var errHistoryBundleCorrupt = errors.New("the signer's ClusterTrustBundle holds a certificate that does not parse")
+
 // LoadPreviousCAHistory reads the previous-CA history the signer published
 // before this process started, with bounded retry. A transient read error must
 // not fall through to an empty history: publishing an empty bundle would drop
@@ -39,10 +44,12 @@ func LoadPreviousCAHistory(ctx context.Context, c client.Reader, signerName stri
 	logger := log.FromContext(ctx)
 
 	var previousCAs []*x509.Certificate
-	// Retry transient read errors, but not absence (retrying cannot make the
-	// bundle appear) and not once ctx has ended - the same rule the publisher
-	// applies to the same backoff.
-	retriable := func(err error) bool { return ctx.Err() == nil && !errors.Is(err, ErrHistoryBundleAbsent) }
+	// Retry transient read errors only: not absence or a corrupt bundle
+	// (rereading cannot change either), and not once ctx has ended - the same
+	// rule the publisher applies to the same backoff.
+	retriable := func(err error) bool {
+		return ctx.Err() == nil && !errors.Is(err, ErrHistoryBundleAbsent) && !errors.Is(err, errHistoryBundleCorrupt)
+	}
 	err := retry.OnError(apiRetryBackoff, retriable, func() error {
 		var ferr error
 		previousCAs, ferr = fetchPreviousCAs(ctx, c, signerName)
@@ -52,7 +59,7 @@ func LoadPreviousCAHistory(ctx context.Context, c client.Reader, signerName stri
 
 	if err == nil {
 		logger.Info("bootstrapped previous CA certificates from ClusterTrustBundle",
-			"name", Name(signerName), "count", len(previousCAs))
+			"name", bundleName(signerName), "count", len(previousCAs))
 		return previousCAs, nil
 	}
 	if !errors.Is(err, ErrHistoryBundleAbsent) || requireHistory {
@@ -65,7 +72,7 @@ func LoadPreviousCAHistory(ctx context.Context, c client.Reader, signerName stri
 	// bundle is republished. docs/operations.md says what to do about it.
 	logger.Error(err, "previous-CA history starts empty: a deleted bundle is indistinguishable from a first install; "+
 		"restore it before this controller publishes, or run with --require-ca-history to make this fatal",
-		"bundle", Name(signerName))
+		"bundle", bundleName(signerName))
 
 	return nil, nil
 }
@@ -80,19 +87,19 @@ func LoadPreviousCAHistory(ctx context.Context, c client.Reader, signerName stri
 // retry or fail closed: silently returning an empty history would overwrite the
 // bundle on startup and drop previously-trusted CAs.
 func fetchPreviousCAs(ctx context.Context, c client.Reader, signerName string) ([]*x509.Certificate, error) {
-	bundleName := Name(signerName)
+	name := bundleName(signerName)
 
 	bundle := &certificatesv1.ClusterTrustBundle{}
-	if err := c.Get(ctx, client.ObjectKey{Name: bundleName}, bundle); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: name}, bundle); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("read existing ClusterTrustBundle %q: %w", bundleName, ErrHistoryBundleAbsent)
+			return nil, fmt.Errorf("read existing ClusterTrustBundle %q: %w", name, ErrHistoryBundleAbsent)
 		}
-		return nil, fmt.Errorf("read existing ClusterTrustBundle %q: %w", bundleName, err)
+		return nil, fmt.Errorf("read existing ClusterTrustBundle %q: %w", name, err)
 	}
 
 	certs, err := parsePEMCertificates([]byte(bundle.Spec.TrustBundle))
 	if err != nil {
-		return nil, fmt.Errorf("parse existing ClusterTrustBundle %q: %w", bundleName, err)
+		return nil, fmt.Errorf("parse existing ClusterTrustBundle %q: %w: %w", name, errHistoryBundleCorrupt, err)
 	}
 
 	return certs, nil

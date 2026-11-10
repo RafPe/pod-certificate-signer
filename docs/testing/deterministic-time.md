@@ -13,7 +13,7 @@ the `k8s.io/kubernetes` module.
 
 1. Keep production values. Sleep multiples of the production field or constant
    the code under test actually uses: a field such as `ca.reconcileInterval` or
-   `p.interval`, or a package constant such as `defaultEventThrottleInterval`
+   `p.interval`, or a package constant such as `eventThrottleInterval`
    or `reloadFailureGracePeriod`.
 2. To assert on N ticks of a ticker loop, sleep N intervals plus half an
    interval, so a tick landing on the same fake instant as the wake-up is never
@@ -68,7 +68,7 @@ func TestTickDoesSomething(t *testing.T) {
 
 ## What stays outside a bubble
 
-- Tests that drive the real fsnotify watcher through `ca.Watch`, such as
+- Tests that drive the real fsnotify watcher through `ca.watch`, such as
   `TestWatchReloadsCA`. The watcher goroutine blocks in a kernel syscall, which
   synctest does not count as durably blocked, so fake time would never advance.
   Test the loop through the `watchLoop` seam instead, which takes the event

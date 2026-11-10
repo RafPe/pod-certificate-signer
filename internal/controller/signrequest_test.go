@@ -137,7 +137,7 @@ func TestProcessLongPodNameEmitsDefaultSANWarning(t *testing.T) {
 // A CA-availability error surfaced by the signer must be classified TRANSIENT:
 // signRequest() returns a plain error (so controller-runtime requeues) that still
 // carries authority.ErrCASignerUnusable. A request-specific signing error must
-// stay terminal (*TerminalError -> Failed/SigningFailed, recorded on the PCR).
+// stay terminal (*terminalError -> Failed/SigningFailed, recorded on the PCR).
 func TestProcessClassifiesSignerErrors(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -174,7 +174,7 @@ func TestProcessClassifiesSignerErrors(t *testing.T) {
 				t.Fatal("signRequest() did not reach SignPodCertificate")
 			}
 
-			var te *TerminalError
+			var te *terminalError
 			gotTerminal := errors.As(err, &te)
 			if gotTerminal != tc.wantTerminal {
 				t.Fatalf("signRequest() terminal = %v (err = %v), want terminal = %v", gotTerminal, err, tc.wantTerminal)
@@ -300,7 +300,7 @@ func TestProcessPodGetErrorIsTransient(t *testing.T) {
 	if err == nil {
 		t.Fatal("want a transient error, got nil")
 	}
-	var te *TerminalError
+	var te *terminalError
 	if errors.As(err, &te) {
 		t.Fatalf("err = %v, must NOT be terminal", err)
 	}

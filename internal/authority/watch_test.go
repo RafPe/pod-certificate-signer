@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
 )
 
@@ -17,7 +19,7 @@ func rewriteCA(t *testing.T, dir string, kp *testutil.KeyPair) {
 	}
 }
 
-// Watch must reload the CA when the files change and notify the caller.
+// watch must reload the CA when the files change and notify the caller.
 func TestWatchReloadsCA(t *testing.T) {
 	dir := t.TempDir()
 	writeCA(t, dir, "ca-1.example.org", 24*time.Hour)
@@ -31,7 +33,7 @@ func TestWatchReloadsCA(t *testing.T) {
 	notify := make(chan struct{}, 1)
 	watchDone := make(chan error, 1)
 	go func() {
-		watchDone <- ca.Watch(ctx, notify)
+		watchDone <- ca.watch(ctx, notify)
 	}()
 
 	// There is no signal for "the directory watch is registered", so rather
@@ -68,5 +70,23 @@ waitForReload:
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Watch did not return after context cancellation")
+	}
+}
+
+// Compile-time guarantees that the watcher opts into controller-runtime's
+// leader-election routing explicitly, rather than relying on the implicit
+// "not a LeaderElectionRunnable ⇒ leader-gated" fallback.
+var (
+	_ manager.Runnable               = (*Watcher)(nil)
+	_ manager.LeaderElectionRunnable = (*Watcher)(nil)
+)
+
+// The CA watcher runs on every replica, so a standby keeps its in-memory CA
+// current and never signs or publishes with a stale CA after promotion.
+// controller-runtime confines a runnable to the leader unless it reports
+// NeedLeaderElection() == false.
+func TestWatcherRunsOnEveryReplica(t *testing.T) {
+	if NewWatcher(nil, nil).NeedLeaderElection() {
+		t.Error("Watcher is leader-gated; want it to run on every replica so standby CAs stay current")
 	}
 }

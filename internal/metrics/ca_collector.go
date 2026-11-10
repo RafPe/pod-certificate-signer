@@ -7,9 +7,9 @@ import (
 )
 
 // CAState is the view of the certificate authority the collector reads. It is
-// an interface so this package stays free of project imports - the authority
-// increments CAReloadAttempts, so it imports this package, and the dependency
-// cannot run both ways.
+// an interface so this package does not import internal/authority: the
+// authority increments CAReloadAttempts, so it imports this package, and the
+// dependency cannot run both ways.
 //
 // Each method must take its lock, copy a scalar and release: a scrape must
 // never be able to block on a signing operation, and vice versa.
@@ -24,11 +24,11 @@ type CAState interface {
 	TrustBundleSize() int
 }
 
-// caCollector reports the CA gauges (M3, M4, M5, M7) at scrape time rather than
-// writing them when a reload happens.
+// caCollector reports the CA gauges (ADR-0005's M3, M4, M5 and M7) at scrape
+// time rather than writing them when a reload happens.
 //
 // That is the point of it. A gauge written by a loop goes stale exactly when
-// the loop stops, which is the failure M4 exists to catch - a wedged ticker
+// the loop stops, which is the failure the last-success gauge exists to catch - a wedged ticker
 // produces no errors, so a failure-based signal stays at zero forever. Reading
 // live memory on every scrape means these four cannot lag the reload loop, and
 // there is no updater goroutine to start, stop or leak.
@@ -47,13 +47,14 @@ func NewCACollector(ca CAState) prometheus.Collector {
 		ca: ca,
 		consecutiveFailures: prometheus.NewDesc(
 			prometheus.BuildFQName(Namespace, "", "ca_reload_consecutive_failures"),
-			"Consecutive failed CA reload attempts. Readiness fails once this reaches 3 and has been there for ten minutes, "+
-				"so alerting at 3 gives roughly five minutes before the replica leaves the Service.",
+			"Consecutive failed CA reload attempts. Readiness fails once this reaches the readiness threshold and the failure "+
+				"streak is older than the grace period (both in docs/operations.md), so alerting on the threshold gives lead time "+
+				"before the replica leaves the Service.",
 			nil, nil),
 		lastSuccess: prometheus.NewDesc(
 			prometheus.BuildFQName(Namespace, "", "ca_reload_last_success_timestamp_seconds"),
 			"When the CA was last read successfully, as a Unix timestamp. Seeded at startup from the initial load. "+
-				"time() minus this exceeding the 60s reload interval by a margin means the reload loop has stopped, "+
+				"time() minus this exceeding the CA reload interval by a margin means the reload loop has stopped, "+
 				"which no failure-based signal can show.",
 			nil, nil),
 		expiration: prometheus.NewDesc(

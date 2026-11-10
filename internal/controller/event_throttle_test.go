@@ -36,7 +36,7 @@ func TestEventThrottleResetsAfterInterval(t *testing.T) {
 		if !throttle.allow(uid) {
 			t.Fatal("the first event must pass")
 		}
-		time.Sleep(defaultEventThrottleInterval)
+		time.Sleep(eventThrottleInterval)
 		synctest.Wait()
 		if !throttle.allow(uid) {
 			t.Error("an event after the interval elapsed must pass again")
@@ -45,7 +45,7 @@ func TestEventThrottleResetsAfterInterval(t *testing.T) {
 		// The expired entry for a second object is pruned on the next call, so
 		// the map holds only objects seen within the current window.
 		throttle.allow("other")
-		time.Sleep(defaultEventThrottleInterval)
+		time.Sleep(eventThrottleInterval)
 		synctest.Wait()
 		throttle.allow(uid)
 		if _, kept := throttle.last["other"]; kept {

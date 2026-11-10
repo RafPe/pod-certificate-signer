@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/url"
 	"time"
+
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/outcome"
 )
 
 // Certificate is a certificate issued for a pod, together with the
@@ -41,26 +43,18 @@ type Config struct {
 	ExtKeyUsage        []x509.ExtKeyUsage
 	PublicKey          crypto.PublicKey
 	PublicKeyAlgorithm x509.PublicKeyAlgorithm
-	// Warnings are non-fatal notices about how the configuration was resolved
+	// Notices are non-fatal facts about how the configuration was resolved
 	// (e.g. default pod DNS SANs omitted for an over-long pod name). The
 	// certificate still issues; the reconciler surfaces each as a Warning event
-	// and a log line so the operator can see why a default was dropped.
-	Warnings []string
+	// under its reason, so the operator can see why a default was dropped.
+	Notices []Notice
 }
 
-// CSR holds the values extracted from a kubelet-generated PKCS#10 certificate
-// request: the subject public key, and any requested subject alternative
-// names.
-//
-// Today kubelet generates completely empty CSRs, so the SAN slices are always
-// empty - the KEP plans for pod authors to request DNS and IP SANs which
-// kubelet will embed in the CSR, and carrying them now keeps the signer ready
-// for that.
-type CSR struct {
-	PublicKey          crypto.PublicKey
-	PublicKeyAlgorithm x509.PublicKeyAlgorithm
-	DNSNames           []string
-	IPAddresses        []net.IP
+// Notice is one non-fatal fact about how a configuration was resolved, with
+// the reason the reconciler reports it under.
+type Notice struct {
+	Reason  outcome.NonTerminalReason
+	Message string
 }
 
 // Defaults applied when the corresponding annotation is not present.
@@ -90,34 +84,40 @@ const (
 	RefreshMargin = 10 * time.Minute
 )
 
+// commonNameMaxLen is the RFC 5280 ub-common-name limit, easily exceeded by
+// interpolated pod names.
+const commonNameMaxLen = 64
+
 // Validate checks that the configuration can be used to issue a certificate
 // which kube-apiserver will accept on the status subresource. Validating up
 // front turns misconfigurations into an immediate denial instead of an
 // endless requeue loop caused by rejected status updates.
-func (pcc *Config) Validate() error {
-	if pcc.CommonName == "" {
+func (c *Config) Validate() error {
+	if c.PublicKey == nil {
+		return errors.New("a subject public key is required")
+	}
+	if c.CommonName == "" {
 		// An empty common name is valid as long as the certificate still
 		// carries a subject alternative name to identify by. Go marks the SAN
 		// extension critical in that case, which is exactly what we want for a
 		// SAN-only certificate (see defaultCommonName for long pod names).
-		if len(pcc.DNSNames) == 0 && len(pcc.IPAddresses) == 0 && len(pcc.URIs) == 0 {
+		if len(c.DNSNames) == 0 && len(c.IPAddresses) == 0 && len(c.URIs) == 0 {
 			return errors.New("common name or at least one subject alternative name is required")
 		}
-	} else if len(pcc.CommonName) > 64 {
-		// RFC 5280 ub-common-name; easily exceeded by interpolated pod names.
-		return fmt.Errorf("common name %q exceeds the 64 character limit", pcc.CommonName)
+	} else if len(c.CommonName) > commonNameMaxLen {
+		return fmt.Errorf("common name %q exceeds the %d character limit", c.CommonName, commonNameMaxLen)
 	}
-	if pcc.Duration < MinDuration {
-		return fmt.Errorf("duration (%s) must be at least %s", pcc.Duration, MinDuration)
+	if c.Duration < MinDuration {
+		return fmt.Errorf("duration (%s) must be at least %s", c.Duration, MinDuration)
 	}
-	if pcc.MaxExpiration > 0 && pcc.Duration > pcc.MaxExpiration {
-		return fmt.Errorf("duration (%s) exceeds the maxExpirationSeconds of the request (%s)", pcc.Duration, pcc.MaxExpiration)
+	if c.MaxExpiration > 0 && c.Duration > c.MaxExpiration {
+		return fmt.Errorf("duration (%s) exceeds the maxExpirationSeconds of the request (%s)", c.Duration, c.MaxExpiration)
 	}
-	if pcc.RefreshBefore < RefreshMargin {
-		return fmt.Errorf("refresh before (%s) must be at least %s", pcc.RefreshBefore, RefreshMargin)
+	if c.RefreshBefore < RefreshMargin {
+		return fmt.Errorf("refresh before (%s) must be at least %s", c.RefreshBefore, RefreshMargin)
 	}
-	if pcc.RefreshBefore > pcc.Duration-RefreshMargin {
-		return fmt.Errorf("refresh before (%s) must not exceed the certificate duration (%s) minus %s", pcc.RefreshBefore, pcc.Duration, RefreshMargin)
+	if c.RefreshBefore > c.Duration-RefreshMargin {
+		return fmt.Errorf("refresh before (%s) must not exceed the certificate duration (%s) minus %s", c.RefreshBefore, c.Duration, RefreshMargin)
 	}
 
 	return nil

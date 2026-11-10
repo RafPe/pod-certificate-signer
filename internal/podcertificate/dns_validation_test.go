@@ -45,7 +45,7 @@ func TestDNSNamesRejectMalformedValuesFromEverySource(t *testing.T) {
 				pod.Name = pcr.Spec.PodName
 			}
 
-			_, err := NewConfig(context.Background(), pcr, pod, tt.csr, tt.opts)
+			_, err := NewConfig(context.Background(), pcr, pod, testCSR(tt.csr), tt.opts)
 			if err == nil {
 				t.Fatalf("NewConfig(DNS SAN %q) error = nil, want invalid DNS name error", invalidName)
 			}
@@ -78,7 +78,7 @@ func TestDNSNameValidationBoundaries(t *testing.T) {
 				context.Background(),
 				pcr,
 				testPod(nil),
-				nil,
+				testCSR(nil),
 				Options{AllowUnverifiedIdentities: true},
 			)
 			if gotErr := err != nil; gotErr != tt.wantErr {
@@ -98,7 +98,7 @@ func TestDNSNameValidationRejectsOneInvalidNameInList(t *testing.T) {
 		context.Background(),
 		pcr,
 		testPod(nil),
-		nil,
+		testCSR(nil),
 		Options{AllowUnverifiedIdentities: true},
 	)
 	if err == nil || !strings.Contains(err.Error(), invalidName) {

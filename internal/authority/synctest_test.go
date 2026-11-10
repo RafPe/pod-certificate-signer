@@ -6,8 +6,16 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
+
+// reloadOnce runs a single reload attempt with no change subscriber, the way a
+// tick does, so tests exercise the reload path without spelling out its
+// internal arguments.
+func reloadOnce(ca *CertificateAuthority, logger logr.Logger) {
+	ca.reload(context.Background(), logger, nil, "test", 1)
+}
 
 // watchHarness is a watchLoop running inside the caller's synctest bubble.
 // events and errs never fire on their own, so only the reload ticker, or a

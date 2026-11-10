@@ -11,7 +11,7 @@ import (
 
 // Name must follow the <domain>:<path>:<name> convention.
 func TestName(t *testing.T) {
-	got := Name("example.org/signer")
+	got := bundleName("example.org/signer")
 	want := "example.org:signer:bundle"
 	if got != want {
 		t.Fatalf("Name = %q, want %q", got, want)

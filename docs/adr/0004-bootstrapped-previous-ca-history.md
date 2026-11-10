@@ -138,10 +138,11 @@ its first minute.
 
 ## More Information
 
-- `internal/authority/authority.go` — `normalizePreviousCertificates`,
-  `validateCACertificate`, `WithPreviousCABundle`.
-- `cmd/podcertificate-signer/main.go` — `loadPreviousCAHistory`,
-  `errCAHistoryBundleAbsent`, `--require-ca-history`.
+- `internal/authority/authority.go` — `normalizePreviousCAs`,
+  `validateCACertificate`, `WithPreviousCAs`, `WithMaxPreviousCAs`.
+- `internal/trustbundle/history.go` — `LoadPreviousCAHistory`,
+  `ErrHistoryBundleAbsent`; `--require-ca-history` is wired in
+  `cmd/podcertificate-signer/main.go`.
 - `docs/operations.md` — rotation runbook and the operator-facing guidance for
   `signer.require_ca_history`.
 - [#30](https://github.com/RafPe/pod-certificate-signer/issues/30) — the earlier

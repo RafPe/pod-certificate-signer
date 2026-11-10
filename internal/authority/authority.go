@@ -97,13 +97,10 @@ type CertificateAuthority struct {
 // are dropped rather than adopted and republished.
 // See docs/adr/0004-bootstrapped-previous-ca-history.md.
 func WithPreviousCAs(certs []*x509.Certificate) Option {
-	opt := func(ca *CertificateAuthority) error {
+	return func(ca *CertificateAuthority) error {
 		ca.previousCAs = certs
-
 		return nil
 	}
-
-	return opt
 }
 
 // WithLogger is an [Option], which gives the [CertificateAuthority] a logger for
@@ -112,28 +109,22 @@ func WithPreviousCAs(certs []*x509.Certificate) Option {
 // is exactly what makes a rewritten trust bundle hard to notice. Defaults to a
 // discard logger.
 func WithLogger(logger logr.Logger) Option {
-	opt := func(ca *CertificateAuthority) error {
+	return func(ca *CertificateAuthority) error {
 		ca.logger = logger
-
 		return nil
 	}
-
-	return opt
 }
 
 // WithMaxPreviousCAs is an [Option], which configures how many previous CA
 // certificates to retain in the rolling window. Defaults to 1; 0 keeps none.
 func WithMaxPreviousCAs(n int) Option {
-	opt := func(ca *CertificateAuthority) error {
+	return func(ca *CertificateAuthority) error {
 		if n < 0 {
 			return errors.New("max previous CAs must be non-negative")
 		}
 		ca.maxPreviousCAs = n
-
 		return nil
 	}
-
-	return opt
 }
 
 // New creates a [CertificateAuthority] from the CA certificate and key files
@@ -186,23 +177,29 @@ func New(caCertFile, caKeyFile string, opts ...Option) (*CertificateAuthority, e
 // still counts as a successful reload: "the CA is readable" is the health
 // signal, "the CA changed" is not.
 func (ca *CertificateAuthority) load() (bool, error) {
+	// Every failure names the files, so an operator can tell which mount is
+	// wrong from the log line alone.
+	wrap := func(err error) error {
+		return fmt.Errorf("load CA from %s and %s: %w", ca.caCertFile, ca.caKeyFile, err)
+	}
+
 	keyPair, err := tls.LoadX509KeyPair(ca.caCertFile, ca.caKeyFile)
 	if err != nil {
-		return false, fmt.Errorf("load key pair: %w", err)
+		return false, wrap(fmt.Errorf("load key pair: %w", err))
 	}
 
 	caCert, err := x509.ParseCertificate(keyPair.Certificate[0])
 	if err != nil {
-		return false, fmt.Errorf("parse certificate: %w", err)
+		return false, wrap(fmt.Errorf("parse certificate: %w", err))
 	}
 
 	if err := validateCACertificate(caCert, time.Now()); err != nil {
-		return false, err
+		return false, wrap(err)
 	}
 
 	signer, ok := keyPair.PrivateKey.(crypto.Signer)
 	if !ok {
-		return false, errors.New("private key does not implement crypto.Signer interface")
+		return false, wrap(errors.New("private key does not implement crypto.Signer interface"))
 	}
 
 	fingerprint := sha256.Sum256(keyPair.Certificate[0])
@@ -279,8 +276,8 @@ func validateCACertificate(cert *x509.Certificate, now time.Time) error {
 // unusable entries *before* trimming means a rotation back into a certificate
 // the history already holds, or an expired anchor nobody can verify against,
 // cannot evict a previous CA whose certificates are still in the field. Trimming
-// first - which is what the code did while the trim lived in the rotate branch -
-// spends retention slots on certificates that are about to be discarded anyway.
+// first would spend retention slots on certificates that are about to be
+// discarded anyway.
 //
 // Certificates are compared by their DER bytes, the same identity the
 // fingerprint expresses, so "the same CA" means the same certificate rather
@@ -324,13 +321,13 @@ func (ca *CertificateAuthority) normalizePreviousCAs() {
 	ca.previousCAs = kept
 }
 
-// Sign issues a certificate for pcConfig under the current CA and returns it
+// Sign issues a certificate for cfg under the current CA and returns it
 // together with the PEM chain (leaf, then CA).
 //
 // Failures caused by the CA itself - none loaded, an expired signer, or a
-// pcConfig.Duration that does not fit inside the remaining CA validity - wrap
+// cfg.Duration that does not fit inside the remaining CA validity - wrap
 // [ErrCASignerUnusable]; see its doc. Any other error is terminal.
-func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.Config) (*podcertificate.Certificate, error) {
+func (ca *CertificateAuthority) Sign(cfg *podcertificate.Config) (*podcertificate.Certificate, error) {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 
@@ -345,7 +342,7 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.Config) (*podcerti
 		return nil, fmt.Errorf("the signer has expired: NotAfter=%v: %w", ca.certificate.NotAfter, ErrCASignerUnusable)
 	}
 
-	notAfter := notBefore.Add(pcConfig.Duration)
+	notAfter := notBefore.Add(cfg.Duration)
 	if notAfter.After(ca.certificate.NotAfter) {
 		return nil, fmt.Errorf("certificate validity period exceeds the signer CA validity: notAfter=%v, caNotAfter=%v: %w", notAfter, ca.certificate.NotAfter, ErrCASignerUnusable)
 	}
@@ -355,21 +352,21 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.Config) (*podcerti
 
 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 	if err != nil {
-		return nil, fmt.Errorf("generate serial number for %s: %w", pcConfig.CommonName, err)
+		return nil, fmt.Errorf("generate serial number for %s: %w", cfg.CommonName, err)
 	}
 
 	template := &x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			CommonName: pcConfig.CommonName,
+			CommonName: cfg.CommonName,
 		},
-		DNSNames:           pcConfig.DNSNames,
-		IPAddresses:        pcConfig.IPAddresses,
-		URIs:               pcConfig.URIs,
-		PublicKeyAlgorithm: pcConfig.PublicKeyAlgorithm,
-		PublicKey:          pcConfig.PublicKey,
-		KeyUsage:           pcConfig.KeyUsage,
-		ExtKeyUsage:        pcConfig.ExtKeyUsage,
+		DNSNames:           cfg.DNSNames,
+		IPAddresses:        cfg.IPAddresses,
+		URIs:               cfg.URIs,
+		PublicKeyAlgorithm: cfg.PublicKeyAlgorithm,
+		PublicKey:          cfg.PublicKey,
+		KeyUsage:           cfg.KeyUsage,
+		ExtKeyUsage:        cfg.ExtKeyUsage,
 		NotBefore:          notBefore,
 		NotAfter:           notAfter,
 		// BasicConstraintsValid is what makes Go emit the basicConstraints
@@ -384,15 +381,15 @@ func (ca *CertificateAuthority) Sign(pcConfig *podcertificate.Config) (*podcerti
 		BasicConstraintsValid: true,
 	}
 
-	issuedCertificate, err := x509.CreateCertificate(rand.Reader, template, ca.certificate, pcConfig.PublicKey, ca.signer)
+	issuedCertificate, err := x509.CreateCertificate(rand.Reader, template, ca.certificate, cfg.PublicKey, ca.signer)
 	if err != nil {
-		return nil, fmt.Errorf("create certificate for public key type %T: %w", pcConfig.PublicKey, err)
+		return nil, fmt.Errorf("create certificate for public key type %T: %w", cfg.PublicKey, err)
 	}
 
 	return &podcertificate.Certificate{
 		// Issued certificate first, then the CA that signed it.
 		CertificateChain: string(certificatePEM(issuedCertificate)) + string(certificatePEM(ca.certificate.Raw)),
-		Config:           pcConfig,
+		Config:           cfg,
 		NotBefore:        notBefore,
 		NotAfter:         notAfter,
 	}, nil
@@ -421,4 +418,36 @@ func (ca *CertificateAuthority) TrustBundlePEM() []byte {
 	}
 
 	return bundle
+}
+
+// CertificateNotAfter reports when the loaded CA certificate expires. It is
+// safe for concurrent use: it takes mu, copies a scalar and releases, so a
+// caller reading it on a metrics scrape does not hold the lock across signing.
+// With no certificate loaded it reports the zero time, which the collector
+// renders as a 0 gauge (see metrics.timestamp) - correctly firing the
+// staleness alert.
+func (ca *CertificateAuthority) CertificateNotAfter() time.Time {
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
+
+	if ca.certificate == nil {
+		return time.Time{}
+	}
+
+	return ca.certificate.NotAfter
+}
+
+// TrustBundleSize reports how many certificates the in-memory trust bundle
+// holds: the current CA plus the retained previous ones. It is what the signer
+// would publish, not a read of the published ClusterTrustBundle; with no CA
+// loaded that is nothing, matching TrustBundlePEM. Safe for concurrent use.
+func (ca *CertificateAuthority) TrustBundleSize() int {
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
+
+	if ca.certificate == nil {
+		return 0
+	}
+
+	return 1 + len(ca.previousCAs)
 }

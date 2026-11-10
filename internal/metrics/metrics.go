@@ -57,26 +57,26 @@ const (
 	PublishFailed    PublishResult = "failed"
 )
 
-// issuanceOutcome is one outcome/reason pair the reconciler can record.
-type issuanceOutcome struct {
+// terminalOutcome is one outcome/reason pair the reconciler can record.
+type terminalOutcome struct {
 	kind   outcome.Kind
 	reason outcome.ConditionReason
 }
 
-// issuanceOutcomes is every outcome/reason pair the reconciler can record, and
+// terminalOutcomes is every outcome/reason pair the reconciler can record, and
 // the only ones pre-initialized. It is hand-curated rather than derived from
 // the reason constants because they do not form a cross product: deriving the
 // table would ship a permanent zero series for pairs that cannot occur, which
 // is worse than no series at all - it makes an operator believe a category is
 // being watched.
-var issuanceOutcomes = []issuanceOutcome{
+var terminalOutcomes = []terminalOutcome{
 	{outcome.Issued, outcome.CertificateIssued},
 	{outcome.Denied, outcome.UnsupportedKeyType},
 	{outcome.Denied, outcome.InvalidUserConfig},
 	{outcome.Failed, outcome.SigningFailed},
 }
 
-// PodCertificateRequests counts terminal PodCertificateRequest outcomes (M1).
+// PodCertificateRequests counts terminal PodCertificateRequest outcomes (ADR-0005 M1).
 // It carries the SLI: issued over total.
 //
 // Every request contributes at most once, because a terminal condition makes
@@ -90,7 +90,7 @@ var PodCertificateRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
 		"so an outcome discarded by a lost race is not counted. Requeues and drops are counted separately.",
 }, []string{"outcome", "reason"})
 
-// PodCertificateRequestRequeues counts reconciles returned for retry (M1b).
+// PodCertificateRequestRequeues counts reconciles returned for retry (ADR-0005 M1b).
 // It is per attempt by construction, which is the point: one request requeueing
 // forever is exactly the silent hang this isolates, and it would be invisible
 // in a terminal-outcome counter.
@@ -101,7 +101,7 @@ var PodCertificateRequestRequeues = prometheus.NewCounterVec(prometheus.CounterO
 		"CASignerUnusable rising with nothing terminal alongside it means requests are hanging on the CA, with pods stuck in ContainerCreating.",
 }, []string{"reason"})
 
-// PodCertificateRequestDrops counts requests dropped without a status (M1c):
+// PodCertificateRequestDrops counts requests dropped without a status (ADR-0005 M1c):
 // each one is a pod that will never get its credential.
 //
 // A drop writes no status, so the request never becomes immutable and the same
@@ -114,7 +114,7 @@ var PodCertificateRequestDrops = prometheus.NewCounterVec(prometheus.CounterOpts
 		"not terminal and the same request may be counted more than once; read this as occurrences, not as distinct requests.",
 }, []string{"reason"})
 
-// CAReloadAttempts counts CA reload attempts by result (M2).
+// CAReloadAttempts counts CA reload attempts by result (ADR-0005 M2).
 //
 // It is attempts, not reloads: a single burst retries up to five times, so the
 // counter can rise by five where the log rose by one. {result="changed"} marks
@@ -128,10 +128,9 @@ var CAReloadAttempts = prometheus.NewCounterVec(prometheus.CounterOpts{
 }, []string{"result"})
 
 // ClusterTrustBundlePublishAttempts counts ClusterTrustBundle publish attempts
-// by result (M6). It replaces the unprefixed ctb_publish_failures_total, whose
-// failure count is now {result="failed"}: a failure-only counter cannot express
-// a ratio, and its zero is ambiguous between healthy, never-been-leader and
-// wedged.
+// by result (ADR-0005 M6). It counts successes as well as failures because a
+// failure-only counter cannot express a ratio, and its zero is ambiguous
+// between healthy, never-been-leader and wedged.
 //
 // {result="updated"} on a drift-repair tick with no CA rotation to explain it
 // means the published bundle was not what we wanted and we overwrote it - i.e.
@@ -183,10 +182,10 @@ func preInitialize() {
 	for _, result := range []ReloadResult{ReloadChanged, ReloadUnchanged, ReloadFailed} {
 		CAReloadAttempts.WithLabelValues(string(result))
 	}
-	for _, pair := range issuanceOutcomes {
+	for _, pair := range terminalOutcomes {
 		PodCertificateRequests.WithLabelValues(string(pair.kind), string(pair.reason))
 	}
-	for _, reason := range []outcome.EventReason{outcome.CASignerUnusable, outcome.Transient} {
+	for _, reason := range []outcome.NonTerminalReason{outcome.CASignerUnusable, outcome.Transient} {
 		PodCertificateRequestRequeues.WithLabelValues(string(reason))
 	}
 	PodCertificateRequestDrops.WithLabelValues(string(outcome.AssociatedPodGone))

@@ -129,8 +129,8 @@ func TestPersistentlyUnloadableCAEventuallyFailsReadiness(t *testing.T) {
 			t.Fatalf("write non-CA files: %v", err)
 		}
 
-		if _, err := ca.loadWithRetry(t.Context(), log.FromContext(t.Context()), ca.reloadAttempts); err == nil {
-			t.Fatal("loadWithRetry() = nil, want error for a permanently unloadable CA")
+		if _, err := ca.reloadWithRetry(t.Context(), log.FromContext(t.Context()), ca.reloadAttempts); err == nil {
+			t.Fatal("reloadWithRetry() = nil, want error for a permanently unloadable CA")
 		}
 
 		// Still inside the grace window: the last-good CA keeps signing, so the

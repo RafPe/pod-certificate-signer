@@ -42,7 +42,7 @@ guarded by this lease has successfully completed prior to cancelling the
 context, or you may have two processes simultaneously acting on the critical
 path."* controller-runtime defers `leaderElectionCancel()` until every
 `runnables.*.StopAndWait` has returned, and `mgr.Start` is the last statement in
-`main()`, so the binary meets that — but only within `GracefulShutdownTimeout`
+`run()`, whose return ends the process, so the binary meets that — but only within `GracefulShutdownTimeout`
 (30 second default). Past that deadline the deferred release fires with
 leader-gated code possibly still live.
 
@@ -67,15 +67,16 @@ is not: a transport or per-request deadline surfaces as an error wrapping
 `context.DeadlineExceeded` while the publisher's context is still live, so an
 error-keyed predicate abandons the publish after a single attempt against a slow
 API server. That leaves the ClusterTrustBundle stale until the next
-`ctbDriftRepairInterval` tick, with readiness failing in the meantime, and it
+`driftRepairInterval` tick (`internal/trustbundle/publisher.go`), with readiness failing in the meantime, and it
 does so worst right after a CA rotation — exactly when the bundle most needs to
 be current. The publisher's own context ending is the only condition that makes
 a further attempt pointless, so it is the only condition the predicate tests.
 
 Two preconditions come with it, and they are the durable part of this record:
 
-**`mgr.Start` stays the last statement in `main()`.** The release is only safe
-if the process exits as soon as the manager stops.
+**`mgr.Start` stays the last statement in `run()`, and `main` exits as soon as
+`run` returns.** The release is only safe if the process exits as soon as the
+manager stops.
 
 **Every leader-gated runnable's shutdown is bounded by its context.** The
 guarantee that the Lease is released only after all runnables return holds only

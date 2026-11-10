@@ -44,7 +44,7 @@ func TestUnverifiedIdentitiesDeniedByDefault(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			pcr := verifiedPCR(tc.annotations)
-			if _, err := NewConfig(context.Background(), pcr, testPod(nil), nil, tc.opts); err == nil {
+			if _, err := NewConfig(context.Background(), pcr, testPod(nil), testCSR(nil), tc.opts); err == nil {
 				t.Fatalf("want denial for unverified identity %v, got nil", tc.annotations)
 			}
 		})
@@ -59,7 +59,7 @@ func TestVerifiedIdentitiesAccepted(t *testing.T) {
 		testSignerName + "-san": "${pod.serviceAccountName}.${pod.namespace}",
 	})
 
-	config, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true})
+	config, err := NewConfig(context.Background(), pcr, testPod(nil), testCSR(nil), Options{EnableInterpolation: true})
 	if err != nil {
 		t.Fatalf("NewConfig: %v", err)
 	}
@@ -77,12 +77,12 @@ func TestVerifiedIdentitiesAccepted(t *testing.T) {
 func TestNodeAndUIDNotClaimable(t *testing.T) {
 	pcr := verifiedPCR(map[string]string{testSignerName + "-cn": "${node.name}"})
 	pcr.Spec.NodeName = "node-1"
-	if _, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true}); err == nil {
+	if _, err := NewConfig(context.Background(), pcr, testPod(nil), testCSR(nil), Options{EnableInterpolation: true}); err == nil {
 		t.Error("want denial for cn=${node.name}, got nil")
 	}
 
 	pcr = verifiedPCR(map[string]string{testSignerName + "-cn": "${pod.uid}"})
-	if _, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true}); err == nil {
+	if _, err := NewConfig(context.Background(), pcr, testPod(nil), testCSR(nil), Options{EnableInterpolation: true}); err == nil {
 		t.Error("want denial for cn=${pod.uid}, got nil")
 	}
 }
@@ -108,7 +108,7 @@ func TestServiceAccountServiceDNSFormsDenied(t *testing.T) {
 	} {
 		t.Run(san, func(t *testing.T) {
 			pcr := verifiedPCR(map[string]string{testSignerName + "-san": san})
-			if _, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true}); err == nil {
+			if _, err := NewConfig(context.Background(), pcr, testPod(nil), testCSR(nil), Options{EnableInterpolation: true}); err == nil {
 				t.Fatalf("want denial for san=%q, got nil", san)
 			}
 		})
@@ -125,7 +125,7 @@ func TestServiceAccountSPIFFEIDAccepted(t *testing.T) {
 		testSignerName + "-uris": "spiffe://${cluster.fqdn}/ns/${pod.namespace}/sa/${pod.serviceAccountName}",
 	})
 
-	config, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true})
+	config, err := NewConfig(context.Background(), pcr, testPod(nil), testCSR(nil), Options{EnableInterpolation: true})
 	if err != nil {
 		t.Fatalf("NewConfig: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestPodServiceDNSFormsAccepted(t *testing.T) {
 	} {
 		t.Run(san, func(t *testing.T) {
 			pcr := verifiedPCR(map[string]string{testSignerName + "-san": san})
-			config, err := NewConfig(context.Background(), pcr, testPod(nil), nil, Options{EnableInterpolation: true})
+			config, err := NewConfig(context.Background(), pcr, testPod(nil), testCSR(nil), Options{EnableInterpolation: true})
 			if err != nil {
 				t.Fatalf("NewConfig(san=%q): %v", san, err)
 			}
@@ -165,7 +165,7 @@ func TestPodServiceDNSFormsAccepted(t *testing.T) {
 // (3): The default extended key usage must be ServerAuth only; ClientAuth is an
 // explicit opt-in via the eku annotation.
 func TestDefaultEKUServerAuthOnly(t *testing.T) {
-	config, err := NewConfig(context.Background(), testPCR(nil), testPod(nil), nil, Options{})
+	config, err := NewConfig(context.Background(), testPCR(nil), testPod(nil), testCSR(nil), Options{})
 	if err != nil {
 		t.Fatalf("NewConfig: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestDefaultEKUServerAuthOnly(t *testing.T) {
 		t.Errorf("default ExtKeyUsage = %v, want ServerAuth only %v", config.ExtKeyUsage, want)
 	}
 
-	optIn, err := NewConfig(context.Background(), testPCR(map[string]string{testSignerName + "-eku": "client"}), testPod(nil), nil, Options{})
+	optIn, err := NewConfig(context.Background(), testPCR(map[string]string{testSignerName + "-eku": "client"}), testPod(nil), testCSR(nil), Options{})
 	if err != nil {
 		t.Fatalf("NewConfig: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestLongPodNameIdentityFallback(t *testing.T) {
 		pcr := testPCR(nil)
 		pcr.Spec.PodName = name
 
-		config, err := NewConfig(context.Background(), pcr, pod, nil, Options{})
+		config, err := NewConfig(context.Background(), pcr, pod, testCSR(nil), Options{})
 		if err != nil {
 			t.Fatalf("NewConfig: %v", err)
 		}
@@ -216,7 +216,7 @@ func TestLongPodNameIdentityFallback(t *testing.T) {
 		pcr := testPCR(nil)
 		pcr.Spec.PodName = name
 
-		_, err := NewConfig(context.Background(), pcr, pod, nil, Options{})
+		_, err := NewConfig(context.Background(), pcr, pod, testCSR(nil), Options{})
 		if err == nil {
 			t.Fatal("NewConfig() error = nil, want a denial when there is neither a CN nor a SAN")
 		}
@@ -251,7 +251,7 @@ func TestLongPodNameOmitsDefaultDNSSANs(t *testing.T) {
 			pcr := testPCR(nil)
 			pcr.Spec.PodName = tc.podName
 
-			config, err := NewConfig(context.Background(), pcr, pod, nil, Options{})
+			config, err := NewConfig(context.Background(), pcr, pod, testCSR(nil), Options{})
 			if err != nil {
 				t.Fatalf("NewConfig: %v", err)
 			}
@@ -267,13 +267,13 @@ func TestLongPodNameOmitsDefaultDNSSANs(t *testing.T) {
 				t.Errorf("has default DNS SANs = %v (%v), want %v", gotSANs, config.DNSNames, tc.wantSANs)
 			}
 			gotWarning := false
-			for _, w := range config.Warnings {
-				if strings.Contains(w, "DNS label limit") {
+			for _, n := range config.Notices {
+				if strings.Contains(n.Message, "DNS label limit") {
 					gotWarning = true
 				}
 			}
 			if gotWarning != tc.wantWarning {
-				t.Errorf("DNS-label warning surfaced = %v (%v), want %v", gotWarning, config.Warnings, tc.wantWarning)
+				t.Errorf("DNS-label warning surfaced = %v (%v), want %v", gotWarning, config.Notices, tc.wantWarning)
 			}
 		})
 	}
@@ -289,7 +289,7 @@ func TestLongPodNameNoDefaultSANCollision(t *testing.T) {
 		pod.Name = podName
 		pcr := testPCR(nil)
 		pcr.Spec.PodName = podName
-		config, err := NewConfig(context.Background(), pcr, pod, nil, Options{})
+		config, err := NewConfig(context.Background(), pcr, pod, testCSR(nil), Options{})
 		if err != nil {
 			t.Fatalf("NewConfig(%q): %v", podName, err)
 		}

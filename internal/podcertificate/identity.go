@@ -68,7 +68,7 @@ func interpolate(value string, vars map[string]string, enabled bool) (string, er
 // returns an empty common name, leaving the certificate to be identified by
 // its subject alternative names (which carry the verifiable identity anyway).
 func defaultCommonName(podName string) string {
-	if len(podName) > 64 {
+	if len(podName) > commonNameMaxLen {
 		return ""
 	}
 	return podName
@@ -195,8 +195,15 @@ func validateDNSNames(names []string) error {
 	return nil
 }
 
-// ValidateClusterFQDN validates the operator-configured DNS suffix used for
-// generated and interpolated certificate identities.
-func ValidateClusterFQDN(clusterFQDN string) error {
-	return validateDNSNames([]string{clusterFQDN})
+// Validate checks the options once, at startup: the cluster FQDN is the DNS
+// suffix of every generated and interpolated identity, so it must be a valid
+// DNS name. NewConfig relies on options that have passed it.
+func (o Options) Validate() error {
+	if o.ClusterFQDN == "" {
+		return nil // DefaultClusterFQDN applies
+	}
+	if err := validateDNSNames([]string{o.ClusterFQDN}); err != nil {
+		return fmt.Errorf("cluster FQDN %q: %w", o.ClusterFQDN, err)
+	}
+	return nil
 }

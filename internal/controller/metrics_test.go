@@ -29,14 +29,13 @@ import (
 // object records.
 func TestTerminalOutcomesAreCounted(t *testing.T) {
 	cases := []struct {
-		name          string
-		conditionType string
-		reason        outcome.ConditionReason
-		wantOutcome   outcome.Kind
+		name        string
+		reason      outcome.ConditionReason
+		wantOutcome outcome.Kind
 	}{
-		{"issued", certificatesv1.PodCertificateRequestConditionTypeIssued, outcome.CertificateIssued, outcome.Issued},
-		{"denied", certificatesv1.PodCertificateRequestConditionTypeDenied, outcome.UnsupportedKeyType, outcome.Denied},
-		{"failed", certificatesv1.PodCertificateRequestConditionTypeFailed, outcome.SigningFailed, outcome.Failed},
+		{"issued", outcome.CertificateIssued, outcome.Issued},
+		{"denied", outcome.UnsupportedKeyType, outcome.Denied},
+		{"failed", outcome.SigningFailed, outcome.Failed},
 	}
 
 	for _, tc := range cases {
@@ -55,7 +54,7 @@ func TestTerminalOutcomesAreCounted(t *testing.T) {
 
 			before := outcomeCount(tc.wantOutcome, tc.reason)
 			if _, err := r.recordOutcome(context.Background(), pcr,
-				tc.conditionType, tc.reason, "message", corev1.EventTypeNormal); err != nil {
+				tc.wantOutcome, tc.reason, "message"); err != nil {
 				t.Fatalf("recordOutcome: %v", err)
 			}
 			if got := outcomeCount(tc.wantOutcome, tc.reason) - before; got != 1 {
@@ -110,7 +109,7 @@ func TestOutcomeNotCountedWhenStatusWriteIsLost(t *testing.T) {
 
 	before := outcomeCount(outcome.Issued, outcome.CertificateIssued)
 	if _, err := r.recordOutcome(context.Background(), pcr,
-		certificatesv1.PodCertificateRequestConditionTypeIssued, outcome.CertificateIssued, "issued", corev1.EventTypeNormal); err != nil {
+		outcome.Issued, outcome.CertificateIssued, "issued"); err != nil {
 		t.Fatalf("recordOutcome: %v", err)
 	}
 	if got := outcomeCount(outcome.Issued, outcome.CertificateIssued) - before; got != 0 {
@@ -124,7 +123,7 @@ func TestRequeuesAreClassified(t *testing.T) {
 	cases := []struct {
 		name       string
 		err        error
-		wantReason outcome.EventReason
+		wantReason outcome.NonTerminalReason
 	}{
 		{"ca unusable", fmt.Errorf("cannot sign: %w", authority.ErrCASignerUnusable), outcome.CASignerUnusable},
 		{"anything else", errors.New("etcdserver: request timed out"), outcome.Transient},
@@ -264,7 +263,7 @@ func outcomeCount(kind outcome.Kind, reason outcome.ConditionReason) float64 {
 	return promtestutil.ToFloat64(metrics.PodCertificateRequests.WithLabelValues(string(kind), string(reason)))
 }
 
-func requeueCount(reason outcome.EventReason) float64 {
+func requeueCount(reason outcome.NonTerminalReason) float64 {
 	return promtestutil.ToFloat64(metrics.PodCertificateRequestRequeues.WithLabelValues(string(reason)))
 }
 
