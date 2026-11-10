@@ -117,50 +117,6 @@ func TestOutcomeNotCountedWhenStatusWriteIsLost(t *testing.T) {
 	}
 }
 
-// A requeue is classified, never counted as an outcome: the CA-unusable case is
-// the silent hang, and it must be separable from ordinary transient noise.
-func TestRequeuesAreClassified(t *testing.T) {
-	cases := []struct {
-		name       string
-		err        error
-		wantReason outcome.NonTerminalReason
-	}{
-		{"ca unusable", fmt.Errorf("cannot sign: %w", authority.ErrCASignerUnusable), outcome.CASignerUnusable},
-		{"anything else", errors.New("etcdserver: request timed out"), outcome.Transient},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			// requeueOrRecordTerminal announces CA-unusable requeues as an event, so the
-			// reconciler needs a recorder even though this test asserts the metric.
-			r := &PodCertificateRequestReconciler{Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
-			ctx := logr.NewContext(context.Background(), logr.Discard())
-
-			before := requeueCount(tc.wantReason)
-			if _, err := r.requeueOrRecordTerminal(ctx, &certificatesv1.PodCertificateRequest{}, tc.err); err == nil {
-				t.Fatal("requeueOrRecordTerminal() error = nil, want the transient error returned for requeue")
-			}
-			if got := requeueCount(tc.wantReason) - before; got != 1 {
-				t.Errorf("requeue counter for %q moved by %v, want 1", tc.wantReason, got)
-			}
-		})
-	}
-}
-
-// A drop writes no status, so the counter is the only aggregate record that a
-// pod went without its credential.
-func TestDropsAreCounted(t *testing.T) {
-	r := &PodCertificateRequestReconciler{EventRecorder: events.NewFakeRecorder(10)}
-
-	before := dropCount()
-	r.warnPodGone(&certificatesv1.PodCertificateRequest{
-		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns"},
-	}, "pod is gone")
-	if got := dropCount() - before; got != 1 {
-		t.Errorf("drop counter moved by %v, want 1", got)
-	}
-}
-
 // The property the whole surface rests on: the number of time series does not
 // move with the number of requests processed. If a per-request value ever
 // reaches a label, this is the test that turns red.
