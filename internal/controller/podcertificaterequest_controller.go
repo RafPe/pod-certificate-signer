@@ -245,8 +245,9 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 	return ctrl.Result{}, nil
 }
 
-// signRequest runs the signing pipeline for a PodCertificateRequest. It
-// reports nothing itself; Reconcile routes what it returns:
+// signRequest runs the signing pipeline for a PodCertificateRequest. The only
+// thing it reports itself is a Warning event for each notice the certificate
+// configuration carries; Reconcile routes what it returns:
 //   - (cert, nil) on success; cert is never nil when err is nil
 //   - (nil, err wrapping errDropRequest) when there is nothing to do: the
 //     associated pod is being deleted, or a live read confirms it is gone

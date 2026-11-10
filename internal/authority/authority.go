@@ -328,23 +328,27 @@ func (ca *CertificateAuthority) normalizePreviousCAs() {
 // cfg.Duration that does not fit inside the remaining CA validity - wrap
 // [ErrCASignerUnusable]; see its doc. Any other error is terminal.
 func (ca *CertificateAuthority) Sign(cfg *podcertificate.Config) (*podcertificate.Certificate, error) {
+	// Copy the CA material under the lock and sign without it, so a metrics
+	// scrape or a reload never waits on a signing operation. A reload replaces
+	// these values rather than mutating them, so the copies stay consistent.
 	ca.mu.Lock()
-	defer ca.mu.Unlock()
+	caCert, caSigner, backDate := ca.certificate, ca.signer, ca.backDate
+	ca.mu.Unlock()
 
-	if ca.certificate == nil {
+	if caCert == nil {
 		return nil, fmt.Errorf("no CA certificate loaded: %w", ErrCASignerUnusable)
 	}
 
 	now := time.Now()
 
-	notBefore := now.Add(-ca.backDate)
-	if !notBefore.Before(ca.certificate.NotAfter) {
-		return nil, fmt.Errorf("the signer has expired: NotAfter=%v: %w", ca.certificate.NotAfter, ErrCASignerUnusable)
+	notBefore := now.Add(-backDate)
+	if !notBefore.Before(caCert.NotAfter) {
+		return nil, fmt.Errorf("the signer has expired: NotAfter=%v: %w", caCert.NotAfter, ErrCASignerUnusable)
 	}
 
 	notAfter := notBefore.Add(cfg.Duration)
-	if notAfter.After(ca.certificate.NotAfter) {
-		return nil, fmt.Errorf("certificate validity period exceeds the signer CA validity: notAfter=%v, caNotAfter=%v: %w", notAfter, ca.certificate.NotAfter, ErrCASignerUnusable)
+	if notAfter.After(caCert.NotAfter) {
+		return nil, fmt.Errorf("certificate validity period exceeds the signer CA validity: notAfter=%v, caNotAfter=%v: %w", notAfter, caCert.NotAfter, ErrCASignerUnusable)
 	}
 	if notAfter.Before(now) {
 		return nil, fmt.Errorf("certificate not after is in the past: %v", notAfter)
@@ -381,14 +385,14 @@ func (ca *CertificateAuthority) Sign(cfg *podcertificate.Config) (*podcertificat
 		BasicConstraintsValid: true,
 	}
 
-	issuedCertificate, err := x509.CreateCertificate(rand.Reader, template, ca.certificate, cfg.PublicKey, ca.signer)
+	issuedCertificate, err := x509.CreateCertificate(rand.Reader, template, caCert, cfg.PublicKey, caSigner)
 	if err != nil {
 		return nil, fmt.Errorf("create certificate for public key type %T: %w", cfg.PublicKey, err)
 	}
 
 	return &podcertificate.Certificate{
 		// Issued certificate first, then the CA that signed it.
-		CertificateChain: string(certificatePEM(issuedCertificate)) + string(certificatePEM(ca.certificate.Raw)),
+		CertificateChain: string(certificatePEM(issuedCertificate)) + string(certificatePEM(caCert.Raw)),
 		Config:           cfg,
 		NotBefore:        notBefore,
 		NotAfter:         notAfter,
