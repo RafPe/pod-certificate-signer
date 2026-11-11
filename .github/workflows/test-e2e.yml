@@ -32,18 +32,14 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install kind
-        env:
-          KIND_VERSION: v0.33.0
-        run: |
-          KIND_BIN="${RUNNER_TEMP}/kind"
-          curl --fail --location --output "${KIND_BIN}" \
-            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
-          chmod +x "${KIND_BIN}"
-          sudo mv "${KIND_BIN}" /usr/local/bin/kind
-
+      # kind comes from the tools module (internal/tools/go.mod), the same
+      # binary the Makefile runs the suite with. It used to be curl'd from
+      # kind.sigs.k8s.io, which redirects to GitHub release assets; a transient
+      # 504 there failed the whole job before a single spec ran, for a binary
+      # the suite never used. The module proxy is already warm from setup-go's
+      # cache, so this adds no extra network hop and no second version to pin.
       - name: Verify kind installation
-        run: kind version
+        run: go tool -modfile internal/tools/go.mod kind version
 
       # The e2e package is behind //go:build e2e, so the repo-wide `go vet ./...`
       # and `golangci-lint run` never look at it. Gate it here, before the
@@ -59,4 +55,4 @@ jobs:
       # runner-level timeout that kills make outright.
       - name: Tear down the kind cluster
         if: always()
-        run: kind delete cluster --name pcs-e2e || true
+        run: go tool -modfile internal/tools/go.mod kind delete cluster --name pcs-e2e || true
