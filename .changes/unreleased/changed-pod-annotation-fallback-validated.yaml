@@ -1,2 +1,0 @@
-kind: Changed
-body: 'Every value the signer still reads from the deprecated pod-annotation configuration path is now logged, so remaining users can be found before the fallback is removed in 4.0.0. Unknown keys in pod annotations are still ignored rather than denied: pod annotations are shared with other consumers, and a signer-name prefix cannot tell a typo from the key of another signer whose name extends this one.'

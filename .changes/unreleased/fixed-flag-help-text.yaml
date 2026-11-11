@@ -1,2 +1,0 @@
-kind: Fixed
-body: 'The `--max-concurrent-reconciles`, `--max-previous-ca-certs`, `--reconcile-timeout`, `--signer-name` and `--cluster-fqdn` help texts are capitalized and punctuated consistently with the other flags, and `--signer-name` now says it matches PodCertificateRequests rather than CSRs.'

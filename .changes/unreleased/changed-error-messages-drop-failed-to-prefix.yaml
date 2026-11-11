@@ -1,2 +1,0 @@
-kind: Changed
-body: 'CA reload, signing and watcher errors drop their "failed to"/"unable to" prefixes and carry the component name once (`load key pair: ...`, `parse certificate: ...`, `ca-watcher: watch directory ...`), matching the rest of the codebase; anything matching controller logs on the old wording should match on the remainder.'

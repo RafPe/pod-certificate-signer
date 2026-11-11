@@ -1,2 +1,0 @@
-kind: Fixed
-body: 'A metrics scrape or CA reload no longer waits for an in-flight certificate signing to finish: signing now runs outside the CA lock.'
