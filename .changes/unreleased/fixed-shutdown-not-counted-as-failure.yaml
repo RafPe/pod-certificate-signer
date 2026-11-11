@@ -1,2 +1,0 @@
-kind: Fixed
-body: 'A ClusterTrustBundle publish or CA reload that is abandoned because the controller is shutting down is no longer recorded as a failed publish or reload: it no longer increments the failed counters or flips readiness on the way out.'

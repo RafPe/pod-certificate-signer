@@ -1,2 +1,0 @@
-kind: Added
-body: 'A new `--allow-pod-annotations` flag (Helm `signer.allow_pod_annotations`) gates the deprecated fallback that reads certificate configuration from the pod''s own annotations. It defaults to on until the fallback is removed in 4.0.0; operators who have moved every workload to `spec.unverifiedUserAnnotations` can set it to false now, so pod annotations stop being a second requester-controlled input.'

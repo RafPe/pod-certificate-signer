@@ -1,2 +1,0 @@
-kind: Fixed
-body: 'The `--leader-election-id` help text names the Lease that coordinates leader election; it used to say ConfigMap, which the controller has not used since leader election moved to Leases.'

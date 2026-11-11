@@ -5,6 +5,26 @@ request is prepared. This file follows Keep a Changelog and Semantic Versioning.
 
 <!-- next-release -->
 
+## [3.1.0] - 2026-11-11
+
+- A new `--allow-pod-annotations` flag (Helm `signer.allow_pod_annotations`) gates the deprecated fallback that reads certificate configuration from the pod's own annotations. It defaults to on until the fallback is removed in 4.0.0; operators who have moved every workload to `spec.unverifiedUserAnnotations` can set it to false now, so pod annotations stop being a second requester-controlled input.
+- A `CERTIFICATE` block in the signer's existing ClusterTrustBundle that does not parse now fails startup closed, like a read error does, instead of being skipped with a log line. The bundle is the controller's only record of its previous-CA history, so a silently shortened history would have been written back on the next publish. A corrupt bundle is not retried either: it reads back the same every time, so startup fails on the first read instead of spending the retry budget.
+- Errors from loading the CA key pair, at startup or on a reload, now name the certificate and key files they came from.
+- Controller log lines are reworded as lowercase fragments (for example `request is already terminal; nothing to do`, `published ClusterTrustBundle`), a transient reconcile error is logged once by controller-runtime instead of twice, a denial is logged at info rather than error level, and an absent ClusterTrustBundle at startup is logged at error level instead of as an info line prefixed `WARNING:`. Log-based alerts or searches that match the old wording need updating.
+- The denial for an IP address requested in the CSR under `--honor-csr-sans`, without `--allow-unverified-identities`, now starts with `CSR IP addresses:`, matching the `CSR DNS names:` prefix on the DNS path.
+- A request denied because it has neither a common name nor a SAN - a pod name too long for both - now says in the denial message why the default DNS SANs were dropped, instead of in a separate warning event emitted before the denial.
+- The `duration` and `refresh` annotations now resolve `${...}` placeholders exactly like every other configuration annotation, so a value using interpolation is either expanded or, with `--enable-annotation-interpolation=false`, denied, rather than failing to parse as a duration.
+- A configuration item present with an empty value - in `spec.unverifiedUserAnnotations` or, on the deprecated fallback, in the pod's own annotations - now denies the request instead of being treated as absent, which silently routed it onto the pod-annotation fallback or the default.
+- CA reload, signing and watcher errors drop their "failed to"/"unable to" prefixes and carry the component name once (`load key pair: ...`, `parse certificate: ...`, `ca-watcher: watch directory ...`), matching the rest of the codebase; anything matching controller logs on the old wording should match on the remainder.
+- Every value the signer still reads from the deprecated pod-annotation configuration path is now logged, so remaining users can be found before the fallback is removed in 4.0.0. Unknown keys in pod annotations are still ignored rather than denied: pod annotations are shared with other consumers, and a signer-name prefix cannot tell a typo from the key of another signer whose name extends this one.
+- The readiness check that tracks the CA watcher and reload health is now named `certificate-authority` instead of `readyz`, so `/readyz?verbose` says which component is not ready. Anything that probes `/readyz/readyz` directly must switch to `/readyz/certificate-authority`; the `/readyz` endpoint itself is unchanged.
+- The denial for an unrecognized signer annotation key now reads `unrecognized key "<key>" in spec.unverifiedUserAnnotations`, naming where the key was found, instead of `unrecognized user annotation key "<key>"`. Alerts or searches matching the old wording need updating.
+- A Denied or Failed event now carries its message verbatim. The message was used as a format string, so a `%` in a rejected annotation value came out garbled in `kubectl describe` (for example `%!d(MISSING)`).
+- The `--max-concurrent-reconciles`, `--max-previous-ca-certs`, `--reconcile-timeout`, `--signer-name` and `--cluster-fqdn` help texts are capitalized and punctuated consistently with the other flags, and `--signer-name` now says it matches PodCertificateRequests rather than CSRs.
+- The `--leader-election-id` help text names the Lease that coordinates leader election; it used to say ConfigMap, which the controller has not used since leader election moved to Leases.
+- A metrics scrape or CA reload no longer waits for an in-flight certificate signing to finish: signing now runs outside the CA lock.
+- A ClusterTrustBundle publish or CA reload that is abandoned because the controller is shutting down is no longer recorded as a failed publish or reload: it no longer increments the failed counters or flips readiness on the way out.
+
 ## [3.0.1] - 2026-10-21
 
 - A leader shutting down now releases its leader-election Lease instead of leaving a standby to wait out the 15 second lease duration, so a rolling upgrade hands leadership over - and resumes signing, which is leader-gated - in about a second rather than about sixteen.

@@ -1,2 +1,0 @@
-kind: Changed
-body: 'A configuration item present with an empty value - in `spec.unverifiedUserAnnotations` or, on the deprecated fallback, in the pod''s own annotations - now denies the request instead of being treated as absent, which silently routed it onto the pod-annotation fallback or the default.'
