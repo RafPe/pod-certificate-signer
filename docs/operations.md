@@ -32,14 +32,20 @@ What happens next:
 1. **The controller reloads the CA.** Every replica watches the mounted CA
    files (fsnotify) and reloads them in place. It also reloads them every 60
    seconds. New certificates get the new CA without a rollout. Kubelet updates
-   a mounted Secret on its sync period (up to about 1 minute), so expect a
-   short delay. Mount the Secret as a plain volume. Kubelet **never** updates
-   a `subPath` mount after the pod starts.
+   a mounted Secret on its sync period and after its cache delay, so expect a
+   delay. The delay can be more than 1 minute. In our test on Kubernetes
+   1.37.0, the leader reloaded 29 to 62 seconds after the apply. The standby
+   replica reloaded 36 to 79 seconds after the apply. Mount the Secret as a
+   plain volume. Kubelet **never** updates a `subPath` mount after the pod
+   starts.
 2. **The old CA stays trusted.** The elected leader publishes the
    `ClusterTrustBundle` again, with the new CA first and the previous CAs after
    it. It keeps up to `--max-previous-ca-certs` (default `2`) previous CAs.
    Workloads that mount the bundle continue to verify peers that still have a
-   certificate from the old CA.
+   certificate from the old CA. This order applies to the `ClusterTrustBundle`
+   object. In our test, the mounted `ca.crt` files listed the CAs in a
+   different order. Applications must not rely on the order of the CAs in the
+   mounted file.
 3. **Old certificates expire on their own.** An issued certificate stays valid
    until it expires. Its lifetime is at most the request's `duration` (default
    `24h`, capped by `maxExpirationSeconds`). Kubelet then requests a new
@@ -111,14 +117,22 @@ Secret reaches its mount. Kubelet is the cause:
 
 | Projection form | Kubernetes 1.37 | Kubernetes 1.38 and later |
 | --- | --- | --- |
-| `signerName` (with `labelSelector`) | Upstream measured 0 to 95 seconds. | kubernetes#141459 changes only the entries keyed by `name`. We did not measure this form. |
-| `name` | Up to about 6 minutes: the TTL plus one pod sync. Our e2e tests measured **5m13s** and **5m26s** on two runs. Upstream measured 290 to 374 seconds. | Kubelet clears the entry when the bundle changes. Upstream measured 0 to 95 seconds for the comparable case. We did not measure a rotation on 1.38. |
+| `signerName` (with `labelSelector`) | Upstream measured 0 to 95 seconds. Our rotation test measured **50 to 124 seconds** after the Secret apply, and 20 to 61 seconds after the bundle update. | kubernetes#141459 changes only the entries keyed by `name`. Not measured. |
+| `name` | Up to about 6 minutes: the TTL plus one pod sync. Our e2e tests measured **5m13s** and **5m26s** on two runs. Our rotation test measured **274 to 315 seconds** after the Secret apply, and 211 to 271 seconds after the bundle update. Upstream measured 290 to 374 seconds. | Kubelet clears the entry when the bundle changes. Upstream measured 0 to 95 seconds for the comparable case. Not measured. |
 
 The upstream figures come from the description of kubernetes#141459. Upstream
 measured them on kind clusters without the change. One pod mounted one bundle
 three ways. The comparable case for 1.38 is a projection by `name` of a bundle
 without a `spec.signerName`. The e2e figures come from the e2e suite of this
 repository. It projects by `name` on a `kindest/node:v1.37.0` cluster.
+
+The rotation test figures come from one manual test on 2026-11-16. It used
+Kubernetes 1.37.0 on Kind, chart 3.1.0 and one node. One pod mounted the
+bundle by `signerName` and by `name`. The test made three rotations. We
+counted each time from the Secret apply. The leader reloaded and published
+the bundle 29 to 62 seconds after the apply. The three rotations ran 5 to 6
+minutes apart and share one kubelet cache rhythm. Thus they are not
+independent samples. The ranges are not bounds.
 [`examples/workload-pod.yaml`](../examples/workload-pod.yaml) and
 [Getting started](./getting-started.md) project by `signerName`.
 
