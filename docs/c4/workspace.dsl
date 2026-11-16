@@ -1,14 +1,14 @@
-workspace "pod-certificate-signer" "Signer for the built-in PodCertificateRequest API that issues short-lived pod certificates and publishes its CA as a ClusterTrustBundle" {
+workspace "pod-certificate-signer" "Signer for the built-in PodCertificateRequest API. It issues short-lived pod certificates and publishes its CA as a ClusterTrustBundle." {
 
     model {
         operator = person "Cluster operator" "Installs the chart, provides the signing CA, sets the signer name and rotates the CA."
-        workload = person "Workload author" "Ships pods that request a certificate via a podCertificate projected volume."
+        workload = person "Workload author" "Creates pods that request a certificate through a podCertificate projected volume."
 
-        apiServer = softwareSystem "kube-apiserver" "Creates PodCertificateRequests from projected volumes, verifies request fields, enforces the status contract and serves the ClusterTrustBundle." {
+        apiServer = softwareSystem "kube-apiserver" "Stores PodCertificateRequests after it verifies their pod identity fields. Enforces the status contract. Serves the ClusterTrustBundle." {
             tags "External"
         }
 
-        kubelet = softwareSystem "kubelet" "Generates the key pair and PKCS#10 CSR for the projected volume, mounts the issued credential bundle and the ClusterTrustBundle, and refreshes them." {
+        kubelet = softwareSystem "kubelet" "Generates the key pair and the PKCS#10 CSR. Creates the PodCertificateRequest. Writes the issued credential bundle and the ClusterTrustBundle into the pod and refreshes them." {
             tags "External"
         }
 
@@ -16,46 +16,61 @@ workspace "pod-certificate-signer" "Signer for the built-in PodCertificateReques
             tags "External"
         }
 
-        signer = softwareSystem "pod-certificate-signer" "Watches PodCertificateRequests for its signer name, issues or denies short-lived certificates from the CA, and keeps the signer's ClusterTrustBundle in sync." {
-            controller = container "Controller" "Kubernetes controller (controller-runtime manager) that runs the reconciler, the CA watcher and the ClusterTrustBundle publisher as a single leader-elected deployment." "Go, distroless/static:nonroot" {
-                reconciler = component "PodCertificateRequest reconciler" "Watches PodCertificateRequests for the configured signer name; validates the request and its annotation configuration, then issues or denies." "Go, controller-runtime"
-                config = component "Certificate configuration" "Parses the kubelet CSR and the annotation contract (cn/san/ip-san/eku/duration/refresh/uris), enforces identity constraints, resolves ${...} interpolation and validates against the apiserver status contract." "Go"
-                authority = component "Certificate authority" "Holds the in-memory CA, hot-reloads the cert/key on disk change via an fsnotify watcher, fits requested lifetimes to the CA validity, builds and signs leaf certificates, and retains previous CAs across rotation as the trust bundle." "Go, fsnotify + crypto/x509"
-                ctbPublisher = component "ClusterTrustBundle publisher" "Leader-gated runnable that names and assembles the signer's ClusterTrustBundle from the authority's trust bundle and reconciles it towards the current CA on reload events and a drift-repair tick." "Go, controller-runtime"
-                probes = component "Health & readiness" "Serves healthz/readyz; readiness is gated on CA watcher/reload health and on the ClusterTrustBundle publisher outcome." "Go, healthz"
-                metrics = component "Metrics" "Exposes the bounded podcertificatesigner_ Prometheus surface (request outcomes, requeues, drops, CA reloads, trust-bundle publishes, CA gauges) per ADR-0005." "Go, Prometheus"
+        scraper = softwareSystem "Metrics scraper" "Prometheus or another scraper. Sends a ServiceAccount token that the metrics-reader ClusterRole authorizes." {
+            tags "External"
+        }
+
+        signer = softwareSystem "pod-certificate-signer" "Watches PodCertificateRequests for its signer name, issues or denies short-lived certificates from the CA, and publishes the signer's ClusterTrustBundle." {
+            controller = container "Controller" "controller-runtime manager. Runs the reconciler and the ClusterTrustBundle publisher on the elected leader, and the CA watcher on every replica." "Go, distroless/static:nonroot" {
+                reconciler = component "PodCertificateRequest reconciler" "Leader-gated. Validates each request and records the outcome." "Go, controller-runtime"
+                config = component "Certificate configuration" "Parses the CSR and resolves the certificate configuration." "Go"
+                authority = component "Certificate authority" "Runs on every replica. Holds the CA and signs leaf certificates." "Go, fsnotify, crypto/x509"
+                ctbPublisher = component "ClusterTrustBundle publisher" "Leader-gated. Publishes the CA trust bundle." "Go, controller-runtime"
+                probes = component "Health and readiness" "Serves /healthz and /readyz." "Go, controller-runtime healthz"
+                metrics = component "Metrics" "Serves the bounded Prometheus metrics." "Go, Prometheus"
             }
         }
 
-        # People
-        operator -> caSource "Provisions the CA (Secret) and rotates it"
-        operator -> signer "Installs and configures via the Helm chart"
-        workload -> apiServer "Declares a podCertificate projected volume"
-
-        # System context
-        signer -> apiServer "Watches and updates PodCertificateRequests; publishes the ClusterTrustBundle" "watch/patch"
-        signer -> caSource "Loads and hot-reloads the CA cert/key" "read-only mount"
-        apiServer -> kubelet "Delivers the issued credential bundle and ClusterTrustBundle"
-        kubelet -> apiServer "Creates the PodCertificateRequest with a PKCS#10 CSR"
+        # Context level
+        operator -> caSource "Provisions and rotates the CA"
+        operator -> signer "Installs and configures" "Helm"
+        workload -> apiServer "Creates pods with podCertificate volumes"
+        kubelet -> apiServer "Creates requests, reads certificates" "HTTPS"
+        signer -> apiServer "Watches requests, writes status" "HTTPS"
+        signer -> apiServer "Publishes ClusterTrustBundle" "HTTPS"
+        signer -> caSource "Reads and watches CA files" "read-only volume mount"
+        kubelet -> signer "Probes health" "HTTP :8081"
+        scraper -> signer "Scrapes metrics" "HTTPS :9090"
 
         # Container level
-        controller -> apiServer "Reconciles PodCertificateRequests and the ClusterTrustBundle" "watch/patch, HTTPS"
-        controller -> caSource "Reads and watches the CA files" "read-only mount"
+        operator -> controller "Installs and configures" "Helm"
+        controller -> apiServer "Watches requests, writes status" "HTTPS"
+        controller -> apiServer "Publishes ClusterTrustBundle" "HTTPS"
+        controller -> apiServer "Renews Lease, reviews scrape tokens" "HTTPS"
+        controller -> caSource "Reads and watches CA files" "read-only volume mount"
+        kubelet -> controller "Probes health" "HTTP :8081"
+        scraper -> controller "Scrapes metrics" "HTTPS :9090"
 
         # Component level
-        reconciler -> config "Parses the CSR, validates and resolves the requested configuration"
-        reconciler -> authority "Signs the leaf with the current CA key"
-        authority -> caSource "Watches and reloads the cert/key" "fsnotify"
-        ctbPublisher -> authority "Reads the current trust bundle PEM"
-        ctbPublisher -> apiServer "Creates/patches the ClusterTrustBundle" "HTTPS"
-        probes -> authority "Polls CA watcher/reload health"
-        probes -> ctbPublisher "Polls last publish outcome"
-        reconciler -> apiServer "Reads the requesting pod (uncached get) and updates request status" "HTTPS"
+        reconciler -> apiServer "Watches requests, gets pod, writes status" "HTTPS"
+        reconciler -> config "Resolves configuration"
+        reconciler -> authority "Signs leaf certificate"
+        authority -> caSource "Reads and watches CA files" "read-only volume mount"
+        authority -> ctbPublisher "Signals CA change"
+        ctbPublisher -> authority "Reads trust bundle"
+        ctbPublisher -> apiServer "Publishes ClusterTrustBundle" "HTTPS"
+        probes -> authority "Checks CA health"
+        probes -> ctbPublisher "Checks publish result"
+        metrics -> authority "Reads CA gauges"
+        metrics -> apiServer "Reviews scrape tokens" "TokenReview, SubjectAccessReview"
+        kubelet -> probes "Probes health" "HTTP :8081"
+        scraper -> metrics "Scrapes metrics" "HTTPS :9090"
     }
 
     views {
         systemContext signer "SystemContext" "Who the signer serves and what it depends on." {
             include *
+            include workload
             autoLayout
         }
 
@@ -64,7 +79,7 @@ workspace "pod-certificate-signer" "Signer for the built-in PodCertificateReques
             autoLayout
         }
 
-        component controller "Components" "The reconcile, CA and publication components inside the controller." {
+        component controller "Components" "The reconcile, CA, publication, health and metrics components inside the controller." {
             include *
             autoLayout
         }
