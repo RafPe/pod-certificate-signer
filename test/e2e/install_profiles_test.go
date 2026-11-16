@@ -276,9 +276,9 @@ func defineVerifiedInterpolationProfileTests() {
 				denial := expectDenied(pod, certificatesv1.PodCertificateRequestConditionInvalidUserConfig)
 				Expect(denial.Message).To(ContainSubstring(wantMessage))
 			},
-			// The example manifest requests exactly this, which is why it
-			// cannot issue on a default install. ADR-0001 records why the
-			// service-account Service DNS form stays out of the allowlist.
+			// ADR-0001 records why the service-account Service DNS form stays
+			// out of the allowlist. The example manifest requested this form
+			// until 2.3.0.
 			Entry("service-account Service DNS form", "pcs-deny-sa-svc", map[string]string{
 				signerName + "-san": "${pod.serviceAccountName}.${pod.namespace}.svc",
 			}, "is not derived from a verified pod identity"),
