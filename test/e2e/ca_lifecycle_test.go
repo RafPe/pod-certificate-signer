@@ -84,15 +84,24 @@ const caPropagationTimeout = 5 * time.Minute
 //   - kubelet's ClusterTrustBundle manager serves the projection from a
 //     normalization cache with a hard-coded 5-minute TTL. For the `name` form
 //     of the projection - which this suite uses, and which is the form that
-//     pins trust to one named object - a bundle carrying a spec.signerName is
-//     not invalidated by the informer's update callback, so the entry only
-//     goes away when the TTL expires. There is no flag that shortens it.
+//     pins trust to one named object - kubelet before v1.38 does not
+//     invalidate the entry of a bundle carrying a spec.signerName in the
+//     informer's update callback, so the entry only goes away when the TTL
+//     expires. There is no flag that shortens it.
 //   - the refreshed content is written on the next pod sync
 //     (--sync-frequency, 1 minute by default).
 //
 // Worst case is therefore ~6 minutes, and the phase of the cache entry when a
 // rotation lands is arbitrary, so a 5-minute bound failed a large fraction of
 // runs rather than all of them. 8 minutes is 6 plus headroom.
+//
+// The 5-minute wait applies to kubelet before v1.38. The suite runs on
+// kindest/node:v1.37.0 (kind/kind-config.yaml). Upstream fixed the missing
+// invalidation in https://github.com/kubernetes/kubernetes/pull/141459,
+// which is in tag v1.38.0-beta.0 and not in the 1.37 branch (as of
+// 2026-11-16). When the suite moves to a v1.38 node, this bound can go down to
+// about one sync period plus headroom. Measure a few runs on that node before
+// lowering it.
 //
 // Do not "fix" a failure here by switching the fixture to the signerName form.
 // That converges in about one sync period because the informer does invalidate

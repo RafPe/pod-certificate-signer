@@ -89,22 +89,49 @@ anchor.
 Rotation is one `kubectl apply`, but it is not instant and it is not atomic.
 The four items below decide if the rotation is quiet or if it stops a fleet.
 
-**Allow up to about 6 minutes for the new CA to reach running workloads.** In
-our e2e tests, a full rotation reached the mounted `ca.crt` files after
-**5m13s** and **5m26s** on two runs. The controller is not the cause of the
-delay. It reloads and publishes within seconds after the new Secret reaches
-its mount. Kubelet is the cause:
+**The delay until the new CA reaches running workloads depends on the
+projection form and on the Kubernetes version.** The controller is not the
+cause of the delay. It reloads and publishes within seconds after the new
+Secret reaches its mount. Kubelet is the cause:
 
-- For a projection that names the `ClusterTrustBundle` by `name`, kubelet
-  serves the bundle from a normalization cache with a **hard-coded 5-minute
-  TTL**. **No flag makes this shorter.**
+- Kubelet serves a projected `ClusterTrustBundle` from a normalization cache
+  with a **hard-coded 5-minute TTL**. **No flag makes this TTL shorter.**
 - Kubelet then writes the new value at the next pod sync (`--sync-frequency`,
   default 1 minute).
+- Before Kubernetes 1.38, a change to a bundle with a `spec.signerName` does
+  not clear the cache entries that kubelet keys by object `name`. This
+  signer's bundle always has a `spec.signerName`. Thus a projection by `name`
+  keeps the old anchors until the TTL expires
+  ([kubernetes#141439](https://github.com/kubernetes/kubernetes/issues/141439)).
+- [kubernetes#141459](https://github.com/kubernetes/kubernetes/pull/141459)
+  clears these entries when the bundle changes. This change is in the tag
+  `v1.38.0-beta.0`. As of 2026-11-16, Kubernetes 1.38.0 is not released. As
+  of the same date, the change is not in the 1.37 branch, and no cherry-pick
+  PR exists.
 
-Plan the maintenance window for six minutes, not for the time of the apply.
+| Projection form | Kubernetes 1.37 | Kubernetes 1.38 and later |
+| --- | --- | --- |
+| `signerName` (with `labelSelector`) | Upstream measured 0 to 95 seconds. | kubernetes#141459 changes only the entries keyed by `name`. We did not measure this form. |
+| `name` | Up to about 6 minutes: the TTL plus one pod sync. Our e2e tests measured **5m13s** and **5m26s** on two runs. Upstream measured 290 to 374 seconds. | Kubelet clears the entry when the bundle changes. Upstream measured 0 to 95 seconds for the comparable case. We did not measure a rotation on 1.38. |
 
-**Rotate with an overlap window. Do not swap the CAs.** During those six
-minutes, some pods have a certificate from the old CA and some from the new CA.
+The upstream figures come from the description of kubernetes#141459. Upstream
+measured them on kind clusters without the change. One pod mounted one bundle
+three ways. The comparable case for 1.38 is a projection by `name` of a bundle
+without a `spec.signerName`. The e2e figures come from the e2e suite of this
+repository. It projects by `name` on a `kindest/node:v1.37.0` cluster.
+[`examples/workload-pod.yaml`](../examples/workload-pod.yaml) and
+[Getting started](./getting-started.md) project by `signerName`.
+
+The two forms trust different sets of CAs. A projection by `name` trusts one
+named `ClusterTrustBundle` object. A projection by `signerName` trusts every
+bundle for that signer that the `labelSelector` selects. `labelSelector: {}`
+selects all of them. Do not change the form only to get a shorter delay.
+
+Plan the maintenance window for the delay in the table, not for the time of
+the apply. On Kubernetes 1.37 with the `name` form, plan for six minutes.
+
+**Rotate with an overlap window. Do not swap the CAs.** During the delay, some
+pods have a certificate from the old CA and some from the new CA.
 Verification must work in both directions. `signer.max_previous_ca_certs`
 (default `2`) makes this possible. The published bundle contains the new CA
 *and* its predecessors, so peers on both sides of the change stay trusted. To
@@ -116,9 +143,9 @@ rotate:
 
 > [!TIP]
 > **Do not restart the workloads to get the new CA.** A restart of every pod
-> replaces a six-minute wait with a restart of the fleet. The restarted pods
-> also read their anchors through the same cache. The overlap window exists so
-> that no pod must restart.
+> replaces the wait in the table above with a restart of the fleet. The
+> restarted pods also read their anchors through the same cache. The overlap
+> window exists so that no pod must restart.
 
 **Applications must read the file again.** Kubelet writes a new `ca.crt` under
 a running container and sends no notification: no signal, no restart, no

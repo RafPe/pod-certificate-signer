@@ -391,6 +391,9 @@ func defineGowebInteropTests() {
 			// propagating a changed ClusterTrustBundle into a mounted projected
 			// volume, which goes through a normalization cache with a hard-coded
 			// five-minute TTL plus a pod sync - see mountedTrustUpdateTimeout.
+			// The full TTL wait applies to kubelet before v1.38, which the
+			// suite runs on. From v1.38, kubernetes/kubernetes#141459 clears
+			// the entry of this `name`-form projection when the bundle changes.
 			// None of it is goweb's, and none of it is this signer's.
 			//
 			// It is read out of the sidecar because the goweb image is distroless
