@@ -3,7 +3,9 @@ apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
 - role: control-plane
   # Kubernetes 1.37 promoted PodCertificateRequest and ClusterTrustBundle to
-  # certificates.k8s.io/v1, so the gates are locked on and the group version is
-  # served by default - no featureGates or runtimeConfig needed.
-  # Published with kind v0.33.0; the digest pins the multi-arch manifest list.
+  # certificates.k8s.io/v1. Their feature gates are always on, and the
+  # kube-apiserver serves the group version by default. You do not need
+  # featureGates or runtimeConfig.
+  # kind v0.33.0 published this image. The digest pins the multi-arch manifest
+  # list. `make kind-start` creates the dev cluster from this file.
   image: "kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5"

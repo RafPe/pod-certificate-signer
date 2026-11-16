@@ -59,8 +59,9 @@ var (
 )
 
 const (
-	// controllerName is the controller-runtime controller name, the logger
-	// name and the reporter on every event the controller emits.
+	// controllerName is the logger name and the reporter on every event the
+	// controller emits. The controller-runtime controller name, and so the
+	// `controller` metrics label, is the lowercase kind: podcertificaterequest.
 	controllerName = "PodCertificateSigner"
 
 	// defaultEnableAnnotationInterpolation is the shipped default for
@@ -271,7 +272,7 @@ func run(ctx context.Context, fs *flag.FlagSet, f *flags) error {
 	}
 	// Also gate readiness on the ClusterTrustBundle publisher: a leader whose
 	// publishes keep failing must be pulled from readiness so the failure is
-	// visible and traffic/leadership can move elsewhere.
+	// visible. Readiness does not release the leader Lease.
 	if err := mgr.AddReadyzCheck("clustertrustbundle", readyzCheck(ctbPublisher)); err != nil {
 		return fmt.Errorf("set up ClusterTrustBundle ready check: %w", err)
 	}

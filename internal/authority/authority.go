@@ -116,7 +116,8 @@ func WithLogger(logger logr.Logger) Option {
 }
 
 // WithMaxPreviousCAs is an [Option], which configures how many previous CA
-// certificates to retain in the rolling window. Defaults to 1; 0 keeps none.
+// certificates to retain in the rolling window. New defaults to 1 without this
+// option, and the --max-previous-ca-certs flag passes 2 by default. 0 keeps none.
 func WithMaxPreviousCAs(n int) Option {
 	return func(ca *CertificateAuthority) error {
 		if n < 0 {

@@ -18,9 +18,14 @@
 
 ## Coverage and E2E
 
-`make test` retained the repository's package coverage results, including 92.9%
-for `internal/controller` and 92.4% for `internal/podcertificate`.
-The full Kind E2E suite is intentionally a release gate in
-`release.yml`; it is also still exercised on pull requests. It was not started
-locally because it creates a cluster and the changed behavior is GitHub event
-orchestration; actionlint and the offline contract cover that wiring here.
+Measured when the workflow merged (PR
+[#86](https://github.com/RafPe/pod-certificate-signer/pull/86)): `make test` kept
+the package coverage results of the repository, including 92.9% for
+`internal/controller` and 92.4% for `internal/podcertificate`.
+The per-PR tier of the Kind E2E suite (`make test-e2e`, through
+`test-e2e.yml`) is a release gate in `release.yml`. The E2E Tests workflow
+also runs it on pull requests. It did not run locally, because it
+creates a cluster and the change is GitHub event orchestration. actionlint and
+the offline contract check cover that wiring.
+
+The procedure that uses this workflow is in [docs/releasing.md](../releasing.md).

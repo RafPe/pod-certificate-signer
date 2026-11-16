@@ -97,7 +97,8 @@ test: vet  ## Run tests. Formatting is enforced separately (make fmt / CI gofmt 
 ## specs that are correct but too slow for a per-PR gate - today the CA-lifecycle
 ## specs whose cost is dominated by kubelet's mounted-secret refresh: invalid-CA
 ## recovery, repeated rotations and retention, restart bootstrap and
-## ClusterTrustBundle drift (see test/e2e/ca_lifecycle_test.go). Everything else,
+## ClusterTrustBundle drift (see test/e2e/ca_lifecycle_test.go and
+## test/e2e/ca_failure_modes_test.go). Everything else,
 ## including one CA rotation and the issuance that follows it, runs on every PR.
 ## Use `make test-e2e-nightly` to run the lot.
 E2E_LABEL_FILTER ?= !nightly

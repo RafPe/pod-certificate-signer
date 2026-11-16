@@ -9,7 +9,7 @@ decision-makers: RafPe
 ## Context and Problem Statement
 
 Since [#26](https://github.com/RafPe/pod-certificate-signer/issues/26) /
-[#38](https://github.com/RafPe/pod-certificate-signer/issues/38) the signer
+[#38](https://github.com/RafPe/pod-certificate-signer/pull/38) the signer
 enforces a default-deny identity model. Every `cn`, `san` and `uris` value —
 literal or `${...}`-interpolated — must be an exact string member of the set
 returned by `verifiedIdentities`
@@ -22,7 +22,7 @@ That set currently contains:
 
 - for the pod: `<pod>`, `<pod>.<ns>`, `<pod>.<ns>.pod`, `<pod>.<ns>.svc`,
   `<pod>.<ns>.pod.<fqdn>`, `<pod>.<ns>.svc.<fqdn>`, and
-  `spiffe://<fqdn>/ns/<ns>/pod/<pod>`;
+  `spiffe://<fqdn>/ns/<ns>/pod/<pod>`.
 - for the service account: `<sa>.<ns>` and
   `spiffe://<fqdn>/ns/<ns>/sa/<sa>`.
 
@@ -57,7 +57,7 @@ else:**
 
 **(a) The identities the signer itself emits by default.** `defaultPodDNSNames`
 (`podcertificate.go:486-496`) emits `<pod>.<ns>.pod.<fqdn>` and
-`<pod>.<ns>.svc.<fqdn>`; `defaultCommonName` emits `<pod>`. Whatever the signer
+`<pod>.<ns>.svc.<fqdn>`. `defaultCommonName` emits `<pod>`. Whatever the signer
 will put into a certificate on its own must be claimable explicitly, or the
 annotation path would be stricter than the default path — a contradiction. The
 shorter pod forms (`<pod>.<ns>`, `<pod>.<ns>.pod`, `<pod>.<ns>.svc`) and the pod
@@ -89,7 +89,7 @@ may identify by it.
    asserting `<sa>.<ns>.svc` can never be validated against a connection a
    client actually opened by that name — pure risk, zero interoperability value.
 3. **The service-account identity already has two correct forms.** The SPIFFE
-   URI is *exactly* what #87 asks for; the reporter's own example is
+   URI is *exactly* what #87 asks for. The reporter's own example is
    `spiffe://${cluster.fqdn}/ns/${pod.namespace}/sa/${pod.serviceAccountName}`.
    Nothing in #87 requires a service-account-derived DNS name.
 4. **The asymmetry with the pod forms is principled, not an oversight.** The
@@ -99,7 +99,7 @@ may identify by it.
 **Non-goals.** This ADR does not change any signer behavior — the allowlist
 already matches the rule above. It does not decide the fate of
 `examples/workload-pod.yaml`, nor the default of
-`--enable-annotation-interpolation`; both are separate changes that this
+`--enable-annotation-interpolation`. Both are separate changes that this
 boundary constrains. It says nothing about `--allow-unverified-identities`,
 which lifts the allowlist entirely and is an explicit operator decision.
 
@@ -107,7 +107,7 @@ which lifts the allowlist entirely and is an explicit operator decision.
 carries a weaker version of the same hazard. From inside a pod, `api.prod`
 (1 dot, below the default `ndots:5`) resolves through the resolver search path
 to `api.prod.svc.cluster.local` — i.e. the Service. So the collision risk is not
-*created* by the service-account forms; it is *amplified* by adding the
+*created* by the service-account forms. It is *amplified* by adding the
 fully-qualified ones, which turn an ambiguous search-path artifact into an
 unambiguous, canonical, SNI-matching claim. This argues for narrowing `<sa>.<ns>`
 later, never for widening now. Narrowing it is a breaking change and belongs in
@@ -190,19 +190,58 @@ its own issue and ADR.
 ## More Information
 
 * Issue [#87](https://github.com/RafPe/pod-certificate-signer/issues/87) —
-  `--enable-annotation-interpolation` on by default; the trigger for this ADR.
-* Issues [#26](https://github.com/RafPe/pod-certificate-signer/issues/26),
-  [#38](https://github.com/RafPe/pod-certificate-signer/issues/38) — introduced
+  `--enable-annotation-interpolation` on by default. It is the trigger for this
+  ADR.
+* Issue [#26](https://github.com/RafPe/pod-certificate-signer/issues/26) and PR
+  [#38](https://github.com/RafPe/pod-certificate-signer/pull/38) — introduced
   the default-deny identity model.
 * Issue [#48](https://github.com/RafPe/pod-certificate-signer/issues/48) and PR
   [#80](https://github.com/RafPe/pod-certificate-signer/pull/80) — routed CSR
   DNS SANs through the same allowlist, so this boundary now governs the CSR path
   too.
-* `docs/configuration.md` — "Identity constraints" documents the resulting
-  user-visible behavior.
+* [`docs/configuration.md`](../configuration.md#identity-constraints) —
+  "Identity constraints" documents the resulting user-visible behavior.
+* Implementation:
+  [`internal/podcertificate/identity.go`](../../internal/podcertificate/identity.go)
+  (`verifiedIdentities`, `validateVerifiedIdentities`) and the characterization
+  tests in
+  [`internal/podcertificate/identity_test.go`](../../internal/podcertificate/identity_test.go).
+* Related:
+  [ADR-0002](0002-annotation-interpolation-on-by-default.md) rests its "no new
+  issuable identity" argument on this boundary.
+  [ADR-0003](0003-leaf-basic-constraints-ca-false.md) and
+  [ADR-0005](0005-bounded-metrics-surface.md) state that they do not change it.
 
-**Revisit if**: Kubernetes publishes DNS records for ServiceAccounts (removing
-reason 2); or the signer begins emitting a service-account-derived DNS name by
-default (making it fall under rule (a)); or the `<sa>.<ns>` search-path hazard
-is judged severe enough to narrow the allowlist, which would supersede this ADR
-rather than amend it.
+**Revisit if** one of these occurs:
+
+* Kubernetes publishes DNS records for ServiceAccounts (removing reason 2).
+* The signer begins emitting a service-account-derived DNS name by default
+  (making it fall under rule (a)).
+* The `<sa>.<ns>` search-path hazard is judged severe enough to narrow the
+  allowlist, which would supersede this ADR rather than amend it.
+
+### Status update (2026-11-16)
+
+This note records the state of the code at release 3.1.0. The decision above is
+unchanged.
+
+* The example now issues under this boundary. Since release 2.3.0 (PR
+  [#105](https://github.com/RafPe/pod-certificate-signer/pull/105)),
+  `examples/workload-pod.yaml` requests the service-account short DNS form and
+  the service-account SPIFFE ID. It no longer requests `<sa>.<ns>.svc`. Its IP
+  SAN is in a commented block. `TestWorkloadPodExampleIssuesUnderIdentityConstraints`
+  in [`test/hygiene/workload_example_test.go`](../../test/hygiene/workload_example_test.go)
+  keeps the example inside the allowlist. The "Bad" consequence that says the
+  example "stays broken" no longer applies.
+* The e2e masking is partly removed. The `verified-interpolation` install profile
+  in [`test/e2e/install_profiles_test.go`](../../test/e2e/install_profiles_test.go)
+  issues the same annotation values without `allow_unverified_identities`. The
+  spec that applies `examples/workload-pod.yaml` itself
+  (`test/e2e/e2e_test.go`, "Certificate issuance") still runs under the base
+  install, which sets `signer.allow_unverified_identities=true`.
+* The follow-up issue for the `<sa>.<ns>` search-path hazard does not exist. A
+  search of the repository issues on 2026-11-16 found no such issue.
+* The code moved. `verifiedIdentities` and `defaultPodDNSNames` are now in
+  `internal/podcertificate/identity.go`, not in `podcertificate.go`. The line
+  ranges in the Context and Decision sections refer to `podcertificate.go` at
+  the time of the decision.

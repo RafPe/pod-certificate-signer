@@ -1,7 +1,7 @@
 # Dependabot configuration.
 #
 # Every entry sets exactly one release/* label because
-# .github/workflows/pr-labels.yml fails any PR to main without one:
+# .github/workflows/pr-release-metadata.yml fails any PR to main without one:
 #   release/patch -> the update ships in the released binary/image
 #   release/skip  -> build tooling / CI only, nothing shipped
 version: 2

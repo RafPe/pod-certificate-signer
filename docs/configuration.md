@@ -1,249 +1,281 @@
 # Configuration
 
-This page documents everything you can tune: the per-request certificate
-annotation contract, the identity-constraint model, the controller CLI flags,
-and the Helm values including the recommended production posture. For a first
-install see [Getting started](./getting-started.md).
+This page describes every setting you can change. It covers four topics:
+
+- the certificate annotation contract for each request
+- the identity constraints
+- the controller CLI flags
+- the Helm values, with the recommended production settings
+
+For a first install, see [Getting started](./getting-started.md).
 
 ## Certificate configuration annotations
 
-To override the controller defaults for an issued certificate, set keys on the
+To change the controller defaults for one certificate, set keys in the
 `userAnnotations` field of the `podCertificate` projected volume source. This is
-the standard Kubernetes mechanism for passing context to a signer: kubelet
-copies these keys verbatim into `spec.unverifiedUserAnnotations` of the
-resulting `PodCertificateRequest`, which is what the signer reads.
+the standard Kubernetes mechanism to give a signer more context. Kubelet copies
+these keys without change into `spec.unverifiedUserAnnotations` of the
+`PodCertificateRequest`. The signer reads them from there.
 
-Keys follow the scheme `<signer-domain>/<name>-<item>: <value>` — the signer's
-own name as a prefix, then the configuration item:
+Each key has the form `<signer-domain>/<name>-<item>: <value>`. The prefix is the
+signer name, and the suffix is the configuration item:
 
 ```yaml
       volumes:
-        - name: x509-cert
+        - name: x509
           projected:
             sources:
               - podCertificate:
-                  signerName: coolcert.example.com/foo
+                  signerName: example.org/signer
                   keyType: ED25519
                   credentialBundlePath: credentialbundle.pem
                   userAnnotations:
-                    coolcert.example.com/foo-cn: "some-name.example.com"
-                    coolcert.example.com/foo-duration: "2h"
+                    example.org/signer-cn: "${pod.name}.${pod.namespace}.svc.${cluster.fqdn}"
+                    example.org/signer-duration: "2h"
 ```
 
 | Item | Required | Default | Notes |
 | --- | --- | --- | --- |
-| `-cn` | No | pod name | Common name. Must resolve to the pod's verified identity unless `--allow-unverified-identities`. Max 64 chars (RFC 5280). |
-| `-san` | No | `<pod>.<ns>.pod.<fqdn>,<pod>.<ns>.svc.<fqdn>` | Comma-separated DNS SANs. Subject to identity constraints. |
-| `-ip-san` | No | *(empty)* | Comma-separated IP SANs. No verified derivation, so **denied by default** — requires `--allow-unverified-identities`. |
-| `-eku` | No | `server` | Extended key usage; tokens `server` and/or `client`. Add `client` to opt into client auth. |
-| `-uris` | No | *(empty)* | Comma-separated URI SANs (e.g. SPIFFE IDs). Subject to identity constraints. |
-| `-duration` | No | `24h` | Certificate lifetime. Clamped to the request's `maxExpirationSeconds`; minimum `1h`. |
-| `-refresh` | No | `15m` | Refresh hint (`beginRefreshAt`). At least `10m`, at most `duration − 10m`. |
+| `-cn` | No | pod name | Common name. Must resolve to the verified identity of the pod, unless `--allow-unverified-identities` is set. Maximum 64 characters (RFC 5280). The default is empty when the pod name is longer than 64 characters. |
+| `-san` | No | `<pod>.<ns>.pod.<fqdn>,<pod>.<ns>.svc.<fqdn>` | Comma-separated DNS SANs. Subject to the identity constraints. The signer omits the default when a label of the pod name is longer than 63 characters. |
+| `-ip-san` | No | *(empty)* | Comma-separated IP SANs. An IP address has no verified derivation, so the signer **denies it by default**. It requires `--allow-unverified-identities`. |
+| `-eku` | No | `server` | Extended key usage. The tokens are `server`, `client`, or both. Add `client` to request client authentication. |
+| `-uris` | No | *(empty)* | Comma-separated URI SANs, for example SPIFFE IDs. Subject to the identity constraints. |
+| `-duration` | No | `24h` | Certificate lifetime. Minimum `1h`. Maximum is the `maxExpirationSeconds` of the request. The signer reduces the default to that maximum, but denies an explicit value above it. |
+| `-refresh` | No | `15m` | Refresh hint (`beginRefreshAt`). Minimum `10m`. Maximum is the duration minus `10m`. |
 
 > [!NOTE]
-> Keys the signer does not recognise, and malformed values (e.g. an invalid
-> duration), deny the request with reason `InvalidUnverifiedUserAnnotations`, as
-> the Kubernetes API contract for signers recommends.
+> The signer denies a request with reason `InvalidUnverifiedUserAnnotations` when
+> a key is unknown or a value is malformed, for example an invalid duration. The
+> Kubernetes API contract for signers recommends this behavior.
 
 ### Interpolating pod identity into values
 
-A value authored on a pod template is identical for every replica, so a static
-`cn` can never carry the pod's own name. The `cn`, `san` and `uris` values may
-contain `${...}` placeholders resolved per request:
+A value on a pod template is the same for every replica. Thus a static `cn`
+cannot contain the name of each pod. Every configuration value can contain
+`${...}` placeholders, which the signer resolves for each request. The
+placeholders are useful in `cn`, `san` and `uris`:
 
 ```yaml
                   userAnnotations:
-                    coolcert.example.com/foo-cn: "${pod.name}.${pod.namespace}.svc.${cluster.fqdn}"
-                    coolcert.example.com/foo-san: "${pod.name}.${pod.namespace}.svc,${pod.serviceAccountName}.${pod.namespace}"
-                    coolcert.example.com/foo-uris: "spiffe://${cluster.fqdn}/ns/${pod.namespace}/sa/${pod.serviceAccountName}"
+                    example.org/signer-cn: "${pod.name}.${pod.namespace}.svc.${cluster.fqdn}"
+                    example.org/signer-san: "${pod.name}.${pod.namespace}.svc,${pod.serviceAccountName}.${pod.namespace}"
+                    example.org/signer-uris: "spiffe://${cluster.fqdn}/ns/${pod.namespace}/sa/${pod.serviceAccountName}"
 ```
 
-Every variable resolves from fields of the `PodCertificateRequest` that kubelet
-populates and the apiserver verifies (never from user-controlled input), so a
-workload can only interpolate its **own** verified identity:
+Each variable comes from a `PodCertificateRequest` field that kubelet sets and
+the apiserver verifies. No variable comes from user-controlled input. Thus a
+workload can interpolate only its **own** verified identity:
 
 | Variable | Value |
 | --- | --- |
-| `${pod.name}` | Name of the pod the certificate is issued to |
+| `${pod.name}` | Name of the pod that gets the certificate |
 | `${pod.namespace}` | Namespace of the pod |
 | `${pod.uid}` | UID of the pod |
-| `${pod.serviceAccountName}` | Service account the pod runs as |
-| `${node.name}` | Node the pod is scheduled on |
+| `${pod.serviceAccountName}` | Service account of the pod |
+| `${node.name}` | Node that runs the pod |
 | `${cluster.fqdn}` | Cluster FQDN from `--cluster-fqdn` |
 
-Unknown variables and unterminated placeholders deny the request with reason
-`InvalidUnverifiedUserAnnotations`. Values are validated **after** expansion,
-including the 64-character common-name limit and DNS-1123 SAN limits. DNS SAN
-labels may contain at most 63 characters and the complete name at most 253;
-wildcard SANs are not supported.
+An unknown variable or an unterminated placeholder denies the request with reason
+`InvalidUnverifiedUserAnnotations`. The signer validates values **after**
+expansion. This includes the 64-character limit for the common name and the
+DNS-1123 limits for SANs. A DNS SAN label can have a maximum of 63 characters,
+and the full name a maximum of 253. The signer does not support wildcard SANs.
 
 > [!NOTE]
 > **Default change.** `${...}` interpolation is now **enabled by default**
 > (`--enable-annotation-interpolation=true`, Helm
-> `signer.enable_annotation_interpolation: true`); earlier releases shipped it
-> off. Nothing that worked before stops working: the flag only ever decided
-> whether a value containing `${...}` was resolved or rejected. Resolved values
-> are still checked against the pod's verified identity by exact string equality,
-> so **no identity becomes issuable that was not issuable before** — see
+> `signer.enable_annotation_interpolation: true`). Releases before 2.3.0 shipped
+> it disabled. All configurations that worked before continue to work. The flag
+> only selects whether the signer resolves or rejects a value that contains
+> `${...}`. The signer still compares resolved values to the verified identity of
+> the pod by exact string equality. Thus **no identity becomes available that
+> was not available before**. See
 > [What bounds interpolation](#what-bounds-interpolation) below and
 > [ADR-0002](adr/0002-annotation-interpolation-on-by-default.md). To restore the
-> previous behaviour — `${...}` values denied outright rather than resolved — set
-> `signer.enable_annotation_interpolation: false`
-> (`--enable-annotation-interpolation=false`).
+> previous behavior, set `signer.enable_annotation_interpolation: false`
+> (`--enable-annotation-interpolation=false`). The signer then denies `${...}`
+> values and does not resolve them.
 
 #### What bounds interpolation
 
-Interpolation is a **naming** mechanism, not an authorization one. Two properties
-bound it, and it is worth being precise about which does what, because the second
-is the one people mistake this feature flag for.
+Interpolation is a **naming** mechanism, not an authorization mechanism. Two
+properties limit it. Each property has a different function. People often
+think that the second property is the function of this feature flag.
 
-1. **Where values come from.** The variable table above is the whole table.
-   Every entry resolves from a `PodCertificateRequest` spec field that kubelet
-   populates and kube-apiserver verifies, except `${cluster.fqdn}`, which comes
-   from the operator's own `--cluster-fqdn`. No user-controlled input reaches it.
-   Expansion is a single non-recursive pass — a resolved value cannot itself
-   contain `${...}`, because Kubernetes object names and UIDs cannot.
-2. **What the resolved value is then checked against.** Every expanded `cn`,
-   `san` and `uris` value must be an exact string member of the
-   [verified-identity allowlist](#identity-constraints-security). The comparison
-   is **exact string equality**, never a prefix or pattern match — which is why
-   `${pod.name}.evil.example.com` is denied even though it begins with a name the
-   pod owns.
+1. **Where values come from.** The variable table above is the full list. Each
+   entry resolves from a `PodCertificateRequest` spec field that kubelet sets and
+   kube-apiserver verifies. The exception is `${cluster.fqdn}`, which comes from
+   the `--cluster-fqdn` value of the operator. No user-controlled input gets
+   into a value. Expansion is a single pass and is not recursive. A resolved
+   value cannot contain `${...}`, because Kubernetes object names and UIDs
+   cannot contain it.
+2. **What the signer compares the resolved value to.** Each expanded `cn`, `san`
+   and `uris` value must be an exact string member of the
+   [verified-identity allowlist](#identity-constraints). The comparison is
+   **exact string equality**. It is never a prefix or pattern match. Thus the
+   signer denies `${pod.name}.evil.example.com`, although its first part is a
+   name that the pod owns.
 
-Together these mean an interpolated value is subject to **exactly the same
-identity check as a literal one**. The check is membership-based and does not
-care how the string was produced, so interpolation grants no identity a pod does
-not already own. What it buys is portability — the same pod template across
-namespaces and clusters — plus per-pod values like `${pod.name}` that cannot be
-written literally in a shared Deployment at all.
+Thus the signer compares an interpolated value **in the same way as a literal
+value**. The comparison uses set membership, and the source of the string has no
+effect.
+Interpolation gives a pod no identity that it does not already own. It gives
+portability: one pod template works in different namespaces and clusters. It also
+gives values for each pod, such as `${pod.name}`. A shared Deployment cannot
+contain such values as literals.
 
 > [!IMPORTANT]
 > **The security gate is `--allow-unverified-identities`, not this flag.** That
-> is the setting that decides whether a pod may claim an identity it does not
-> own. `--enable-annotation-interpolation` decides only whether `${...}` is
-> resolved or rejected as a value; it is not a substitute for the identity
-> constraints and does not weaken them.
+> setting controls whether a pod can claim an identity that it does not own.
+> `--enable-annotation-interpolation` only controls whether the signer resolves
+> or rejects `${...}` in a value. It does not replace the identity constraints
+> and does not make them weaker.
 
-**Claimable** via interpolation: the pod's name, its canonical Kubernetes DNS
-forms, its SPIFFE ID, and its service account's short DNS form `<sa>.<ns>` and
-SPIFFE ID. `${node.name}` and `${pod.uid}` resolve but are **not** claimable as a
-subject — a node identity belongs to the kubelet, and a UID is an opaque token.
-The boundary of that set, including which forms are deliberately excluded and
-why, is recorded in
-[ADR-0001](adr/0001-verified-identity-allowlist-boundary.md).
+A pod can **claim** these identities through interpolation:
+
+- its name, `<pod>.<ns>`, and its canonical Kubernetes DNS forms
+- its SPIFFE ID
+- the short DNS form `<sa>.<ns>` and the SPIFFE ID of its service account
+
+`${node.name}` and `${pod.uid}` resolve, but a pod **cannot claim** them as a
+subject. A node identity belongs to the kubelet, and a UID is an opaque token.
+[ADR-0001](adr/0001-verified-identity-allowlist-boundary.md) records the limits
+of this set. It also records which forms are excluded and why.
 
 ### CSR-requested SANs (forward compatibility)
 
-Upstream Kubernetes plans to let pod authors request DNS and IP SANs that
-kubelet embeds in the PKCS#10 CSR of the `PodCertificateRequest` (today kubelet
-generates empty CSRs). The controller is ready for this behind
-`--honor-csr-sans` (Helm: `signer.honor_csr_sans`, disabled by default): when
-enabled, CSR-requested DNS and IP SANs are used unless a `san`/`ip-san`
-annotation overrides them. CSR SANs stay subject to the [identity
-constraints](#identity-constraints): unless `--allow-unverified-identities` is
-set, a CSR-requested DNS SAN must resolve to a verified pod identity and
-CSR-requested IP SANs are denied (an IP has no verified derivation). While
-disabled, CSR SANs are ignored — which the API contract explicitly permits.
+[KEP-4317](https://github.com/kubernetes/enhancements/tree/master/keps/sig-auth/4317-pod-certificates) says that a pod author can request DNS and IP SANs, and
+that kubelet puts them in the PKCS#10 CSR of the `PodCertificateRequest`. At this time,
+kubelet generates empty CSRs. The controller supports this change behind
+`--honor-csr-sans` (Helm: `signer.honor_csr_sans`, disabled by default). When the
+flag is enabled, the signer uses CSR-requested DNS and IP SANs. A `san` or
+`ip-san` annotation overrides them.
 
-Until then, IP SANs can be requested via the `ip-san` annotation; once kubelet
-gains native SAN support the same values move into the pod spec and the
-annotation becomes the override.
+CSR SANs are subject to the [identity constraints](#identity-constraints).
+Unless `--allow-unverified-identities` is set, these rules apply:
+
+- A CSR-requested DNS SAN must resolve to a verified pod identity.
+- The signer denies CSR-requested IP SANs, because an IP address has no verified
+  derivation.
+
+When the flag is disabled, the signer ignores CSR SANs. The API contract
+explicitly permits this.
+
+Until kubelet supports SANs, use the `ip-san` annotation to request IP SANs.
+When kubelet gets native SAN support, the same values move into the pod spec.
+The annotation then becomes the override.
 
 ### Configuration via pod annotations (deprecated)
 
 > [!WARNING]
-> Configuration via pod `annotations` is deprecated and is removed in 4.0.0 —
-> use `unverifiedUserAnnotations` instead. When both are set,
-> `unverifiedUserAnnotations` take precedence. Every value the signer still
-> reads from a pod annotation is logged at startup verbosity, so remaining
-> users can be found with
-> `kubectl logs ... | grep "read from a pod annotation"` before upgrading.
+> Configuration through pod `annotations` is deprecated. Version 4.0.0 removes
+> it. Use `unverifiedUserAnnotations` instead. When both are set,
+> `unverifiedUserAnnotations` take precedence. The signer writes a log line for
+> each value that it reads from a pod annotation. To find the remaining users
+> before you upgrade, use
+> `kubectl logs ... | grep "read from a pod annotation"`.
 
-The same items (`cn`/`san`/`ip-san`/`eku`/`uris`/`duration`/`refresh`) can be
-set as pod [`annotations`](https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/)
-with the same `<signer>/<name>-<item>` keys, e.g.
-`coolcert.example.com/foo-cn: some-name.example.com`. This path predates
-`userAnnotations` and is kept only for compatibility. Values read from it are
-validated like request values, and an item present with an empty value is
-denied rather than ignored, but unknown keys are ignored rather than denied:
-pod annotations are shared with every other consumer of the pod, and a
-signer-name prefix cannot tell a typo from the key of a sibling signer whose
-name extends this one (a signer `example.org/signer` would otherwise see
-`example.org/signer-x-cn`, belonging to `example.org/signer-x`, as an unknown
-item). A misspelled pod annotation therefore falls back to the default; use
-`unverifiedUserAnnotations`, where unknown keys deny the request.
+You can set the same items (`cn`/`san`/`ip-san`/`eku`/`uris`/`duration`/`refresh`)
+as pod [`annotations`](https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/).
+The keys are the same `<signer>/<name>-<item>` keys, for example
+`example.org/signer-cn: ${pod.name}.${pod.namespace}.svc.${cluster.fqdn}`. This path is older than
+`userAnnotations`, and it stays only for compatibility. The signer validates
+values from this path in the same way as request values. It denies an item that
+is present with an empty value. But it ignores unknown keys and does not deny
+them, for these reasons:
 
-Operators who have moved every workload to `unverifiedUserAnnotations` can
-close the fallback now with `--allow-pod-annotations=false` (Helm:
-`signer.allow_pod_annotations: false`), so pod annotations stop being a second
-requester-controlled input. The flag defaults to `true` until 4.0.0 removes the
-fallback. An item that is present on the request with an empty value is a
-misconfiguration and denies the request rather than falling back to the pod.
+- Pod annotations are shared with all other consumers of the pod.
+- A signer-name prefix cannot tell a typo from the key of a different signer
+  whose name starts with this signer name. For example, a signer
+  `example.org/signer` sees `example.org/signer-x-cn` from the signer
+  `example.org/signer-x` as an unknown item.
+
+Thus a misspelled pod annotation falls back to the default. Use
+`unverifiedUserAnnotations` instead, where an unknown key denies the request.
+
+When all workloads use `unverifiedUserAnnotations`, operators can close the
+fallback with `--allow-pod-annotations=false` (Helm:
+`signer.allow_pod_annotations: false`). Pod annotations then stop being a second
+input that the requester controls. The flag default is `true` until 4.0.0
+removes the fallback. An item on the request with an empty value is a
+misconfiguration. It denies the request and does not fall back to the pod.
 
 ## Identity constraints
 
 > [!IMPORTANT]
-> By default the signer issues certificates only for the **requesting pod's own
-> verified identity**. A `cn`, `san` or `uris` value is accepted only when it
-> resolves to an identity the signer derives from the apiserver-verified
-> `PodCertificateRequest` fields — the pod's name, its canonical Kubernetes DNS
-> forms (`<pod>.<ns>.pod[.<fqdn>]`, `<pod>.<ns>.svc[.<fqdn>]`), its SPIFFE ID, or
-> its service account (`<sa>.<ns>` and the SA SPIFFE ID). Any other value is
-> **Denied**, so a pod author cannot obtain a certificate for an identity it does
-> not own (e.g. `kubernetes.default.svc` or another team's service).
+> By default, the signer issues certificates only for the **verified identity
+> of the requesting pod**. The signer accepts a `cn`, `san` or `uris` value only
+> when it resolves to an identity from the apiserver-verified
+> `PodCertificateRequest` fields. These identities are:
+>
+> - the name of the pod, and `<pod>.<ns>`
+> - its canonical Kubernetes DNS forms (`<pod>.<ns>.pod[.<fqdn>]`,
+>   `<pod>.<ns>.svc[.<fqdn>]`)
+> - its SPIFFE ID
+> - its service account (`<sa>.<ns>` and the service account SPIFFE ID)
+>
+> The signer **denies** all other values. Thus a pod author cannot get a
+> certificate for an identity that the pod does not own. Examples are
+> `kubernetes.default.svc` and the service of a different team.
 
-Because a value authored on a pod template is identical for every replica, the
-intended way to set per-pod identities is `${...}` interpolation of verified
-fields (above); a literal `cn` that does not match the pod's verified identity is
-denied. `node.name` and `pod.uid` are available for interpolation but are **not**
-claimable as a certificate subject (a node identity belongs to the kubelet; a UID
-is opaque). `ip-san` values have no verified derivation and are denied.
+A value on a pod template is the same for every replica. Thus, to set an
+identity for each pod, use `${...}` interpolation of verified fields (see above).
+The signer denies a literal `cn` that is not the verified identity of the pod.
+`node.name` and `pod.uid` are available for interpolation, but a pod **cannot
+claim** them as a certificate subject. A node identity belongs to the kubelet,
+and a UID is opaque. `ip-san` values have no verified derivation, and the signer
+denies them.
 
-**Escape hatch (not recommended).** To lift these constraints — allowing
-arbitrary literal `cn`/`san`/`ip-san`/`uris` values — start the controller with
-`--allow-unverified-identities` (Helm: `signer.allow_unverified_identities:
-true`). Only do this if a `ValidatingAdmissionPolicy` (or equivalent) already
-restricts which annotations workloads may set.
+**Escape hatch (not recommended).** To remove these constraints, start the
+controller with `--allow-unverified-identities` (Helm:
+`signer.allow_unverified_identities: true`). The signer then accepts any literal
+`cn`/`san`/`ip-san`/`uris` value. Use this flag only when a
+`ValidatingAdmissionPolicy` (or equivalent) already limits the annotations that
+workloads can set.
 
 > [!WARNING]
-> **Breaking change.** Earlier releases issued certificates for arbitrary literal
-> `cn`/`san`/`ip-san`/`uris` values and included `clientAuth` in the default
-> extended key usage. Both defaults have changed: unverified identities are now
-> denied, and the default EKU is `serverAuth` only. To restore the previous
-> behaviour set `signer.allow_unverified_identities: true` **and** add
-> `eku: server,client`; the recommended migration is to switch literal values to
-> `${...}` interpolation and request client auth explicitly with `eku`.
+> **Breaking change.** Earlier releases issued certificates for any literal
+> `cn`/`san`/`ip-san`/`uris` value. They also included `clientAuth` in the
+> default extended key usage. Both defaults changed. The signer now denies
+> unverified identities, and the default EKU is only `serverAuth`. To restore
+> the previous behavior, set `signer.allow_unverified_identities: true` **and**
+> add `eku: server,client`. The recommended migration is different. Change
+> literal values to `${...}` interpolation, and request client authentication
+> explicitly with `eku`.
 
 ### Restricting annotations with a ValidatingAdmissionPolicy
 
 [`examples/validating-admission-policy.yaml`](https://github.com/rafpe/pod-certificate-signer/blob/main/examples/validating-admission-policy.yaml)
-is a ready-to-apply `ValidatingAdmissionPolicy` and binding that decides, at
-admission time, which pods may set signer-prefixed `userAnnotations`:
+contains a `ValidatingAdmissionPolicy` and binding that you can apply as they
+are. At admission time, they control which pods can set signer-prefixed
+`userAnnotations`:
 
-- `cn`, `san`, `ip-san` and `uris` claim an identity, so they are rejected unless
-  the pod's namespace carries an allowlist label — on the deprecated pod
-  `annotations` path too, which is on by default and would otherwise be an open
-  bypass (`--allow-pod-annotations=false` closes it at the signer instead);
-- `eku`, `duration` and `refresh` only shape a certificate the pod is already
-  entitled to, so any namespace may set them;
-- any other key using the signer's prefix is rejected as a typo.
+- `cn`, `san`, `ip-san` and `uris` claim an identity. The policy rejects them
+  unless the namespace of the pod has an allowlist label. This also applies to
+  the deprecated pod `annotations` path. That path is on by default and is
+  otherwise an open bypass. `--allow-pod-annotations=false` closes it at the
+  signer instead.
+- `eku`, `duration` and `refresh` only change a certificate that the pod can
+  already get. Thus any namespace can set them.
+- The policy rejects all other keys with the signer prefix as typos.
 
 [`examples/validating-admission-policy-eku.yaml`](https://github.com/rafpe/pod-certificate-signer/blob/main/examples/validating-admission-policy-eku.yaml)
-is a second, standalone example focused on `eku`: it restricts which extended key
-usages a workload may request (`server`, `client`, or both) based on a namespace
-label, so client-auth certificates can be confined to specific namespaces.
+is a second, standalone example for `eku`. It uses a namespace label to control
+which extended key usages a workload can request: `server`, `client`, or both.
+Thus you can limit client-auth certificates to specific namespaces.
 
-**When to use it.** If you enable `--allow-unverified-identities`, this policy is
-what replaces the protection you switched off — without it any pod author can
-request a certificate for any name. Under the default constraints it is still
-worth applying as defense in depth: a pod rejected at admission gets an immediate
-error, instead of a volume that never mounts and a `Denied` request to go read.
+**When to use it.** If you enable `--allow-unverified-identities`, this policy
+replaces the protection that you removed. Without it, any pod author can request
+a certificate for any name. Also apply it with the default constraints, as
+defense in depth. Admission rejects a bad pod immediately with an error. Without
+the policy, the volume does not mount, and you must find the `Denied` request.
 
 ### Preventive DNS SAN admission policy
 
-The chart can also manage a signer-specific DNS SAN policy. Policies live under
-the `admissionPolicies` map so each policy remains independently selectable as
-the catalog grows:
+The chart can also manage a DNS SAN policy for this signer. Policies are in the
+`admissionPolicies` map, so you can select each policy independently as the
+catalog grows:
 
 ```yaml
 admissionPolicies:
@@ -256,52 +288,68 @@ admissionPolicies:
     objectSelector: {}
 ```
 
-The policy inspects Pods on create and update when a projected `podCertificate`
-volume names this chart's `signer.name` and supplies the matching `-san`
-`userAnnotations` key. It expands the values available at admission time
-(`${pod.name}`, `${pod.namespace}`, `${pod.serviceAccountName}`, and
-`${cluster.fqdn}`), then checks comma-separated DNS names, label lengths, total
-length, and DNS-1123 syntax. It ignores other signers, Pods without an explicit
-SAN annotation, CSR SANs, and generated defaults; those remain signer-side
-concerns.
+The policy examines Pods on create and update. It applies when a projected
+`podCertificate` volume names the `signer.name` of this chart and sets the
+matching `-san` `userAnnotations` key. The policy expands the values that are
+available at admission time: `${pod.name}`, `${pod.namespace}`,
+`${pod.serviceAccountName}`, and `${cluster.fqdn}`. Then it checks the
+comma-separated DNS names for label length, total length, and DNS-1123 syntax.
 
-Start with `Warn` and `Audit`, observe warnings/audit events, narrow rollout with
-`namespaceSelector` or `objectSelector` if needed, then use `Deny`. Kubernetes
-does not allow `Deny` and `Warn` together in one binding, and the chart schema
-rejects that combination. The feature is disabled by default because enabling a
-cluster-scoped admission control is an operator rollout decision.
+The policy ignores these items, which stay the responsibility of the signer:
 
-This is complementary defense in depth, not an alternative to signer
-validation. The signer validates annotation, CSR, and generated DNS SANs after
-the source is resolved in both constrained and
-`--allow-unverified-identities` modes. That flag relaxes ownership checks only;
-it never permits malformed DNS identities.
+- other signers
+- Pods without an explicit SAN annotation
+- CSR SANs
+- generated defaults
+
+Start with `Warn` and `Audit`, and monitor the warnings and audit events. If
+necessary, use `namespaceSelector` or `objectSelector` to limit the rollout. Then
+change to `Deny`. Kubernetes does not allow `Deny` and `Warn` together in one
+binding, and the chart schema rejects that combination. The feature is disabled
+by default. Enabling a cluster-scoped admission control is a rollout decision
+for the operator.
+
+This policy adds defense in depth. It does not replace signer validation. The
+signer validates annotation, CSR, and generated DNS SANs after it selects the
+source. It does this both with the default constraints and with
+`--allow-unverified-identities`. That flag only removes the ownership check. It
+never permits malformed DNS identities.
 
 ## Validation rules
 
-The controller performs these validations by default:
+The controller does these validations by default:
 
-1. **CA files present** — the mounted CA cert/key files exist and load.
-2. **CA valid** — the CA is a valid, non-expired CA.
-3. **Cluster FQDN valid** — `--cluster-fqdn` is a DNS-1123 subdomain; invalid
-   operator configuration fails controller startup.
-4. **Request configuration** — the `unverifiedUserAnnotations` (or deprecated
-   annotations) are validated against the constraints the apiserver enforces on
-   the request status, so misconfigurations are denied immediately:
-   - Duration is at least `1h` and no more than the request's
-     `spec.maxExpirationSeconds` (default `24h`); the default is clamped to it.
-   - The refresh hint lies within `beginRefreshAt`: at least `10m` and at most
-     the certificate duration minus `10m`.
-   - `eku` accepts `client` and/or `server`; unknown tokens deny. The default is
-     `serverAuth` only. Certificates for non-RSA keys carry only the
-     `digitalSignature` key usage.
-   - Every selected DNS SAN is a DNS-1123 subdomain with labels of at most 63
-     characters and a total length of at most 253 characters. Invalid values are
-     rejected, never truncated or rewritten. Wildcard SANs are rejected.
+1. **Required flags set.** `--signer-name` must not be empty, and
+   `--cluster-fqdn` must not be empty. Otherwise the controller does not start.
+2. **Cluster FQDN valid.** `--cluster-fqdn` must be a DNS-1123 subdomain. An
+   invalid value stops controller startup.
+3. **CA files present.** The mounted CA certificate and key files must exist and
+   load.
+4. **CA valid.** The certificate must be a CA certificate with the `certSign`
+   key usage. It must not be expired. Its `NotBefore` must not be more than 5
+   minutes in the future.
+5. **Request configuration.** The signer validates the
+   `unverifiedUserAnnotations` (or the deprecated pod annotations). It uses the
+   same constraints that the apiserver applies to the request status. Thus it
+   denies misconfigurations immediately:
+   - The duration is a minimum of `1h`. It is not more than the
+     `spec.maxExpirationSeconds` of the request (default `24h`). The signer
+     reduces the default duration to that maximum.
+   - The refresh hint is in the `beginRefreshAt` range: a minimum of `10m`, and a
+     maximum of the certificate duration minus `10m`.
+   - `eku` accepts `client`, `server`, or both. An unknown token denies the
+     request. The default is only `serverAuth`. Certificates for non-RSA keys
+     have only the `digitalSignature` key usage. Certificates for RSA keys also
+     have `keyEncipherment`.
+   - Each selected DNS SAN is a DNS-1123 subdomain. Each label has a maximum of
+     63 characters, and the full name a maximum of 253 characters. The signer
+     rejects invalid values. It never shortens or changes them. The signer
+     rejects wildcard SANs.
 
 ## Controller CLI flags
 
-The chart renders these from Helm values; you rarely set them directly.
+The chart sets these flags from Helm values. Usually you do not set them
+directly.
 
 ```
   -allow-pod-annotations
@@ -340,28 +388,33 @@ The chart renders these from Helm values; you rarely set them directly.
   -zap-* ...                  Standard zap logging flags (encoder, level, time encoding).
 ```
 
+The chart sets `--leader-election-id` to the release `fullname`, not to the flag
+default. The chart sets `--zap-log-level`, `--zap-encoder` and
+`--zap-time-encoding` from the `log` values.
+
 ## Helm values
 
-The complete values reference — every key, default and the CA-source abstraction
-— lives in the [chart README](../charts/pod-certificate-signer/README.md) and is
-documented inline in
-[`values.yaml`](../charts/pod-certificate-signer/values.yaml). The essentials:
+The [chart README](../charts/pod-certificate-signer/README.md) is the full values
+reference. It gives every key, every default, and the CA source abstraction.
+[`values.yaml`](../charts/pod-certificate-signer/values.yaml) also documents each
+value inline. The most important values follow.
 
 ### Providing the CA
 
-The signing CA is configured under `signer.ca` with an explicit `source`:
+The signing CA is in `signer.ca`, with an explicit `source`:
 
-- **`secretRef` (recommended, default)** — mount an existing Secret. The private
-  key stays in a Secret, the chart wires a read-only volume for you, and only the
-  CA cert + key are projected into the pod. `signer.ca.secretRef.name` is
-  **required**; an empty name fails `helm install`/`upgrade` at render time.
-- **`file` (advanced / BYO mount)** — you mount the cert/key yourself via
-  `.Values.volumes` / `.Values.volumeMounts` and point `signer.ca.file.certPath`
-  / `keyPath` at them.
+- **`secretRef` (recommended, default).** The chart mounts an existing Secret.
+  The private key stays in a Secret, and the chart adds a read-only volume for
+  you. The chart projects only the CA certificate and key into the pod.
+  `signer.ca.secretRef.name` is **required**. An empty name stops
+  `helm install` or `helm upgrade` at render time.
+- **`file` (advanced, bring your own mount).** You mount the certificate and key
+  through `.Values.volumes` and `.Values.volumeMounts`. Then you set
+  `signer.ca.file.certPath` and `keyPath` to their paths.
 
 ```yaml
 signer:
-  name: coolcert.example.com/foo
+  name: example.org/signer
   ca:
     source: secretRef
     secretRef:
@@ -373,39 +426,41 @@ signer:
 
 ### Metrics authentication
 
-The metrics endpoint (`:9090/metrics`) is **secured by default**
-(`metrics.insecure: false`): it is served over **HTTPS** and every scrape must
-be **authenticated** with a Kubernetes bearer token (verified via a
-`TokenReview`) and **authorized** with a `SubjectAccessReview` for `get` on the
-`/metrics` nonResourceURL. This closes the previous exposure where any pod that
-could reach the Service could scrape the controller's metrics.
+The metrics endpoint (`:9090/metrics`) is **secure by default**
+(`metrics.insecure: false`). The controller serves it over **HTTPS**. Each scrape
+must have **authentication** with a Kubernetes bearer token, which a
+`TokenReview` verifies. Each scrape must also have **authorization**: a
+`SubjectAccessReview` for `get` on the `/metrics` nonResourceURL. Before this
+change, any pod that could reach the Service could scrape the controller
+metrics.
 
 > [!WARNING]
 > **Breaking change.** Unauthenticated plaintext scrapes that worked before now
-> fail. A scraper must present a `ServiceAccount` token and trust (or skip
-> verifying) the controller's self-signed serving certificate.
+> fail. A scraper must send a `ServiceAccount` token. It must also trust the
+> self-signed serving certificate of the controller, or skip verification.
 
-To let Prometheus scrape the secured endpoint:
+To let Prometheus scrape the secure endpoint, do these steps:
 
-1. Bind the chart's `*-metrics-reader` `ClusterRole` (grants `get` on the
-   `/metrics` nonResourceURL) to the ServiceAccount Prometheus scrapes with.
+1. Bind the `*-metrics-reader` `ClusterRole` of the chart to the ServiceAccount
+   that Prometheus uses to scrape. The role grants `get` on the `/metrics`
+   nonResourceURL.
 
    > [!IMPORTANT]
-   > **The name below assumes the release name used throughout these docs**
-   > (`helm install pod-certificate-signer`). The role is named from the
-   > chart's `fullname` helper — the release name, prefixed with the chart name
-   > unless the release name already contains it — so a release called `pcs`
-   > renders `pcs-pod-certificate-signer-metrics-reader`, not
-   > `pcs-metrics-reader`. Binding a name that does not exist fails the
-   > `SubjectAccessReview` and every scrape returns `403`, with nothing in the
-   > controller log to say why. Read the real name off the cluster:
+   > **The name below uses the release name of these docs**
+   > (`helm install pod-certificate-signer`). The chart `fullname` helper sets the
+   > role name. The name is the release name, then the chart name, unless the
+   > release name already contains the chart name. Thus a release called `pcs`
+   > gets `pcs-pod-certificate-signer-metrics-reader`, not `pcs-metrics-reader`.
+   > If the bound name does not exist, the `SubjectAccessReview` fails. Every
+   > scrape then returns `403`, and the controller log does not show the cause.
+   > Read the real name from the cluster:
    >
    > ```sh
    > kubectl get clusterrole -o name | grep metrics-reader
    > ```
    >
-   > `roleRef` is immutable, so correcting a binding means deleting and
-   > recreating it, not patching it.
+   > `roleRef` is immutable. To correct a binding, delete it and create it again.
+   > You cannot patch it.
 
    ```yaml
    apiVersion: rbac.authorization.k8s.io/v1
@@ -422,9 +477,9 @@ To let Prometheus scrape the secured endpoint:
      namespace: monitoring
    ```
 
-2. Configure the scrape to use the `https` scheme, the pod's bearer token, and
-   either the serving CA or `insecureSkipVerify: true` (the serving cert is
-   self-signed, generated in memory by controller-runtime).
+2. Configure the scrape with the `https` scheme and the bearer token of the pod.
+   Also give the serving CA, or set `insecureSkipVerify: true`. The serving
+   certificate is self-signed. controller-runtime generates it in memory.
 
    With a Prometheus Operator `ServiceMonitor`:
 
@@ -437,8 +492,8 @@ To let Prometheus scrape the secured endpoint:
        insecureSkipVerify: true
    ```
 
-   Without the operator, the equivalent `scrape_config`. The `keep` regex
-   matches `<service name>;<port name>`, and the service carries the same
+   Without the operator, use the equivalent `scrape_config`. The `keep` regex
+   matches `<service name>;<port name>`. The service name comes from the same
    release-dependent `fullname` as the ClusterRole above:
 
    ```yaml
@@ -459,32 +514,39 @@ To let Prometheus scrape the secured endpoint:
        regex: pod-certificate-signer;metrics
    ```
 
-   Prometheus needs `get`/`list`/`watch` on `services`, `endpoints` and `pods`
-   for the discovery itself; that is separate from the metrics-reader role,
-   which only authorizes the scrape.
+   Prometheus needs `get`, `list` and `watch` on `services`, `endpoints` and
+   `pods` for discovery. That permission is separate from the metrics-reader
+   role. The metrics-reader role only authorizes the scrape.
 
-The controller ServiceAccount is granted `create` on `tokenreviews` and
-`subjectaccessreviews` by the chart so the auth filter can call the apiserver.
-Annotation-based Prometheus scraping (the `prometheus.io/*` pod annotations)
-cannot supply a token and will not authenticate against the secured endpoint —
-use a `ServiceMonitor` (or equivalent) instead.
+The chart grants the controller ServiceAccount `create` on `tokenreviews` and
+`subjectaccessreviews`. The auth filter needs these permissions to call the
+apiserver. Annotation-based Prometheus scraping (the `prometheus.io/*` pod
+annotations) cannot send a token. Thus it cannot authenticate to the secure
+endpoint. Use a `ServiceMonitor` (or equivalent) instead.
 
 **Escape hatch.** To restore the legacy unauthenticated plaintext endpoint, set
-`metrics.insecure: true` (renders `--metrics-secure=false`). Only do this when
-the metrics port is protected by other means (e.g. a NetworkPolicy and a trusted
-network). The chart also ships an optional `metrics.networkPolicy` (off by
-default) to restrict ingress to the metrics port.
+`metrics.insecure: true`. The chart then renders `--metrics-secure=false`. Do
+this only when a different control protects the metrics port, for example a
+NetworkPolicy and a trusted network. The chart also has an optional
+`metrics.networkPolicy` (disabled by default) that limits ingress to the metrics
+port.
 
 ### Recommended production posture
 
-The chart ships production-safe defaults and needs no extra manifests: restricted
-PSS (non-root, read-only rootfs, all capabilities dropped), `replicaCount: 2`
-with leader election, resource requests and limits, and a PodDisruptionBudget.
-Review these two for your cluster:
+The chart ships production-safe defaults, and needs no extra manifests. The
+defaults are:
 
-- **Resource requests and limits.** Set by default for a lightweight, mostly-idle
-  point-reconciler. Tune for your cluster size; `resources: {}` leaves the
-  container unconstrained.
+- the restricted Pod Security Standard: non-root, read-only root file system,
+  and all capabilities dropped
+- `replicaCount: 2` with leader election
+- resource requests and limits
+- a PodDisruptionBudget
+
+Examine these two settings for your cluster:
+
+- **Resource requests and limits.** The defaults fit a lightweight controller
+  that is idle most of the time. Change them for the size of your cluster.
+  `resources: {}` removes all limits from the container.
 
   ```yaml
   resources:
@@ -496,11 +558,11 @@ Review these two for your cluster:
       memory: 256Mi
   ```
 
-- **PodDisruptionBudget.** Enabled by default. With two leader-elected replicas,
-  `minAvailable: 1` lets a node be drained one replica at a time while always
-  keeping a pod that can hold the lease. `unhealthyPodEvictionPolicy:
-  AlwaysAllow` lets a drain evict a replica that is not yet Ready, so a bad pod
-  cannot wedge the drain.
+- **PodDisruptionBudget.** Enabled by default. The chart runs two
+  leader-elected replicas. With `minAvailable: 1`, a node drain evicts one
+  replica at a time, and one pod can always hold the lease.
+  `unhealthyPodEvictionPolicy: AlwaysAllow` lets a drain evict a replica that is
+  not Ready. Thus a bad pod cannot block the drain.
 
   ```yaml
   podDisruptionBudget:
@@ -511,6 +573,36 @@ Review these two for your cluster:
   ```
 
 > [!IMPORTANT]
-> If you enable the HPA and it scales the Deployment down to a single replica,
-> `minAvailable: 1` blocks node drains for that sole pod. Switch to
-> `maxUnavailable: 1` in that case.
+> If you enable the HPA and it scales the Deployment down to one replica,
+> `minAvailable: 1` blocks node drains for that single pod. In that case, change
+> to `maxUnavailable: 1`.
+
+## Next steps
+
+To make sure that a setting is active, do these steps:
+
+1. Read the flags that the chart rendered on the controller. The commands on
+   this page use the `pcs-system` namespace and the
+   `pod-certificate-signer` release name:
+
+   ```sh
+   kubectl -n pcs-system get deployment pod-certificate-signer \
+     -o jsonpath='{.spec.template.spec.containers[0].command}'
+   ```
+
+2. Read the conditions of a `PodCertificateRequest`. A configuration error
+   shows a `Denied` condition with reason `InvalidUnverifiedUserAnnotations`.
+   The message gives the exact error:
+
+   ```sh
+   kubectl describe podcertificaterequest -n <namespace>
+   ```
+
+3. Read the controller logs:
+
+   ```sh
+   kubectl logs -n pcs-system deployment/pod-certificate-signer
+   ```
+
+Then continue with [Operations](./operations.md). It covers CA rotation,
+metrics, alerts and troubleshooting.

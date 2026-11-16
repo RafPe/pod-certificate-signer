@@ -12,16 +12,15 @@ description: A Helm chart for the PodCertificateRequest Signer
 # pipeline. Library charts do not define any templates and therefore cannot be deployed.
 type: application
 
-# This is the chart version. This version number should be incremented each time you make changes
-# to the chart and its templates, including the app version.
-# Versions are expected to follow Semantic Versioning (https://semver.org/)
+# Chart version, in Semantic Versioning (https://semver.org/). The release
+# workflow replaces it with the release version ("X.Y.Z") when it packages the
+# chart. Thus 0.1.0 applies only to installs from a source checkout.
 version: 0.1.0
 
-# This is the version number of the application being deployed. It is the
-# default image tag when image.tag is not set. Both the chart version and
-# appVersion are overridden by the release workflow when the chart is packaged
-# and pushed to GHCR ("X.Y.Z" / "vX.Y.Z"); "latest" here keeps installs from a
-# source checkout working without extra flags.
+# Version of the application that the chart deploys. It is the default image
+# tag when image.tag is not set. The release workflow replaces it with the
+# release tag ("vX.Y.Z") when it packages the chart and pushes it to GHCR. With
+# "latest", installs from a source checkout work without extra flags.
 appVersion: "latest"
 
 # Kubernetes version constraint. The signer serves certificates.k8s.io/v1,
@@ -39,9 +38,8 @@ maintainers:
     url: https://github.com/RafPe
 
 annotations:
-  # Metadata consumed by Artifact Hub (https://artifacthub.io) to enrich the
-  # chart listing. Registration is a one-time manual step — see
-  # docs/artifact-hub.md.
+  # Artifact Hub (https://artifacthub.io) reads this metadata for the chart
+  # listing. Registration is a one-time manual step. See docs/artifact-hub.md.
   artifacthub.io/category: security
   artifacthub.io/license: Apache-2.0
   artifacthub.io/prerelease: "false"
@@ -52,12 +50,13 @@ annotations:
       url: https://github.com/RafPe/pod-certificate-signer/tree/main/docs
     - name: Security policy
       url: https://github.com/RafPe/pod-certificate-signer/blob/main/SECURITY.md
-  # Image scanned/displayed by Artifact Hub. The release workflow rewrites this
-  # tag to the released version when it packages the chart (see
-  # docs/artifact-hub.md), so the value below only applies to source checkouts.
+  # Image that Artifact Hub scans and shows. The release workflow changes this
+  # tag to the release version when it packages the chart (see
+  # docs/artifact-hub.md). Thus the value below applies only to source checkouts.
   artifacthub.io/images: |
     - name: pod-certificate-signer
       image: ghcr.io/rafpe/pod-certificate-signer:v1.2.1
-  # No artifacthub.io/signKey: release images are signed with cosign keyless
-  # (Fulcio/Rekor, no static public key), which Artifact Hub detects on its own.
-  # The verification recipe lives in docs/artifact-hub.md.
+  # No artifacthub.io/signKey. The release workflow signs images with cosign
+  # keyless signing (Fulcio/Rekor, no static public key). Artifact Hub finds
+  # these signatures without a key. docs/artifact-hub.md gives the verification
+  # procedure.
