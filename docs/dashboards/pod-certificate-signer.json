@@ -107,7 +107,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "How many CA reload attempts in a row have failed. A failed reload retains the last-good CA, so signing keeps working - this is a warning, not an outage. Readiness fails only after 3 consecutive failures that have also lasted 10 minutes, so this crossing 3 is roughly five minutes of lead time before the replica leaves the Service.",
+      "description": "How many CA reload attempts in a row have failed. A failed reload retains the last-good CA, so signing keeps working - this is a warning, not an outage. Readiness fails only after 3 consecutive failures that have also lasted 10 minutes, A failed reload after a file event makes up to 5 attempts, so the streak can reach 3 within seconds. The periodic reload adds 1 per minute. An alert on >= 3 with for: 5m fires about 3 to 5 minutes before the replica leaves the Service.",
       "fieldConfig": {
         "defaults": {
           "decimals": 0,
@@ -235,7 +235,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "How many certificates are in the bundle the signer would publish. Normally 1. It becomes 2 during a rotation, because the previous CA is kept as an anchor until certificates it signed have expired - drop it early and live workloads stop verifying each other. This reads the in-memory bundle, not the ClusterTrustBundle object.",
+      "description": "How many certificates are in the bundle the signer would publish. 1 before the first rotation. Each rotation adds the previous CA, up to 1 + --max-previous-ca-certs (default 3). The signer drops a previous CA only when it expires or the history is over the limit. If a CA leaves too early, workloads with certificates from it stop verifying. This reads the in-memory bundle, not the ClusterTrustBundle object.",
       "fieldConfig": {
         "defaults": {
           "decimals": 0,
@@ -492,7 +492,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Neither of these is an outcome, which is why they are not in the SLI.\n\nRequeues are counted per attempt. CASignerUnusable rising with nothing terminal alongside it is the silent hang: the CA cannot cover the requested lifetime, the reconcile retries forever, and pods sit in ContainerCreating with nothing on the request explaining why. Rotate the CA and they drain.\n\nDrops write no status, so the request never becomes immutable and the same one can be counted again after a restart. Read this as occurrences, not as distinct requests.",
+      "description": "Neither of these is an outcome, which is why they are not in the SLI.\n\nRequeues are counted per attempt. CASignerUnusable rising with nothing terminal alongside it is the silent hang: the CA cannot cover the requested lifetime, the reconcile retries forever, and pods sit in ContainerCreating. The request gets no condition, only a rate-limited CASignerUnusable warning event. Rotate the CA and they drain.\n\nDrops write no status, so the request never becomes immutable and the same one can be counted again after a restart. Read this as occurrences, not as distinct requests.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -1027,7 +1027,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "The step from 1 to 2 is a rotation in progress: the new CA is signing, the previous one is still trusted so certificates already issued keep verifying. The step back to 1 is the old anchor ageing out. A drop to 1 that happens too early is what breaks a live mesh.",
+      "description": "Each step up is a rotation: the new CA signs, and the previous CA stays trusted, so certificates already issued continue to verify. A step down is a previous CA that expired or went over the --max-previous-ca-certs limit. A step down too early breaks a live mesh.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1093,7 +1093,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Whether this replica holds the leader lease. Only the leader publishes the ClusterTrustBundle; every replica signs. A publish counter flat at zero on a replica that is not the leader is correct, not broken.",
+      "description": "1 when a replica holds the leader lease. Only the leader signs requests and publishes the ClusterTrustBundle. A publish counter flat at zero on a replica that is not the leader is correct, not broken.",
       "fieldConfig": {
         "defaults": {
           "mappings": [
@@ -1174,7 +1174,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "description": "controller-runtime's own view. `requeue_after` tracks the signer's deliberate retries; `error` is a reconcile that returned an error rather than a verdict.",
+          "description": "controller-runtime's own view. The signer retries a request by returning an error, so its retries show as `error`, not as `requeue_after`. Compare with the requeue panel.",
           "fieldConfig": {
             "defaults": {
               "custom": {

@@ -1,13 +1,14 @@
 # Security Policy
 
-pod-certificate-signer is a Kubernetes controller that signs
-[PodCertificateRequests](https://kubernetes.io/docs/reference/access-authn-authz/podcertificaterequest/)
-with a CA private key it holds, and publishes that CA as a
-[ClusterTrustBundle](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#cluster-trust-bundles)
-that workloads across the cluster may mount as a trust anchor. That makes it
-security-critical infrastructure: a bug in the signer, or a misconfigured
-deployment of it, can translate into cluster-wide identity forgery. Please read
-the threat model below before deploying it, and before reporting an issue.
+pod-certificate-signer is a Kubernetes controller. It signs
+[PodCertificateRequests](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#pod-certificate-requests)
+with a CA private key that it holds. It publishes that CA as a
+[ClusterTrustBundle](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#cluster-trust-bundles),
+and workloads across the cluster can mount that bundle as a trust anchor.
+Thus the controller is security-critical infrastructure. A bug in the signer,
+or a bad configuration of its deployment, can let an attacker forge identities
+across the cluster. Read the threat model below before you deploy the
+controller and before you report an issue.
 
 ## Reporting a vulnerability
 
@@ -19,22 +20,24 @@ the threat model below before deploying it, and before reporting an issue.
 - Fallback: email the maintainer at `rpieniaz@gmail.com` with
   `[SECURITY] pod-certificate-signer` in the subject.
 
-Please include the version (image tag / chart version), the relevant controller
-flags and Helm values, and a reproduction or a clear description of the impact.
+Include these items in the report:
+
+- the version (image tag and chart version)
+- the relevant controller flags and Helm values
+- a reproduction, or a clear description of the impact
 
 What to expect:
 
 - Acknowledgement within **7 days**.
-- An assessment (accepted / duplicate of a tracked issue / out of scope) and,
-  for accepted reports, a remediation plan within **30 days**.
+- An assessment within **30 days**: accepted, duplicate of a tracked issue, or
+  out of scope. An accepted report also gets a remediation plan in that time.
 - Coordinated disclosure: we ask for up to **90 days** before public
-  disclosure, and will credit reporters in the advisory unless they prefer
-  otherwise.
+  disclosure. The advisory credits the reporter, unless the reporter prefers
+  no credit.
 
-Known, publicly tracked security limitations (see the
-[code-quality-review epic #25](https://github.com/RafPe/pod-certificate-signer/issues/25)
-and the threat model below) do not need to be re-reported — but reports that
-show a tracked limitation is *worse* than described are very welcome.
+The threat model below documents the known security limitations. You do not
+need to report a documented limitation again. But we welcome a report that
+shows a limitation is *worse* than the description.
 
 ## Supported versions
 
@@ -42,8 +45,8 @@ Only the newest release line receives security fixes. There are no backports.
 
 | Version  | Supported                             |
 | -------- | ------------------------------------- |
-| >= 2.2.0 | ✅                                    |
-| < 2.2.0  | ❌ — upgrade to the latest release    |
+| >= 3.1.0 | ✅                                    |
+| < 3.1.0  | ❌ — upgrade to the latest release    |
 
 Security fixes ship as patch releases of the current line (image
 `ghcr.io/rafpe/pod-certificate-signer`, chart
@@ -55,216 +58,272 @@ Security fixes ship as patch releases of the current line (image
 
 | Asset | Why it matters |
 | ----- | -------------- |
-| CA private key | Signs every pod certificate. Compromise = unlimited identity forgery for as long as the CA is trusted. |
-| Issuance decision (subject/SANs/EKU placed into certificates) | Controls which identities a pod can prove. |
-| ClusterTrustBundle contents | Mounted as `ca.crt` by arbitrary workloads; poisoning it makes attacker-controlled CAs trusted cluster-wide. |
-| Controller's Kubernetes identity (ServiceAccount + RBAC) | Holds `sign`/`attest` on the signer name and write access to the trust bundle. |
+| CA private key | It signs every pod certificate. If an attacker gets the key, the attacker can forge any identity for as long as workloads trust the CA. |
+| Issuance decision (subject, SANs and EKU in each certificate) | It controls which identities a pod can prove. |
+| ClusterTrustBundle contents | Any workload can mount the bundle as `ca.crt`. If an attacker adds a CA to the bundle, the whole cluster trusts that CA. |
+| Controller's Kubernetes identity (ServiceAccount and RBAC) | It holds `sign` and `attest` on the signer name, and write access to the ClusterTrustBundle. |
 
-The main trust boundary is between **apiserver-verified request fields** and
-**pod-author-controlled input**. `spec.podName`, `spec.podUID`,
-`spec.serviceAccountName`, `spec.nodeName` and the CSR public key are populated
-by kubelet and verified by kube-apiserver. `spec.unverifiedUserAnnotations` is
-copied **verbatim** from the pod author's `userAnnotations` and is, per the
-upstream API contract, unvalidated by design — validating it is the signer's
-responsibility.
+The main trust boundary is between **request fields that kube-apiserver
+verifies** and **input that the pod author controls**. Kubelet fills
+`spec.podName`, `spec.podUID`, `spec.serviceAccountName`, `spec.nodeName` and
+the CSR public key, and kube-apiserver verifies them. Kubelet copies
+`spec.unverifiedUserAnnotations` **verbatim** from the pod author's
+`userAnnotations`. The upstream API contract does not validate this field, by
+design. The signer must validate it.
 
 ### CA key handling and reload
 
-- The CA certificate and key are mounted from a `kubernetes.io/tls` Secret
-  (default paths `/app/signer/ca/tls.crt` / `tls.key`). The controller only
-  reads them from disk; it never writes, logs, or serves key material.
-- On load the CA is validated: it must be a CA (`isCA` + basic constraints),
-  carry `keyCertSign`, and be unexpired. Signing is refused when the requested
-  certificate lifetime would outlive the CA.
-- **Rotation** is a hot-reload: update the Secret (or the mounted files) and a
-  filesystem watcher reloads the key pair without a restart. Previously used
-  CA certificates are retained (`--max-previous-ca-certs`, default 2) and kept
-  in the published trust bundle so workloads keep verifying certificates
-  issued by the old CA during the rollover window. CA history is re-seeded
-  from the existing ClusterTrustBundle on startup.
-- The controller never generates or manages the CA itself — issuing and
-  protecting the CA (e.g. via cert-manager, cfssl, or an external PKI) is the
-  operator's responsibility, as is RBAC on the CA Secret.
+- The CA certificate and key come from a Secret (`kubernetes.io/tls` or
+  `Opaque`) that the chart mounts as a volume. The default paths are
+  `/app/signer/ca/tls.crt` and `/app/signer/ca/tls.key`. The controller only
+  reads these files. It never writes, logs or serves key material.
+- The controller validates the CA on each load. The certificate must have
+  `isCA` set with valid basic constraints, and it must carry `keyCertSign`. It
+  must not be expired. Its `notBefore` must not be more than 5 minutes in the
+  future.
+- The signer does not sign a certificate whose requested lifetime goes past the
+  CA's `notAfter`. It requeues the request and emits a `CASignerUnusable`
+  warning event on it.
+- **Rotation** is a hot reload. Update the Secret, and a file watcher on every
+  replica reloads the key pair without a restart. The watcher also reloads the
+  CA every 60 seconds, so a missed file event does not stop a rotation.
+- The controller keeps previous CA certificates (`--max-previous-ca-certs`,
+  default 2) in the published ClusterTrustBundle. Thus workloads continue to
+  verify certificates from the old CA during the rotation window.
+- On startup, the controller reads the previous-CA history back from its
+  existing ClusterTrustBundle. It validates each entry and drops entries that
+  are not usable CAs, expired entries, duplicates and entries over the limit
+  ([ADR-0004](docs/adr/0004-bootstrapped-previous-ca-history.md)).
+- The controller does not generate or manage the CA. The operator must issue
+  and protect the CA (for example with cert-manager, cfssl or an external PKI).
+  The operator also owns RBAC on the CA Secret.
 
-Known limitations, tracked in epic [#25](https://github.com/RafPe/pod-certificate-signer/issues/25)
-with fixes in flight: the reload watcher is tied to the leader-elected replica
-([#27](https://github.com/RafPe/pod-certificate-signer/issues/27)), a failed
-reload is logged but not surfaced via health probes
-([#32](https://github.com/RafPe/pod-certificate-signer/issues/32)), and a
-failed startup read of the existing bundle starts with empty CA history
-([#30](https://github.com/RafPe/pod-certificate-signer/issues/30)).
+Earlier versions had three limitations in this area. All three are fixed, and
+epic [#25](https://github.com/RafPe/pod-certificate-signer/issues/25) is closed:
+
+- The CA watcher runs on every replica, not only on the leader
+  ([#27](https://github.com/RafPe/pod-certificate-signer/issues/27)).
+- Reload failures that continue fail readiness: 3 consecutive failed attempts
+  over at least 10 minutes. A watcher that stops fails readiness at once
+  ([#32](https://github.com/RafPe/pod-certificate-signer/issues/32)).
+- If the startup read of the existing ClusterTrustBundle fails, the controller
+  does not start. It does not start with an empty CA history
+  ([#30](https://github.com/RafPe/pod-certificate-signer/issues/30)).
+
+One limitation remains. The controller cannot tell a deleted
+ClusterTrustBundle from a first install. In both cases it starts with an empty
+CA history, and the next publish removes the previous CAs from the bundle. To
+make a missing bundle stop startup, set `--require-ca-history` (Helm
+`signer.require_ca_history`) after the first publish. See
+[Operations](docs/operations.md#rotating-the-signing-ca).
 
 ### Annotation-driven identity (`unverifiedUserAnnotations`)
 
 The signer reads `<signer-name>-cn/san/ip-san/uris/eku/duration/refresh` from
-`spec.unverifiedUserAnnotations` (with a deprecated fallback to pod
-annotations). Unrecognized signer-prefixed keys and malformed values deny the
-request rather than falling back to defaults.
+`spec.unverifiedUserAnnotations`. It also reads the same keys from pod
+annotations as a deprecated fallback. The `--allow-pod-annotations` flag
+controls this fallback. It is on by default and 4.0.0 removes it. The signer
+denies a request with an unrecognized signer-prefixed key or a malformed value.
+It does not use defaults for it.
 
-**Annotation forgery is closed by default.** Every `cn`, `san` and `uris`
-value — literal or `${...}`-interpolated — must be an exact string member of the
-set of identities the signer derives from the request's apiserver-verified
-fields ([#26](https://github.com/RafPe/pod-certificate-signer/issues/26),
+**By default, a pod author cannot forge an identity through annotations.**
+Each `cn`, `san` and `uris` value, literal or `${...}`-interpolated, must be an
+exact string member of the verified identity set
+([#26](https://github.com/RafPe/pod-certificate-signer/issues/26),
 [#38](https://github.com/RafPe/pod-certificate-signer/issues/38),
-[#48](https://github.com/RafPe/pod-certificate-signer/issues/48)). That set is
-the pod's own name, its canonical Kubernetes DNS forms, its SPIFFE ID, and its
-service account's short DNS form and SPIFFE ID — and nothing else; the boundary
-is recorded in
-[ADR-0001](docs/adr/0001-verified-identity-allowlist-boundary.md). A pod author
-who requests `kubernetes.default.svc`, or another team's service name, is
-**Denied**. `ip-san` values have no verified derivation from the request and are
-denied outright.
+[#48](https://github.com/RafPe/pod-certificate-signer/issues/48)). The signer
+derives this set from the request's verified fields only. The set contains:
 
-The check is exact string equality, which is what closes near-miss forgeries
-like `${pod.name}.attacker.com`.
+- the pod's own name
+- the pod's canonical Kubernetes DNS forms
+- the pod's SPIFFE ID
+- the service account's short DNS form and SPIFFE ID
 
-Residual exposure and how to bound it:
+The set contains nothing else.
+[ADR-0001](docs/adr/0001-verified-identity-allowlist-boundary.md) records this
+boundary. The signer **denies** a pod author who requests
+`kubernetes.default.svc`, or the service name of another team. No verified
+field gives an `ip-san` value, so the signer denies all `ip-san` values.
 
-- **`--allow-unverified-identities` (default off) lifts all of the above.** It
-  is the one setting that restores arbitrary-identity issuance. If you turn it
-  on, a `ValidatingAdmissionPolicy` restricting which `userAnnotations` values
-  workloads may request becomes a **required prerequisite** in a multi-tenant
-  cluster, not a bonus hardening. The chart can install one; see
-  `admissionPolicies.dnsSANValidation` in `docs/configuration.md`.
-- **`${...}` interpolation** resolves exclusively from apiserver-verified
-  request fields (`pod.name`, `pod.namespace`, `pod.uid`,
-  `pod.serviceAccountName`, `node.name`) plus the operator-configured
-  `cluster.fqdn`. It is the intended way to express per-pod identity, because a
-  value authored on a pod template is otherwise identical for every replica.
-  `node.name` and `pod.uid` are resolvable but not claimable as a subject. An
-  interpolated value is subject to exactly the same identity check as a literal
-  one, which is why it is **on by default**
-  (`--enable-annotation-interpolation`): it is a naming mechanism, not an
-  authorization one, and it reaches only identities the pod already owns. Set it
-  to `false` to deny values containing `${` outright. Documented under
-  "Interpolating pod identity into values" in `docs/configuration.md`; the
-  reasoning is recorded in
-  `docs/adr/0002-annotation-interpolation-on-by-default.md`.
-- Use the `eku` annotation to narrow certificates to `client` or `server` as
-  needed. The default is `serverAuth` **only** — `clientAuth` is an explicit
-  opt-in.
-- A `ValidatingAdmissionPolicy` remains useful even under the default
-  constraints: it gives the pod author immediate feedback at admission rather
-  than a denial that surfaces later on the PodCertificateRequest.
+The check is exact string equality. Thus a near-miss value such as
+`${pod.name}.attacker.com` does not match.
+
+Residual exposure, and how to limit it:
+
+- **`--allow-unverified-identities` (default off) removes all of the checks
+  above.** It is the one setting that lets a pod get a certificate for any
+  identity. If you set it, a multi-tenant cluster **must** also have a
+  `ValidatingAdmissionPolicy` that restricts the `userAnnotations` values that
+  workloads can request. This policy is a requirement, not an extra. The chart
+  can install one. See `admissionPolicies.dnsSANValidation` in
+  [docs/configuration.md](docs/configuration.md#preventive-dns-san-admission-policy).
+- **`${...}` interpolation** resolves only from request fields that
+  kube-apiserver verifies (`pod.name`, `pod.namespace`, `pod.uid`,
+  `pod.serviceAccountName`, `node.name`). It also resolves the
+  `cluster.fqdn` value that the operator sets.
+  - Interpolation is the intended way to express a per-pod identity. Without it,
+    a value on a pod template is the same for every replica.
+  - The signer resolves `node.name` and `pod.uid`, but they are not in the
+    verified identity set.
+  - An interpolated value gets the same identity check as a literal value.
+    Thus it reaches only identities that the pod already owns. It names an
+    identity. It does not authorize one.
+  - For this reason interpolation is **on by default**
+    (`--enable-annotation-interpolation`). Set the flag to `false` to deny all
+    values that contain `${`.
+  - "Interpolating pod identity into values" in
+    [docs/configuration.md](docs/configuration.md#interpolating-pod-identity-into-values)
+    documents the feature.
+    [ADR-0002](docs/adr/0002-annotation-interpolation-on-by-default.md) records
+    the reasons.
+- Use the `eku` annotation to limit certificates to `client` or `server` use.
+  The default is `serverAuth` **only**. You must request `clientAuth`
+  explicitly.
+- A `ValidatingAdmissionPolicy` is also useful with the default constraints. It
+  tells the pod author about a bad value at admission time. Without it, the
+  pod author sees a denial later, on the PodCertificateRequest.
 
 ### CSR-requested SANs
 
-`--honor-csr-sans` (default **off**) prepares for upcoming Kubernetes support
-for pod authors requesting SANs via the kubelet-generated PKCS#10 CSR. Today
-kubelet emits empty CSRs, so the path is inert. Since
-[#80](https://github.com/RafPe/pod-certificate-signer/pull/80) CSR-derived SANs
-pass through the **same** identity constraints as annotation values: CSR DNS
-names are checked against the verified-identity allowlist, and CSR IP SANs are
-denied outright, both unless `--allow-unverified-identities` is set. The CSR
-signature itself is verified by kube-apiserver during admission; the signer only
-extracts the public key and any requested SANs.
+`--honor-csr-sans` (default **off**) prepares for a future Kubernetes feature.
+With it, pod authors can request SANs in the PKCS#10 CSR that kubelet makes.
+Today kubelet makes empty CSRs, so this path has no effect. Since
+[#80](https://github.com/RafPe/pod-certificate-signer/pull/80), CSR SANs get
+the **same** identity checks as annotation values. CSR DNS names must be in the
+verified identity set, and the signer denies all CSR IP SANs. Both checks apply
+unless `--allow-unverified-identities` is set. Kube-apiserver verifies the CSR
+signature during admission. The signer only reads the public key and any
+requested SANs from the CSR.
 
 ### ClusterTrustBundle
 
 - The controller publishes exactly one bundle,
-  `<signer-domain>:<signer-path>:bundle`, containing the current CA followed
-  by retained previous CAs. Anything in this bundle is potentially trusted by
-  every workload that mounts it — treat write access to ClusterTrustBundles
-  as a cluster-wide trust decision.
-- Issued certificates are always **leaf** certificates: the signing template
-  sets no CA basic constraint, so an issued certificate cannot itself sign
-  further certificates.
-- Robustness of bundle publishing (retry on failure, drift repair) is being
-  hardened in [#31](https://github.com/RafPe/pod-certificate-signer/issues/31).
+  `<signer-domain>:<signer-path>:bundle`. It contains the current CA, followed
+  by the retained previous CAs. Every workload that mounts this bundle can
+  trust its contents. Thus write access to ClusterTrustBundles is a trust
+  decision for the whole cluster.
+- The signer issues **leaf** certificates only. The signing template sets
+  `basicConstraints` with `cA:FALSE`
+  ([ADR-0003](docs/adr/0003-leaf-basic-constraints-ca-false.md)). Thus an
+  issued certificate cannot sign other certificates.
+- Only the elected leader publishes the bundle. It publishes on startup, after
+  each CA change, and every 10 minutes to repair drift. Each publish gets up to
+  5 attempts with exponential backoff. If all attempts fail, the leader fails
+  readiness until a later publish succeeds
+  ([#31](https://github.com/RafPe/pod-certificate-signer/issues/31), closed).
 
 ### Signer RBAC
 
-The Helm chart grants the controller the minimum it needs; review it before
-widening anything:
+The Helm chart gives the controller only the permissions it needs. Review them
+before you add permissions:
 
-- **ClusterRole**: `pods` get/list/watch (to verify the requesting pod);
-  `podcertificaterequests` get/list/watch and `podcertificaterequests/status`
-  get/update/patch (to issue or deny); `clustertrustbundles`
-  get/create/update/patch — deliberately **no** list/watch, so the controller
-  cannot enumerate or informer-cache other signers' bundles; `events`
-  create/patch; and `signers` `sign`/`attest` restricted by `resourceNames`
-  to the single configured signer name.
+- **ClusterRole**:
+  - `pods`: `get` only, to read the requesting pod directly. There is no
+    `list` or `watch`, so the controller does not cache all pods.
+  - `podcertificaterequests`: `get`, `list`, `watch`.
+  - `podcertificaterequests/status`: `get`, `update`, `patch`, to issue or
+    deny.
+  - `clustertrustbundles`: `get`, `create`, `update`, `patch`. There is
+    **no** `list` or `watch`, so the controller cannot list or cache the
+    bundles of other signers.
+  - `events` (core and `events.k8s.io`): `create`, `patch`.
+  - `signers`: `sign` and `attest`, restricted by `resourceNames` to the one
+    configured signer name.
+  - `tokenreviews` and `subjectaccessreviews`: `create`, to authenticate
+    metrics scrapes. The chart omits these rules when `metrics.insecure` is
+    set.
 - **Role** (namespaced): coordination `leases` for leader election only.
-- The controller has **no** RBAC on Secrets — the CA reaches it only as a
-  volume mount. It cannot read other Secrets, modify pods, or sign for other
-  signer names.
+  `create`, and `get` and `update` on the one named Lease.
+- The controller has **no** RBAC on Secrets. It gets the CA only as a volume
+  mount. It cannot read other Secrets, change pods, or sign for other signer
+  names.
 
 Deployment hardening defaults: the chart complies with the *restricted* Pod
-Security Standard (distroless non-root image, `readOnlyRootFilesystem`,
-`allowPrivilegeEscalation: false`, all capabilities dropped, seccomp
-`RuntimeDefault`). The metrics endpoint (`:9090`) is served over HTTPS and
-authenticated by default since
-[#82](https://github.com/RafPe/pod-certificate-signer/pull/82): every scrape
-must present a bearer token that passes a TokenReview, and be authorized by a
-SubjectAccessReview for `GET` on the `/metrics` nonResourceURL. The chart
-renders a `metrics-reader` ClusterRole for scrapers to bind to.
-`--metrics-secure=false` restores the legacy unauthenticated plaintext
-endpoint; if you set it, restrict the port with a NetworkPolicy.
+Security Standard. It uses a distroless non-root image,
+`readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, no capabilities
+and seccomp `RuntimeDefault`.
+
+The metrics endpoint (`:9090`) uses HTTPS and authentication by default since
+[#82](https://github.com/RafPe/pod-certificate-signer/pull/82). Each scrape
+must send a bearer token that passes a TokenReview. A SubjectAccessReview must
+also allow `GET` on the `/metrics` nonResourceURL. The chart makes a
+`metrics-reader` ClusterRole for scrapers to bind to.
+`--metrics-secure=false` (Helm `metrics.insecure: true`) restores the old
+plaintext endpoint without authentication. If you set it, restrict the port
+with a NetworkPolicy. The chart can make one
+(`metrics.networkPolicy.enabled`).
 
 ## Scope
 
-**In scope** (please report):
+**In scope** (report these):
 
-- Certificate mis-issuance beyond the documented limitations: issuing
-  identities the configuration and admission setup should have prevented,
-  bypasses of interpolation restrictions, denial-of-issuance to other tenants.
+- Certificate mis-issuance that the documented limitations do not explain:
+  - identities that the configuration and admission setup should prevent
+  - bypasses of interpolation restrictions
+  - denial of issuance to other tenants
 - Exposure of CA key material by the controller (logs, metrics, API objects,
   error messages).
 - ClusterTrustBundle poisoning or corruption through the controller.
-- Privilege escalation enabled by the chart's default RBAC or deployment
-  settings.
+- Privilege escalation that the chart's default RBAC or deployment settings
+  make possible.
 - Vulnerabilities in the release supply chain (published images, charts, or
   the workflows that build them).
 
 **Out of scope**:
 
-- Attacks requiring cluster-admin, direct access to the CA Secret, node
-  compromise, or a compromised kubelet/kube-apiserver — the signer trusts the
-  Kubernetes control plane by design.
-- Duplicate reports of the tracked limitations above (epic
-  [#25](https://github.com/RafPe/pod-certificate-signer/issues/25)), including
-  unconstrained annotation identities
-  ([#26](https://github.com/RafPe/pod-certificate-signer/issues/26)) in
-  clusters deployed without the required admission policy.
-- Denial of service against kube-apiserver via mass PodCertificateRequest
-  creation (rate limiting is an apiserver/priority-and-fairness concern).
-- Vulnerabilities in Kubernetes itself, the container runtime, or
-  dependencies without a reachable call path from this code base (see
-  Scorecard notes below).
+- Attacks that need cluster-admin, direct access to the CA Secret, node
+  compromise, or a compromised kubelet or kube-apiserver. The signer trusts
+  the Kubernetes control plane by design.
+- Reports of the documented limitations above. This includes certificates for
+  arbitrary identities in a cluster that sets `--allow-unverified-identities`
+  without the required admission policy.
+- Denial of service against kube-apiserver through mass PodCertificateRequest
+  creation. Rate limiting is a concern of kube-apiserver and its priority and
+  fairness settings.
+- Vulnerabilities in Kubernetes, the container runtime, or dependencies that
+  have no reachable call path from this code base (see the Scorecard notes
+  below).
 
 ## Dependency and supply-chain notes
 
-- Dependency vulnerabilities are triaged with `govulncheck`, which reports by
-  **reachability** (an affected function must actually be callable from this
-  code base), not by mere presence in `go.mod`.
-- Release images are distroless, built multi-arch from the tagged source.
-- A full-history gitleaks scan runs in CI to prevent committed key material.
-- **Known issue — historical CA key leak**: a sample CA private key
-  (`hack/ca-key.pem`, also embedded in `examples/ca_tls_secret.yaml`) was
-  committed early in the project's history and removed in
-  [#37](https://github.com/RafPe/pod-certificate-signer/pull/37). Removal does
-  not rewrite history, so the key remains reachable in old commits and is
-  **permanently compromised**. It was only ever a development sample — but if
-  any cluster ever loaded it as a real signing CA, rotate that CA immediately
-  and treat every certificate it signed, and any trust bundle containing it,
-  as untrusted. The gitleaks configuration allowlists exactly those historical
-  paths; it does not permit new key material.
+- We triage dependency vulnerabilities with `govulncheck`. It reports a
+  vulnerability only when this code base can call the affected function. A
+  package in `go.mod` alone is not enough.
+- The release workflow builds the image from the tagged source, on a
+  distroless base, for `linux/amd64` and `linux/arm64`.
+- A gitleaks scan of the full history runs in CI to find committed key
+  material.
+- **Known issue: historical CA key leak.** Early in the project history, a
+  commit added a sample CA private key (`hack/ca-key.pem`, also embedded in
+  `examples/ca_tls_secret.yaml`).
+  [#37](https://github.com/RafPe/pod-certificate-signer/pull/37) removed it.
+  The removal does not rewrite history, so old commits still contain the key.
+  The key is **permanently compromised**. It was only a development sample.
+  But if any cluster loaded it as a real signing CA, rotate that CA
+  immediately. Do not trust any certificate it signed, or any trust bundle
+  that contains it. The gitleaks configuration allowlists those two
+  historical paths by name. It does not allow new key material.
 
 ## Accepted OpenSSF Scorecard findings
 
-The following Scorecard checks are expected to stay red and are **accepted**,
-with rationale:
+We expect the Scorecard checks below to stay red, and we **accept** them for
+these reasons:
 
 | Check | Status | Rationale |
 | ----- | ------ | --------- |
-| Code-Review | Accepted, narrowing | Single-maintainer project; ordinary PRs merge after automated checks (tests, lint, e2e, secret scan) without a second human reviewer. Two categories no longer do: a release publishes only when a maintainer approves the generated release PR ([#86](https://github.com/RafPe/pod-certificate-signer/pull/86)), and an Architecture Decision Record requires at least one approving maintainer review before it is accepted (see [CONTRIBUTING.md](CONTRIBUTING.md#review)). So the decisions that govern future code, and the artifacts users actually consume, are reviewed; the routine changes between them are not. |
-| Fuzzing | Accepted | No continuous fuzzing. Parsing surfaces (x509, PEM, PKCS#10) are Go standard library; project-specific parsing is covered by unit tests. |
-| CII-Best-Practices | Accepted | No OpenSSF Best Practices badge pursued at this stage. |
-| Vulnerabilities | Accepted (case-by-case) | Scorecard flags OSV entries by *presence* in the dependency graph; this project triages with `govulncheck` *reachability*. Findings without a reachable call path are accepted and documented. |
+| Code-Review | Accepted, narrowing | The project has one maintainer. Ordinary PRs merge after automated checks (tests, lint, e2e, secret scan) without a second human review. Two categories have a human review. A release publishes only after a maintainer approves the generated release PR ([#86](https://github.com/RafPe/pod-certificate-signer/pull/86)). An Architecture Decision Record needs at least one approving maintainer review before acceptance (see [CONTRIBUTING.md](CONTRIBUTING.md#review)). Thus a person reviews the decisions that govern future code and the artifacts that users get. Nobody reviews the routine changes between them. |
+| Fuzzing | Accepted | There is no continuous fuzzing. The Go standard library parses x509, PEM and PKCS#10. Unit tests cover the parsing that this project adds. |
+| CII-Best-Practices | Accepted | The project does not apply for an OpenSSF Best Practices badge at this stage. |
+| Vulnerabilities | Accepted (case-by-case) | Scorecard flags an OSV entry when the package is in the dependency graph. This project triages by `govulncheck` reachability. We accept and document findings that have no reachable call path. |
 
-Not accepted — the following are being actively addressed by the repository's
-hardening work and should converge to green: SAST (CodeQL), Signed-Releases
-and build provenance (cosign + SBOM), Pinned-Dependencies and
-Token-Permissions (SHA-pinned actions, least-privilege workflow tokens), and
-Dependency-Update-Tool (Dependabot). If one of these regresses after landing,
-treat it as a bug and report it.
+We do not accept the checks below. The repository has these controls:
+
+- SAST: a CodeQL workflow (`.github/workflows/codeql.yml`).
+- Signed-Releases: the release workflow signs the image index by digest with
+  keyless cosign, and attaches an SPDX SBOM to the image. The workflow does not
+  sign the Helm chart.
+- Pinned-Dependencies and Token-Permissions: workflows pin third-party actions
+  by commit SHA and declare `permissions`.
+- Dependency-Update-Tool: Dependabot (`.github/dependabot.yml`).
+
+If one of these controls stops working, treat it as a bug and report it.

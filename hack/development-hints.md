@@ -1,7 +1,15 @@
 # development-hints
-Some hints to quickly come back to portions of code if needed
+
+These are maintainer notes. Some snippets are from an early version of the code,
+and some are ideas that the code does not implement. Do not use them as a
+reference for the current behavior. For the development workflow, see
+[CONTRIBUTING.md](../CONTRIBUTING.md). For the current design, see
+[docs/architecture.md](../docs/architecture.md).
 
 ## Initializing the project
+
+The project started with these commands. The [`PROJECT`](../PROJECT) file now
+records `projectName: pcs`, not `podcert`.
 
 ```sh
 kubebuilder init --domain=operators.raftech.io --repo=github.com/rafpe/kubernetes-podcertificate-signer --project-name podcert
@@ -9,6 +17,10 @@ kubebuilder create api --group certificates --version v1 --kind PodCertificateRe
 ```
 
 ## To Requeue or not 
+
+This is the general controller-runtime pattern. The controller does not use
+`RequeueAfter`. For the current requeue logic, see
+[`internal/controller/requeue.go`](../internal/controller/requeue.go).
 
 ```
 			// DON'T REQUEUE - Terminal success
@@ -29,6 +41,10 @@ kubebuilder create api --group certificates --version v1 --kind PodCertificateRe
 
 ## Logs 
 
+The reconciler has a `Log` field that the controller sets to
+`ctrl.Log.WithName(name)`. Some functions use `log.FromContext(ctx)`. See
+[`internal/controller/podcertificaterequest_controller.go`](../internal/controller/podcertificaterequest_controller.go).
+
 ```
 func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	//r.Log = logf.Log.WithName("PodCertificateRequestReconciler").WithValues("request-name", req.Name)
@@ -36,6 +52,10 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 ```
 
 ## Debugging log 
+
+This snippet is from an early version. The current reconciler does not write
+this log line.
+
 ```
  	r.Log.V(1).Info("Setting the certificate in the PodCertificateRequest",
  		"podName", pcr.Spec.PodName,
@@ -49,11 +69,17 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 
 ## Certificate options/paths
 
+The ideas in this section are not implemented. No issue tracks them.
+
 ### Add custom OIDs 
-Would require a lot of work to get official OIDs registered - but long term run would be amazing to have a dedicatd Kubernetes OIDs registered
+
+Official OIDs need a registration, which is a large task. A registered set of
+Kubernetes OIDs is a possible long-term goal.
 
 ### Add to certificate pod/cluster metadata via Enhanced Subject  
-This approach would use something like 
+This approach uses a template like this one. The fields of `podcertificate.Config`
+in this sketch (for example `PodName`, `NodeName`, `ServiceName`) do not exist in
+the current code.
 
 ```
 template := &x509.Certificate{
@@ -76,7 +102,8 @@ template := &x509.Certificate{
 }
 ```
 
-Could build functions around it like 
+Helper functions for this approach could look like this:
+
 ```
 func buildKubernetesSubject(config *podcertificate.Config) pkix.Name {
     return pkix.Name{
@@ -228,6 +255,8 @@ func (ca *CertificateAuthority) buildPostalCodes(config *podcertificate.Config) 
 }
 
 ```
+
+The result is a subject like this one:
 
 ```
 Subject: CN=my-service.default.svc.cluster.local

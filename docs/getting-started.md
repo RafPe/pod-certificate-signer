@@ -1,30 +1,31 @@
 # Getting started
 
-This guide takes you from an empty cluster to a workload holding a certificate
-issued by `pod-certificate-signer`. For the full configuration surface see
-[Configuration](./configuration.md); for day-2 tasks see
+This guide starts with an empty cluster. At the end, a workload holds a
+certificate that `pod-certificate-signer` issued. For all configuration options,
+see [Configuration](./configuration.md). For day-2 tasks, see
 [Operations](./operations.md).
 
 ## Prerequisites
 
 - **Kubernetes 1.37+.** The controller uses the `certificates.k8s.io/v1`
-  `PodCertificateRequest` API, which went GA in 1.37. No feature gates or
-  runtime config are needed — the group version is served by default.
+  `PodCertificateRequest` API, which became GA in 1.37. You do not need feature
+  gates or runtime configuration. The kube-apiserver serves this group version
+  by default.
 - **Helm 3+** and **`kubectl`**.
-- **A signing CA** (certificate + private key). It can be self-signed. The chart
-  does **not** ship a CA — you provide your own.
+- **A signing CA** (certificate and private key). The CA can be self-signed. The
+  chart does **not** include a CA. You must supply your own.
 
 > [!TIP]
-> To try this on a laptop, [`kind/kind-config.yaml`](https://github.com/RafPe/pod-certificate-signer/blob/main/kind/kind-config.yaml)
-> pins a Kubernetes 1.37 node image for a local Kind cluster.
+> To try this on a laptop, use [`kind/kind-config.yaml`](https://github.com/RafPe/pod-certificate-signer/blob/main/kind/kind-config.yaml).
+> It pins a Kubernetes 1.37 node image for a local Kind cluster.
 
 ## 1. Create the CA Secret
 
-You need a CA the controller will use to sign requests. Generate one with
-[cfssl](https://github.com/cloudflare/cfssl), [cert-manager](https://cert-manager.io/),
-or `openssl`; if you already have a CA, skip creation and use it as the source.
+The controller uses a CA to sign requests. To make a CA, use
+[cfssl](https://github.com/cloudflare/cfssl), [cert-manager](https://cert-manager.io/)
+or `openssl`. If you already have a CA, use it.
 
-Create a `kubernetes.io/tls` Secret from the CA in the namespace you deploy into:
+Create a `kubernetes.io/tls` Secret from the CA in the namespace that you deploy into:
 
 ```sh
 kubectl create namespace pcs-system
@@ -34,95 +35,156 @@ kubectl create secret tls podcertificate-signer-ca \
   --key=ca-key.pem
 ```
 
+Make sure that the Secret exists:
+
+```sh
+kubectl -n pcs-system get secret podcertificate-signer-ca
+```
+
 > [!WARNING]
-> Use a CA you generated yourself. A sample CA (`examples/ca_tls_secret.yaml`)
-> once shipped with this repository; it is removed from `HEAD` by
-> [#37](https://github.com/rafpe/pod-certificate-signer/pull/37), but its private
-> key remains readable in git history and must never be used anywhere real. See
+> Use a CA that you generated yourself. This repository once included a sample
+> CA (`examples/ca_tls_secret.yaml`).
+> [#37](https://github.com/rafpe/pod-certificate-signer/pull/37) deleted it from
+> `HEAD`. Its private key is still readable in the git history. Never use it for
+> a real cluster. See
 > [Operations: rotating the signing CA](./operations.md#rotating-the-signing-ca).
 
 ## 2. Install the chart
 
-The chart is published to GHCR as an OCI artifact on every release, alongside
-the controller image. `signer.name` and a CA source are **required**:
+Each release publishes the chart to GHCR as an OCI artifact, together with the
+controller image. The chart requires `signer.name` and a CA source:
 
 ```sh
 helm install pod-certificate-signer oci://ghcr.io/rafpe/charts/pod-certificate-signer \
   --version <X.Y.Z> \
   --namespace pcs-system \
-  --set signer.name=coolcert.example.com/foo \
+  --set signer.name=example.org/signer \
   --set signer.ca.secretRef.name=podcertificate-signer-ca
 ```
 
-Replace `<X.Y.Z>` with the [latest release](https://github.com/rafpe/pod-certificate-signer/releases);
-omit `--version` for the latest. With `signer.ca.source=secretRef` (the default)
-the chart wires a read-only volume for the Secret automatically — there is no
-`volumes`/`volumeMounts` to plumb. See
-[Configuration: providing the CA](./configuration.md#providing-the-ca) for the
-`file` (bring-your-own-mount) alternative and the full values reference.
+Replace `<X.Y.Z>` with the [latest release](https://github.com/rafpe/pod-certificate-signer/releases).
+If you omit `--version`, Helm installs the latest release.
 
-Confirm the controller is running and has published its trust bundle:
+The default CA source is `signer.ca.source=secretRef`. With this source, the
+chart mounts the Secret as a read-only volume. You do not add `volumes` or
+`volumeMounts`. For the `file` source (you supply the mount) and the full values
+reference, see [Configuration: providing the CA](./configuration.md#providing-the-ca).
+
+Make sure that the controller runs and published its `ClusterTrustBundle`:
 
 ```sh
 kubectl -n pcs-system rollout status deploy/pod-certificate-signer
 kubectl get clustertrustbundle
 ```
 
+The bundle name is the signer name with `/` changed to `:`, plus `:bundle`. For
+`example.org/signer`, the name is `example.org:signer:bundle`.
+
 ### Deploying from a local checkout
 
-For development, `make helm-deploy` builds the image, loads it into a local Kind
-cluster and installs the chart with the example values. `make helm-uninstall`,
-`make helm-status` and `make helm-rollback` manage the release.
+For development, `make helm-deploy` does these steps:
+
+1. It builds the image.
+2. It loads the image into a local Kind cluster (`make kind-start` creates the cluster).
+3. It generates a temporary dev CA and installs the chart from `charts/` with
+   [`examples/helm-values.yaml`](../examples/helm-values.yaml) and the signer
+   name `example.org/signer`.
+
+To manage the release, use `make helm-status`, `make helm-history`,
+`make helm-rollback` and `make helm-uninstall`. To delete the Kind cluster, use
+`make kind-stop`.
 
 ## 3. Request a certificate from a workload
 
-A workload opts in by declaring a `podCertificate` projected volume that names
-the signer, and (recommended) mounting the signer's `ClusterTrustBundle`
-alongside it so it also has the trust anchors to verify peers:
+A workload declares a `podCertificate` projected volume with the signer name.
+We recommend that the workload also mounts the `ClusterTrustBundle` of the
+signer in the same volume. The workload then has the trust anchors to verify
+its peers:
 
 ```yaml
-      volumeMounts:
-        - name: x509-cert
-          mountPath: /var/run/x509-cert
-      volumes:
-        - name: x509-cert
-          projected:
-            defaultMode: 420
-            sources:
-              - podCertificate:
-                  keyType: RSA4096   # RSA3072, RSA4096, ECDSAP256/384/521, ED25519
-                  signerName: coolcert.example.com/foo   # must match the controller
-                  credentialBundlePath: credentialbundle.pem
-              - clusterTrustBundle:
-                  signerName: coolcert.example.com/foo   # the CA bundle the controller publishes
-                  labelSelector: {}                      # required with signerName; {} selects all
-                  path: ca.crt
+    volumeMounts:
+    - name: x509
+      mountPath: /var/run/x509
+      readOnly: true
+  volumes:
+  - name: x509
+    projected:
+      sources:
+      - podCertificate:
+          keyType: ED25519   # RSA3072, RSA4096, ECDSAP256, ECDSAP384, ECDSAP521, ED25519
+          signerName: example.org/signer   # must match the controller
+          credentialBundlePath: credentialbundle.pem
+      - clusterTrustBundle:
+          signerName: example.org/signer   # the CA bundle the controller publishes
+          labelSelector: {}                # required with signerName; {} selects all
+          path: ca.crt
 ```
 
-The container then sees two files:
+The container then has two files:
 
-- `/var/run/x509-cert/credentialbundle.pem` — the private key plus the issued
-  certificate chain, kept fresh by kubelet;
-- `/var/run/x509-cert/ca.crt` — the signer's CA bundle (including previous CAs
-  during rotation), used to verify peer certificates for mTLS.
+- `/var/run/x509/credentialbundle.pem`: the private key and the issued
+  certificate chain. The kubelet refreshes this file.
+- `/var/run/x509/ca.crt`: the CA bundle of the signer. During a rotation it
+  also contains the previous CAs. Use it to verify peer certificates for mTLS.
 
-A complete, runnable manifest — including per-pod identity via annotations — is
-in [`examples/workload-pod.yaml`](https://github.com/rafpe/pod-certificate-signer/blob/main/examples/workload-pod.yaml)
-(it is also exercised by the e2e suite).
+[`examples/workload-pod.yaml`](https://github.com/rafpe/pod-certificate-signer/blob/main/examples/workload-pod.yaml)
+is a complete manifest. It also sets per-pod identity with annotations. The e2e
+suite applies the same manifest.
+
+From a checkout of this repository, apply the example:
+
+```sh
+kubectl apply -f examples/workload-pod.yaml
+```
 
 > [!NOTE]
-> With controller defaults the certificate is issued for the pod's own verified
-> identity. To set a custom common name, SANs, duration, EKU or SPIFFE URIs, use
-> the annotation contract in [Configuration](./configuration.md#certificate-configuration-annotations).
-> Every value the example requests resolves to an identity the pod owns, so it
-> issues under the [identity constraints](./configuration.md#identity-constraints)
-> as they ship — no `--allow-unverified-identities` needed.
+> With the controller defaults, the certificate is for the verified identity of
+> the pod. To set a custom common name, SANs, duration, EKU or SPIFFE URIs, use
+> the [annotation contract](./configuration.md#certificate-configuration-annotations).
+> Each value in the example resolves to an identity that the pod owns. Thus the
+> signer issues it under the default
+> [identity constraints](./configuration.md#identity-constraints). You do not
+> need `--allow-unverified-identities`.
+
+## 4. Verify the certificate
+
+The kubelet does not start the pod until it writes the credential bundle.
+Thus a running pod has a certificate.
+
+1. Wait for the pod:
+
+   ```sh
+   kubectl wait --for=condition=Ready pod/pcs-example-workload --timeout=120s
+   ```
+
+2. Make sure that the `PodCertificateRequest` has the `Issued` condition:
+
+   ```sh
+   kubectl get podcertificaterequests -n default -o yaml
+   ```
+
+3. Make sure that the two files are in the container:
+
+   ```sh
+   kubectl exec pcs-example-workload -- ls /var/run/x509
+   ```
+
+If the pod stays in `ContainerCreating`, read the events and the conditions of
+its `PodCertificateRequest`. A `Denied` condition with the reason
+`InvalidUnverifiedUserAnnotations` shows a problem in the annotation
+configuration. See [Operations: troubleshooting](./operations.md#troubleshooting).
+
+To delete the example:
+
+```sh
+kubectl delete -f examples/workload-pod.yaml
+```
 
 ## Next steps
 
-- [Configuration](./configuration.md) — the annotation contract, CLI flags, Helm
-  values, the identity-constraint model and production-recommended settings.
-- [Operations](./operations.md) — CA rotation, leader election, readiness,
+- [Configuration](./configuration.md): the annotation contract, CLI flags, Helm
+  values, the identity constraint model and the settings for production.
+- [Operations](./operations.md): CA rotation, leader election, readiness,
   upgrades and troubleshooting.
-- [Architecture](./architecture.md) — C4 diagrams, component overview and
+- [Architecture](./architecture.md): C4 diagrams, component overview and
   security posture.

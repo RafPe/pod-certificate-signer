@@ -1,53 +1,55 @@
-# Restrict which pods may request identity-claiming certificate configuration
-# from PodCertificateSigner.
+# EXAMPLE ONLY. Restrict which pods may request certificate configuration that
+# claims an identity from pod-certificate-signer. The chart does not apply this
+# policy. Apply it with `kubectl apply -f`.
 #
-# The signer already refuses to issue a certificate for an identity the pod does
-# not own (see "Identity constraints" in the README). This policy is the
-# admission-time half of the same rule, and it is what makes the
-# --allow-unverified-identities escape hatch survivable: with the constraints
-# lifted in the signer, this is the only thing left standing between a pod
-# author and a certificate for someone else's name.
+# The signer already refuses a certificate for an identity that the pod does not
+# own. See "Identity constraints" in docs/configuration.md. This policy applies
+# the same rule at admission. With --allow-unverified-identities, the signer
+# does not apply the constraints. Then this policy is the only control that
+# stops a pod author from getting a certificate for a different identity.
 #
-# It is worth applying even with the defaults in place. A pod rejected here
-# never reaches the signer, so authors get an immediate, readable error instead
-# of a Pending volume and a Denied PodCertificateRequest they have to go read.
+# Apply it also with the default settings. The signer never receives a pod that
+# this policy rejects. Thus the author gets an immediate, clear error. Without
+# the policy, the author sees a pending volume and must read a Denied
+# PodCertificateRequest.
 #
 # The rules:
 #   1. cn / san / ip-san / uris claim an identity. Only pods in a namespace
-#      labelled pcs.example.org/allow-signer-annotations=true may set them.
-#   2. eku / duration / refresh only shape the certificate the pod already has a
-#      right to, so any namespace may set them.
-#   3. Any other signer-prefixed key is a typo. The signer would Deny the
-#      request anyway; failing at admission says so in the kubectl output.
+#      with the label pcs.example.org/allow-signer-annotations=true may set them.
+#   2. eku / duration / refresh only change the certificate that the pod can
+#      already get. Thus any namespace may set them.
+#   3. Any other key with the signer prefix is a typo. The signer denies such a
+#      request. This policy shows the error in the kubectl output.
 #
-# Before applying, substitute your own values for:
+# Before you apply it, replace these values with your own:
 #   - the signer name (matches examples/workload-pod.yaml)
 #   - the annotation prefix (always "<signer name>-")
 #   - the exemption label key
 #
-# Certificate configuration can also be supplied through the deprecated pod
-# `annotations` path, which the signer honours by default until 4.0.0
-# (--allow-pod-annotations=false, Helm signer.allow_pod_annotations: false,
-# turns it off). Rule 1 therefore covers both paths - policing only
-# userAnnotations would leave a pod author free to claim an identity from
-# `metadata.annotations` instead, which under --allow-unverified-identities is a
-# complete bypass on clusters that keep the default.
+# Pods can also supply certificate configuration through the deprecated pod
+# `annotations` path. The signer accepts this path by default until 4.0.0. To
+# disable it, set --allow-pod-annotations=false (Helm:
+# signer.allow_pod_annotations: false). Thus rule 1 covers both paths. If the
+# policy checked only userAnnotations, a pod author could claim an identity
+# through `metadata.annotations`. With --allow-unverified-identities and the
+# default --allow-pod-annotations=true, that is a full bypass.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
   name: pcs-restrict-signer-user-annotations
 spec:
-  # Fail closed: if the policy cannot be evaluated, the pod is rejected.
+  # Fail closed: if the kube-apiserver cannot evaluate the policy, it rejects
+  # the pod.
   failurePolicy: Fail
   matchConstraints:
     resourceRules:
-      # userAnnotations live on the pod's projected volume, so pods are the
-      # object to guard - the PodCertificateRequest is created later, by kubelet.
+      # userAnnotations are on the projected volume of the pod. Thus the policy
+      # checks pods. The kubelet creates the PodCertificateRequest later.
       #
-      # UPDATE is matched because the deprecated pod `annotations` path covered
-      # by rule 1 is mutable after creation. The cost is that a pod already
-      # violating the policy cannot be updated at all until it is fixed, which
-      # includes attaching an ephemeral debug container.
+      # The policy also matches UPDATE, because a pod can change the deprecated
+      # pod `annotations` (rule 1) after creation. As a result, you cannot
+      # update a pod that violates the policy until you correct it. This
+      # includes adding an ephemeral debug container.
       - apiGroups: [""]
         apiVersions: ["v1"]
         operations: ["CREATE", "UPDATE"]
@@ -67,18 +69,18 @@ spec:
       expression: >-
         variables.identityKeys + [variables.prefix + "eku",
          variables.prefix + "duration", variables.prefix + "refresh"]
-    # Namespaces explicitly allowed to claim identities. Exempting here rather
-    # than via the binding's namespaceSelector keeps the policy applying
-    # everywhere - a selector would instead switch the policy off wherever it
-    # does not match, which is the opposite of an allowlist.
+    # Namespaces that may claim identities. The exemption is here, not in the
+    # namespaceSelector of the binding, so the policy applies in all
+    # namespaces. A selector disables the policy where it does not match. That
+    # is the opposite of an allowlist.
     - name: exempt
       expression: >-
         has(namespaceObject.metadata.labels) &&
         "pcs.example.org/allow-signer-annotations" in namespaceObject.metadata.labels &&
         namespaceObject.metadata.labels["pcs.example.org/allow-signer-annotations"] == "true"
-    # Each hop is optional in the pod schema, so every one is guarded: a pod
-    # with no volumes, a volume that is not projected, or a podCertificate
-    # source with no userAnnotations must all evaluate cleanly to false.
+    # Each step of the path is optional in the pod schema. Thus each step has a
+    # has() check. A pod with no volumes, a volume that is not projected, or a
+    # podCertificate source with no userAnnotations must evaluate to false.
     - name: claimsIdentity
       expression: >-
         has(object.spec.volumes) && object.spec.volumes.exists(volume,
@@ -89,9 +91,9 @@ spec:
             has(source.podCertificate.userAnnotations) &&
             source.podCertificate.userAnnotations.exists(key,
               key in variables.identityKeys)))
-    # The same identity keys, arriving through the deprecated pod `annotations`
-    # path. No volume traversal is needed: the keys carry the signer's own
-    # prefix, so their presence on the pod is unambiguous.
+    # The same identity keys in the deprecated pod `annotations` path. This
+    # check does not read the volumes. The keys have the signer prefix, so a
+    # key on the pod is unambiguous.
     - name: claimsIdentityViaPodAnnotations
       expression: >-
         has(object.metadata.annotations) &&
@@ -131,8 +133,8 @@ metadata:
   name: pcs-restrict-signer-user-annotations
 spec:
   policyName: pcs-restrict-signer-user-annotations
-  # Deny outright. Switch to [Audit, Warn] to see what the policy would reject
-  # before enforcing it on an existing cluster.
+  # Deny immediately. On an existing cluster, first set [Audit, Warn] to see
+  # which pods the policy rejects. Then set [Deny].
   validationActions: [Deny]
-  # No matchResources: the policy applies in every namespace, and exemption is
-  # decided by the label check in the policy itself.
+  # No matchResources: the policy applies in all namespaces. The label check in
+  # the policy decides the exemption.

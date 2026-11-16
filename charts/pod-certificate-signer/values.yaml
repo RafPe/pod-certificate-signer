@@ -1,11 +1,15 @@
 # Default values for pod-certificate-signer.
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
+# The chart README lists every value with its default.
 
-# This will set the replicaset count more information can be found here: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
+# Number of controller replicas. Leader election selects one active replica.
+# The chart ignores this value when autoscaling.enabled is true.
+# See https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
 replicaCount: 2
 
-# Health settings
+# Health settings. The chart renders bind_address as the container port and as
+# the --health-probe-bind-address flag.
 health:
   bind_address: ":8081"
 
@@ -21,57 +25,61 @@ log:
 
 # Metrics settings
 metrics:
-  # Expose the metrics port on the Service and add the Prometheus scrape
-  # annotations to the pod. Orthogonal to the auth toggle below.
+  # Expose the metrics port on the Service, and add the Prometheus scrape
+  # annotations to the pod. This value is independent of the insecure value below.
   enable_scraping: true
   bind_address: ":9090"
 
-  # Secure the metrics endpoint (DEFAULT, recommended). When true the controller
-  # serves /metrics over HTTPS and requires every scrape to authenticate (a
-  # Kubernetes bearer token, verified via TokenReview) and be authorized (via
-  # SubjectAccessReview for GET on the /metrics nonResourceURL). A scraper must
-  # present a ServiceAccount token bound to the metrics-reader ClusterRole and
-  # trust (or skip verifying) the controller's self-signed serving certificate.
+  # Secure metrics endpoint (DEFAULT, recommended). When false, the controller
+  # serves /metrics over HTTPS. Each scrape must authenticate with a Kubernetes
+  # bearer token, which a TokenReview verifies. A SubjectAccessReview for GET on
+  # the /metrics nonResourceURL must also authorize it. A scraper must send a
+  # ServiceAccount token bound to the metrics-reader ClusterRole. It must also
+  # trust the self-signed serving certificate of the controller, or skip
+  # verification.
   #
   # BREAKING: unauthenticated plaintext scrapes that worked before now fail.
-  # Set insecure: true ONLY to restore the legacy behaviour (renders
+  # Set insecure: true ONLY to restore the legacy behavior (renders
   # --metrics-secure=false). See the chart README "Metrics authentication".
   insecure: false
 
-  # Metrics-reader ClusterRole granting GET on the /metrics nonResourceURL. Bind
-  # it (via your own ClusterRoleBinding or a ServiceMonitor's ServiceAccount) to
-  # the identity Prometheus scrapes with. Ignored when metrics.insecure is true.
+  # Metrics-reader ClusterRole that grants GET on the /metrics nonResourceURL.
+  # Bind it to the identity that Prometheus uses to scrape, through your own
+  # ClusterRoleBinding or the ServiceAccount of a ServiceMonitor. The chart
+  # ignores this value when metrics.insecure is true.
   reader:
     create: true
 
-  # Optional NetworkPolicy restricting ingress to the metrics port. Off by
-  # default so it does not silently block scrapers in clusters without a
-  # NetworkPolicy controller. When enabled, only sources matching the selectors
-  # below may reach the metrics port; an empty from-list allows all sources. The
-  # health/readiness probe port stays open to all sources regardless.
+  # Optional NetworkPolicy that limits ingress to the metrics port. Disabled by
+  # default. Thus it cannot silently block scrapers in clusters without a
+  # NetworkPolicy controller. The chart creates it only when enable_scraping is
+  # also true. When enabled, only sources that match the selectors below can
+  # reach the metrics port. When both selectors are empty, all sources can
+  # reach it. The health and readiness probe port stays open to all sources.
   networkPolicy:
     enabled: false
-    # Namespace label selector for allowed scrapers, e.g. {kubernetes.io/metadata.name: monitoring}.
+    # Namespace labels of allowed scrapers, e.g. {kubernetes.io/metadata.name: monitoring}.
     namespaceSelector: {}
-    # Pod label selector for allowed scrapers. With namespaceSelector empty this
-    # matches pods in this release's namespace only; pair it with a
-    # namespaceSelector to allow a scraper in another namespace.
+    # Pod labels of allowed scrapers. When namespaceSelector is empty, this
+    # matches only pods in the namespace of this release. To allow a scraper in
+    # a different namespace, also set namespaceSelector.
     podSelector: {}
 
-# PodCertificateRequest Signer settings
+# PodCertificateRequest signer settings
 signer:
-  # Signing CA (certificate + private key) source.
-  #   secretRef — mount an existing Secret (RECOMMENDED). The private key stays in
-  #               a Secret and the chart wires a read-only volume for you; nothing
-  #               to plumb under .Values.volumes/.volumeMounts.
-  #   file      — you provide the cert/key files yourself via .Values.volumes and
-  #               .Values.volumeMounts at the paths below (advanced / BYO mount).
+  # Source of the signing CA (certificate and private key).
+  #   secretRef - mount an existing Secret (RECOMMENDED). The private key stays
+  #               in a Secret, and the chart adds a read-only volume for you.
+  #               You do not set .Values.volumes or .Values.volumeMounts.
+  #   file      - you supply the certificate and key files through
+  #               .Values.volumes and .Values.volumeMounts, at the paths below
+  #               (advanced, bring your own mount).
   ca:
     source: secretRef
     secretRef:
-      # Name of an existing Secret (kubernetes.io/tls or Opaque) holding the CA
-      # cert and key. REQUIRED when source=secretRef; only these two keys are
-      # projected into the pod.
+      # Name of an existing Secret (kubernetes.io/tls or Opaque) that holds the
+      # CA certificate and key. REQUIRED when source=secretRef. The chart
+      # projects only these two keys into the pod.
       name: ""
       certKey: tls.crt
       keyKey: tls.key
@@ -80,79 +88,82 @@ signer:
       certPath: /app/signer/ca/tls.crt
       keyPath: /app/signer/ca/tls.key
 
-  # Name of the signer. Required - there is no default, so it must be set
-  # explicitly (e.g. --set signer.name=example.org/signer). An empty value
-  # makes the controller fail fast at startup.
+  # Signer name. Required. There is no default, so set it explicitly
+  # (e.g. --set signer.name=example.org/signer). With an empty value, the
+  # controller stops at startup.
   name: ""
 
-  # FQDN of the cluster, used to build the default certificate DNS names
-  # (<pod>.<ns>.pod.<fqdn> / <pod>.<ns>.svc.<fqdn>).
+  # FQDN of the cluster. The signer uses it to make the default certificate DNS
+  # names (<pod>.<ns>.pod.<fqdn> / <pod>.<ns>.svc.<fqdn>).
   cluster_fqdn: cluster.local
 
-  # Max number of previous CA certificates to keep during a CA cert reload
+  # Maximum number of previous CA certificates to keep across CA rotations.
   max_previous_ca_certs: 2
 
-  # Refuse to start when the signer's ClusterTrustBundle does not exist, rather
-  # than starting with an empty previous-CA history.
+  # Refuse to start when the ClusterTrustBundle of the signer does not exist.
+  # When false, the controller starts with an empty previous-CA history.
   #
-  # Off by default because a first install has no bundle yet, and the controller
-  # cannot tell that apart from a bundle that was deleted. Once the signer has
-  # published its bundle, turn this on: it is what stops a deleted bundle from
-  # silently resetting the retained CA history, after which every certificate
-  # issued under a retired CA stops verifying.
+  # Disabled by default, because a first install has no bundle. The controller
+  # cannot tell a missing bundle from a deleted bundle. Enable it after the
+  # signer publishes its bundle. Then a deleted bundle cannot silently reset the
+  # retained CA history. Without that history, certificates from a retired CA
+  # stop verifying.
   require_ca_history: false
 
   # Allow ${...} placeholders (e.g. ${pod.name}, ${pod.serviceAccountName}) in
-  # certificate configuration annotations, resolved from the verified fields of
-  # the PodCertificateRequest. On by default: a value authored on a pod template
-  # is identical for every replica, so this is the only way to express per-pod
-  # identity at all.
+  # certificate configuration annotations. The signer resolves them from the
+  # verified fields of the PodCertificateRequest. Enabled by default. A value on
+  # a pod template is the same for every replica, so placeholders are the only
+  # way to set an identity for each pod.
   #
-  # Placeholders resolve only from apiserver-verified request fields plus
-  # cluster_fqdn above, and every resolved value must clear the identity
-  # constraints below by exact string equality - exactly as a literal value
-  # must. So interpolation grants no identity the pod does not already own; it
-  # changes the syntax you use to name one, not the set you may obtain. The
+  # Placeholders resolve only from apiserver-verified request fields and the
+  # cluster_fqdn value above. Each resolved value must pass the identity
+  # constraints below by exact string equality, as a literal value must. Thus
+  # interpolation gives no identity that the pod does not already own. It
+  # changes how you write an identity, not which identities you can get. The
   # security gate is allow_unverified_identities, not this flag. See the
   # "Interpolating pod identity into values" section of docs/configuration.md
   # and docs/adr/0002-annotation-interpolation-on-by-default.md.
   #
-  # Set to false to deny any value containing ${...} outright instead of
-  # resolving it. Keep in sync with defaultEnableAnnotationInterpolation in
-  # cmd/podcertificate-signer/main.go.
+  # Set to false to deny all values that contain ${...}. Keep this value equal
+  # to defaultEnableAnnotationInterpolation in cmd/podcertificate-signer/main.go.
   enable_annotation_interpolation: true
 
-  # Feature flag: honor DNS and IP SANs embedded in the kubelet-generated
-  # PKCS#10 CSR when no SAN annotation overrides them. Kubelet generates
-  # empty CSRs today; this prepares for upcoming Kubernetes support for
-  # requesting SANs on the projected volume.
+  # Feature flag: use the DNS and IP SANs in the kubelet-generated PKCS#10 CSR
+  # when no SAN annotation overrides them. At this time, kubelet generates
+  # empty CSRs. KEP-4317 describes SANs that a pod author requests through the
+  # CSR. This flag prepares for that support.
+  # https://github.com/kubernetes/enhancements/tree/master/keps/sig-auth/4317-pod-certificates
   honor_csr_sans: false
 
-  # Security flag: when false (the default), annotation-provided cn/san/ip-san/uris
-  # values must resolve to the requesting pod's apiserver-verified identity (its
-  # name, canonical DNS/SPIFFE forms and its service account); any other value is
-  # denied, so a pod cannot obtain a certificate for an identity it does not own.
-  # IP SANs have no verified derivation and are always denied while this is false.
-  # Set to true ONLY if you intentionally trust pod authors to request arbitrary
-  # identities - see the chart README "Identity constraints" section. This is the
-  # Helm escape hatch for the --allow-unverified-identities controller flag.
+  # Security flag. When false (the default), annotation cn/san/ip-san/uris
+  # values must resolve to the apiserver-verified identity of the requesting
+  # pod: its name, its canonical DNS and SPIFFE forms, and its service account.
+  # The signer denies all other values. Thus a pod cannot get a certificate for
+  # an identity that it does not own. IP SANs have no verified derivation, so
+  # the signer always denies them while this value is false. Set it to true ONLY
+  # when you trust pod authors to request any identity. See the chart README
+  # "Identity constraints" section. This value sets the
+  # --allow-unverified-identities controller flag.
   allow_unverified_identities: false
 
-  # Deprecated fallback: read configuration items the PodCertificateRequest
-  # does not carry in spec.unverifiedUserAnnotations from the pod's own
-  # annotations. On by default until the fallback is removed in 4.0.0. Set to
-  # false once every workload has moved to spec.unverifiedUserAnnotations, so
-  # pod annotations stop being a second requester-controlled input. Keep in
-  # sync with defaultAllowPodAnnotations in cmd/podcertificate-signer/main.go.
+  # Deprecated fallback. The signer reads configuration items from the
+  # annotations of the pod when spec.unverifiedUserAnnotations of the
+  # PodCertificateRequest does not contain them. Enabled by default until
+  # version 4.0.0 removes the fallback. Set to false when all workloads use
+  # spec.unverifiedUserAnnotations. Then pod annotations stop being a second
+  # input that the requester controls. Keep this value equal to
+  # defaultAllowPodAnnotations in cmd/podcertificate-signer/main.go.
   allow_pod_annotations: true
 
-# Optional, independently selectable ValidatingAdmissionPolicies. These
-# cluster-scoped policies provide preventive feedback when Pods are admitted;
-# signer-side validation remains authoritative even when every policy is off.
+# Optional ValidatingAdmissionPolicies. You can select each policy
+# independently. These cluster-scoped policies give feedback when the API server
+# admits Pods. Signer-side validation stays authoritative, also when all
+# policies are disabled.
 admissionPolicies:
-  # Validates explicit DNS SANs requested through projected podCertificate
-  # userAnnotations for this signer, after expanding the interpolation values
-  # available during Pod admission.
+  # Validates explicit DNS SANs that Pods request for this signer through
+  # projected podCertificate userAnnotations. The policy first expands the
+  # interpolation values that are available at Pod admission.
   dnsSANValidation:
     enabled: false
     # Supported modes: Deny, or Warn/Audit during a staged rollout. Kubernetes
@@ -165,49 +176,51 @@ admissionPolicies:
 
 # Controller manager settings
 manager:
-  # Max concurrent reconciles
+  # Maximum number of concurrent reconciles
   max_concurrent_reconciles: 5
-  # Max duration before a reconcile times out
+  # Maximum duration of a reconcile before it times out
   reconcile_timeout: "5m"
 
-# This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
+# Container image. See https://kubernetes.io/docs/concepts/containers/images/
 image:
   repository: ghcr.io/rafpe/pod-certificate-signer
-  # This sets the pull policy for images.
+  # Image pull policy.
   pullPolicy: IfNotPresent
-  # Overrides the image tag whose default is the chart appVersion (set to the
-  # release tag when the chart is published). Also accepts a sha256:... digest.
+  # Overrides the image tag. The default is the chart appVersion, which the
+  # release workflow sets to the release tag when it publishes the chart. Also
+  # accepts a sha256:... digest.
   tag: ""
 
-# This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
+# Secrets to pull the image from a private registry. See
+# https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
 imagePullSecrets: []
 
-# This is to override the chart name.
+# Overrides for the chart name and for the full name of the chart resources.
 nameOverride: ""
 fullnameOverride: ""
 
-# This section builds out the service account more information can be found here: https://kubernetes.io/docs/concepts/security/service-accounts/
+# ServiceAccount settings. See https://kubernetes.io/docs/concepts/security/service-accounts/
 serviceAccount:
-  # Specifies whether a service account should be created.
+  # Create a ServiceAccount.
   create: true
-  # Automatically mount a ServiceAccount's API credentials?
+  # Mount the API credentials of the ServiceAccount.
   automount: true
-  # Annotations to add to the service account.
+  # Annotations to add to the ServiceAccount.
   annotations: {}
-  # The name of the service account to use.
-  # If not set and create is true, a name is generated using the fullname template.
+  # Name of the ServiceAccount to use.
+  # When empty and create is true, the chart makes a name from the fullname template.
   name: ""
 
-# This is for setting Kubernetes Annotations to a Pod.
-# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
+# Kubernetes annotations to add to the Pod.
+# See https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
 podAnnotations: {}
-# This is for setting Kubernetes Labels to a Pod.
-# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
+# Kubernetes labels to add to the Pod.
+# See https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
 podLabels: {}
 
-# The defaults comply with the "restricted" Pod Security Standard, so the
-# controller can be deployed into namespaces enforcing it. The image runs as
-# a non-root user (distroless nonroot).
+# The defaults comply with the "restricted" Pod Security Standard. Thus you can
+# deploy the controller into namespaces that enforce it. The image runs as a
+# non-root user (distroless nonroot).
 podSecurityContext:
   runAsNonRoot: true
   seccompProfile:
@@ -221,20 +234,21 @@ securityContext:
     drop:
       - ALL
 
-# This is for setting up a service more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/
+# Service settings. See https://kubernetes.io/docs/concepts/services-networking/service/
 service:
-  # Specifies whether a service should be created
+  # Create a Service.
   create: true
-  # This sets the service type more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
+  # Service type. See https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
   type: ClusterIP
-  # This sets the ports more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
+  # Service port that targets the http (health) container port. See
+  # https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
   port: 80
 
-# Container resource requests/limits. Conservative production defaults for a
-# lightweight, mostly-idle controller: requests reserve a small baseline so the
-# pod schedules and keeps its Guaranteed share, while the limits cap bursts
-# during reconcile storms and the memory limit guards against a runaway. Tune
-# for your cluster size; set to {} to leave the container unconstrained.
+# Container resource requests and limits. Conservative production defaults for
+# a lightweight controller that is idle most of the time. The requests reserve
+# a small baseline, so the pod can be scheduled. The limits cap bursts during
+# reconcile storms, and the memory limit stops a runaway process. Change them
+# for the size of your cluster. Set to {} to remove all limits.
 resources:
   requests:
     cpu: 100m
@@ -243,7 +257,8 @@ resources:
     cpu: 500m
     memory: 256Mi
 
-# This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+# Liveness and readiness probes. See
+# https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
 livenessProbe:
   httpGet:
     path: /healthz
@@ -253,22 +268,24 @@ readinessProbe:
     path: /readyz
     port: http
 
-# PodDisruptionBudget for the controller. With the default replicaCount of 2
-# (leader-elected: one active, one warm standby), minAvailable: 1 lets a node be
-# drained one replica at a time while always keeping a pod that can hold the lease.
-# unhealthyPodEvictionPolicy: AlwaysAllow lets the node drain evict a pod that is
-# already unhealthy (e.g. not yet Ready) so a bad replica can never wedge a drain.
-# NOTE: if you enable the HPA and it scales the Deployment down to 1, minAvailable: 1
-# blocks node drains for the sole pod — switch to maxUnavailable: 1 in that case.
+# PodDisruptionBudget for the controller. The default replicaCount is 2: one
+# active leader and one warm standby. With minAvailable: 1, a node drain evicts
+# one replica at a time, and one pod can always hold the lease.
+# unhealthyPodEvictionPolicy: AlwaysAllow lets a node drain evict a pod that is
+# not healthy (e.g. not Ready). Thus a bad replica can never block a drain.
+# NOTE: if you enable the HPA and it scales the Deployment down to 1,
+# minAvailable: 1 blocks node drains for the single pod. In that case, change
+# to maxUnavailable: 1.
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
-  # Set maxUnavailable instead of minAvailable (mutually exclusive; minAvailable
-  # wins when both are set).
+  # Set maxUnavailable instead of minAvailable. The two values are mutually
+  # exclusive. When both are set, minAvailable wins.
   maxUnavailable: ""
   unhealthyPodEvictionPolicy: AlwaysAllow
 
-# This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
+# HorizontalPodAutoscaler settings. See
+# https://kubernetes.io/docs/concepts/workloads/autoscaling/
 autoscaling:
   enabled: false
   minReplicas: 1

@@ -1,10 +1,13 @@
-# Recommended: provide the signing CA from an existing Secret. The chart wires a
-# read-only volume for you at signer.ca.secretRef.mountPath — no volumes /
-# volumeMounts plumbing required.
+# Recommended: supply the signing CA from an existing Secret. The chart mounts
+# the Secret as a read-only volume at signer.ca.secretRef.mountPath. You do not
+# add volumes or volumeMounts.
 #
-# Create the Secret first, e.g.:
+# Create the Secret first. For example:
 #   kubectl create secret tls podcertificate-signer-ca \
-#     --cert=ca.crt --key=ca.key -n <namespace>
+#     --namespace pcs-system --cert=ca.pem --key=ca-key.pem
+#
+# `make helm-install` uses this file. It sets signer.name to the same value and
+# replaces signer.ca.secretRef.name with its temporary dev CA Secret.
 signer:
   name: example.org/signer
   ca:

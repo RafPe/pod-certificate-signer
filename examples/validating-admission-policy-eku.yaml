@@ -1,23 +1,25 @@
-# EXAMPLE ONLY — restrict which certificate Extended Key Usage (EKU) a workload
-# may request from pod-certificate-signer, per namespace.
+# EXAMPLE ONLY. Restrict the certificate Extended Key Usage (EKU) that a
+# workload may request from pod-certificate-signer, per namespace.
 #
-# The signer itself does not police EKU beyond the `client`/`server` token set:
-# any pod may request `eku: client` (EKU only shapes a certificate the pod is
-# already entitled to, so it is not gated by --allow-unverified-identities). If
-# your policy is "only namespaces explicitly opted into client auth may request
-# it", enforce that at admission with a ValidatingAdmissionPolicy like this one.
+# The signer accepts only the `client` and `server` EKU tokens. It does not
+# restrict which pod requests which token. Any pod may request `eku: client`.
+# EKU only changes a certificate that the pod can already get. Thus
+# --allow-unverified-identities does not control it. If only some namespaces
+# may request client auth, enforce that at admission with a
+# ValidatingAdmissionPolicy like this one.
 #
 # Model: the namespace label `pcs.example.org/eku-profile` selects the allowed
 # tokens:
-#   (unset) or "server" -> server only  (matches the signer's secure default)
+#   (unset) or "server" -> server only  (matches the signer default)
 #   "client"            -> client only
 #   "both"              -> server and client
-# A Pod whose podCertificate projection requests an `eku` value outside its
-# namespace's profile is denied at admission.
+# The policy denies a Pod if its podCertificate projection requests an `eku`
+# value that the namespace profile does not allow.
 #
-# Adjust `signerName`, the label key, and the binding's match rules to fit your
-# environment, and dry-run it (`kubectl apply --dry-run=server`) on your target
-# cluster before enforcing. Not applied by the chart — `kubectl apply -f` it.
+# Change `signerName`, the label key and the match rules of the binding for
+# your environment. Before you enforce it, test it on your target cluster with
+# `kubectl apply --dry-run=server`. The chart does not apply this policy. Apply
+# it with `kubectl apply -f`.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -46,9 +48,10 @@ spec:
         variables.profile == 'both' ? ['server', 'client']
           : (variables.profile == 'client' ? ['client'] : ['server'])
   validations:
-    # Every podCertificate projection for this signer that sets an `eku` value
-    # must request only tokens allowed for the namespace. Pods with no volumes,
-    # no podCertificate projection, or no eku annotation are unaffected.
+    # Each podCertificate projection for this signer that sets an `eku` value
+    # must request only tokens that the namespace allows. The policy does not
+    # change pods with no volumes, no podCertificate projection or no eku
+    # annotation.
     - expression: >-
         !has(object.spec.volumes) ||
         object.spec.volumes.all(v,
@@ -75,6 +78,7 @@ metadata:
 spec:
   policyName: pcs-eku-by-namespace
   validationActions: ["Deny"]
-  # Applies to all namespaces; the policy defaults unlabeled namespaces to
-  # server-only. Narrow with spec.matchResources.namespaceSelector if preferred.
+  # Applies to all namespaces. For a namespace without the label, the policy
+  # allows server only. To apply it to fewer namespaces, set
+  # spec.matchResources.namespaceSelector.
   matchResources: {}

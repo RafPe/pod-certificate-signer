@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-08-18
 decision-makers: RafPe
 ---
@@ -66,7 +66,7 @@ meaning of an absent bundle an explicit, operator-visible choice.**
 3. **A missing bundle is reported as absence, not as an empty history**
    (`errCAHistoryBundleAbsent`), and is not retried — retrying cannot make an
    absent object appear. By default startup continues with an empty history and
-   says so loudly; `--require-ca-history` (chart: `signer.require_ca_history`)
+   says so loudly. `--require-ca-history` (chart: `signer.require_ca_history`)
    turns absence into a startup failure.
 
 ### Why the provenance check stops where it does
@@ -86,7 +86,7 @@ and it declines to claim more than that.
 ### Why `--require-ca-history` defaults to off
 
 A bundle that never existed and one that was deleted are the same observation.
-Failing closed by default would crash-loop every first install; starting empty
+Failing closed by default would crash-loop every first install. Starting empty
 by default makes a deleted bundle a permanent loss. The default keeps the
 install path working and the flag gives the fail-closed behaviour to operators
 who know their signer has published before — which is every installation past
@@ -99,7 +99,7 @@ its first minute.
   the configured bound, and the drift-repair publish rewrites the rest.
 - The published bundle can shrink on the first restart after this change, if the
   bundle in the cluster held more (or more unusable) entries than the bound
-  allows. That is the bound being enforced; raise `--max-previous-ca-certs`
+  allows. That is the bound being enforced. Raise `--max-previous-ca-certs`
   before restarting if the extra anchors are genuinely still needed.
 - An expired CA is dropped from the history. It could not validate anything, and
   the slot it held is returned to a CA that can.
@@ -125,8 +125,8 @@ its first minute.
 - **Persist the history in a second object the controller owns** (a ConfigMap or
   Secret in the release namespace). It removes the ambiguity, at the cost of new
   RBAC, a new failure mode, and a second copy of the trust state to keep
-  consistent with the published one. Rejected as disproportionate to the problem;
-  worth revisiting if history loss is observed in practice.
+  consistent with the published one. Rejected as disproportionate to the problem.
+  Worth revisiting if history loss is observed in practice.
 - **Pin history to a lineage** (e.g. require a previous CA to share the current
   CA's subject). It reads like provenance but is not: an operator may legitimately
   rotate to a CA with a different subject, and an attacker writing the bundle can
@@ -138,13 +138,41 @@ its first minute.
 
 ## More Information
 
-- `internal/authority/authority.go` — `normalizePreviousCAs`,
+- [`internal/authority/authority.go`](../../internal/authority/authority.go) — `normalizePreviousCAs`,
   `validateCACertificate`, `WithPreviousCAs`, `WithMaxPreviousCAs`.
-- `internal/trustbundle/history.go` — `LoadPreviousCAHistory`,
+- [`internal/trustbundle/history.go`](../../internal/trustbundle/history.go) — `LoadPreviousCAHistory`,
   `ErrHistoryBundleAbsent`; `--require-ca-history` is wired in
   `cmd/podcertificate-signer/main.go`.
-- `docs/operations.md` — rotation runbook and the operator-facing guidance for
+- [`docs/operations.md`](../operations.md) — rotation runbook and the operator-facing guidance for
   `signer.require_ca_history`.
 - [#30](https://github.com/RafPe/pod-certificate-signer/issues/30) — the earlier
   fix that made a *read error* fail closed, which this record extends to what the
   read returns.
+- Related: [ADR-0005](0005-bounded-metrics-surface.md) adds
+  `podcertificatesigner_trust_bundle_certificates`, which reports how many
+  anchors the signer would publish.
+
+### Status update (2026-11-16)
+
+This note records the state of the code at release 3.1.0. The decision above is
+unchanged.
+
+- Status changed from `proposed` to `accepted` on 2026-11-16. The decision
+  shipped in release 2.4.0 (PR
+  [#109](https://github.com/RafPe/pod-certificate-signer/pull/109), CHANGELOG
+  2.4.0).
+- Some names in the Context and Decision sections changed:
+
+  | Name in this record | Name at release 3.1.0 |
+  | --- | --- |
+  | `loadPreviousCAHistory` in `cmd/podcertificate-signer/main.go` | `trustbundle.LoadPreviousCAHistory` in `internal/trustbundle/history.go` |
+  | `fetchPreviousCAs` in `cmd/podcertificate-signer/main.go` | `fetchPreviousCAs` in `internal/trustbundle/history.go` |
+  | `authority.WithPreviousCABundle` | `authority.WithPreviousCAs` |
+  | `authority.normalizePreviousCertificates` | `normalizePreviousCAs` in `internal/authority/authority.go` |
+  | `errCAHistoryBundleAbsent` | `trustbundle.ErrHistoryBundleAbsent` |
+
+- Since release 3.0.1, `validateCACertificate` also refuses a CA whose
+  `NotBefore` is more than five minutes in the future. The history
+  normalization uses the same check, so it drops such an entry.
+- Since release 3.1.0, a `CERTIFICATE` block in the bundle that does not parse
+  stops startup (`errHistoryBundleCorrupt`). Startup does not retry it.

@@ -35,7 +35,7 @@ its own binary:
 The distributions do not overlap. The ~1.2s floor is client-go's `RetryPeriod`
 polling, which this project does not control. Every trial of the on arm showed
 client-go's release signature (`holderIdentity: ""`,
-`leaseDurationSeconds: 1`); no trial of the off arm did.
+`leaseDurationSeconds: 1`). No trial of the off arm did.
 
 The hazard the option carries is named by client-go: *"you must ensure all code
 guarded by this lease has successfully completed prior to cancelling the
@@ -84,7 +84,7 @@ within `GracefulShutdownTimeout`. An unbounded retry added to a leader-gated
 runnable would break this silently — no test fails, the Lease is just released
 while the old leader is still writing.
 
-The predicate is the narrower of the two available fixes; switching to
+The predicate is the narrower of the two available fixes. Switching to
 `wait.ExponentialBackoffWithContext` would also interrupt a sleep already in
 progress. It was not needed: stopping before the next sleep collapses the
 measured ~8s to ~0.
@@ -99,13 +99,13 @@ moves from 90s to 30s, so a regression in handover is caught rather than hidden.
 fall back to `LeaseDuration` expiry, because only a voluntary shutdown releases
 the Lease. Nothing about issuance, the identity model or the trust boundary
 moves. A publish abandoned at shutdown still counts as `{result="failed"}` on
-M6, unchanged from before this record; an alert on that counter should be
+M6, unchanged from before this record. An alert on that counter should be
 rate-based rather than a threshold on the total.
 
 **Negative.** The binary now depends on a precondition that a future change can
 break without any test noticing, which is why it is written next to the option
 and recorded here. A released Lease also transiently reads an empty
-`holderIdentity`, which e2e helpers see; their `Eventually` absorbs it as one
+`holderIdentity`, which e2e helpers see. Their `Eventually` absorbs it as one
 more poll.
 
 ## Verification
@@ -142,9 +142,34 @@ when the API server is degraded, which is when fast handover matters most.
 
 ## More Information
 
-- Issue [#122](https://github.com/rafpe/pod-certificate-signer/issues/122)
+- Issue [#122](https://github.com/RafPe/pod-certificate-signer/issues/122)
   carries the full measurement, including per-trial numbers and the shutdown-log
   ordering that confirms the release lands after the last runnable returns.
 - controller-runtime v0.25.1 `pkg/manager/internal.go` (`engageStopProcedure`)
   for the deferral; `k8s.io/client-go/tools/leaderelection` for the hazard
   comment and `tryRelease`.
+- Implementation: `managerOptions` in
+  [`cmd/podcertificate-signer/main.go`](../../cmd/podcertificate-signer/main.go)
+  and the retry predicate in `publish` in
+  [`internal/trustbundle/publisher.go`](../../internal/trustbundle/publisher.go).
+- Related: [ADR-0005](0005-bounded-metrics-surface.md) defines M6
+  (`podcertificatesigner_clustertrustbundle_publish_attempts_total`).
+
+### Status update (2026-11-16)
+
+This note records the state of the code at release 3.1.0. The decision above is
+unchanged. It shipped in release 3.0.1.
+
+- The Neutral consequence "A publish abandoned at shutdown still counts as
+  `{result="failed"}` on M6" is no longer true. Since release 3.1.0 (PR
+  [#184](https://github.com/RafPe/pod-certificate-signer/pull/184)), `publish`
+  in `internal/trustbundle/publisher.go` returns without a record when its
+  context ends. An abandoned publish does not increment the failed counter
+  and does not change readiness (CHANGELOG 3.1.0).
+- The ClusterTrustBundle publisher and its `NeedLeaderElection` method are now
+  in `internal/trustbundle/publisher.go`, not in
+  `cmd/podcertificate-signer/main.go`.
+- `TestReconcileStopsRetryingOnCancel` and
+  `TestReconcileRetriesTimeoutWhileContextIsLive` are in
+  `internal/trustbundle/publisher_test.go`. `TestManagerOptionsReleasesLeaseOnCancel`
+  is in `cmd/podcertificate-signer/main_test.go`.

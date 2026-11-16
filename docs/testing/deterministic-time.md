@@ -2,25 +2,24 @@
 
 Unit tests here never wait on the wall clock and never shorten a production
 interval to make a test fast. A test that needs time to pass runs inside a
-`testing/synctest` bubble, where `time.Now`, `time.Sleep`, timers, tickers and
-context deadlines use a fake clock that advances only when every goroutine in
-the bubble is durably blocked. I found synctest through the review on
-kubernetes/kubernetes#141459. I use the standard library directly, because the
-`k8s.io/kubernetes/test/utils/ktesting` wrapper is not importable from outside
-the `k8s.io/kubernetes` module.
+`testing/synctest` bubble. In a bubble, `time.Now`, `time.Sleep`, timers,
+tickers and context deadlines use a fake clock. The fake clock advances only
+when every goroutine in the bubble is durably blocked. The review on
+[kubernetes/kubernetes#141459](https://github.com/kubernetes/kubernetes/pull/141459)
+is where this project found synctest. The tests use the standard library
+directly. A module outside `k8s.io/kubernetes` cannot import the
+`k8s.io/kubernetes/test/utils/ktesting` wrapper.
 
 ## Rules
 
 1. Keep production values. Sleep multiples of the production field or constant
-   the code under test actually uses: a field such as `ca.reconcileInterval` or
-   `p.interval`, or a package constant such as `eventThrottleInterval`
-   or `reloadFailureGracePeriod`.
+   that the code under test uses. Examples are a field such as
+   `ca.reloadInterval` or `p.interval`, or a package constant such as
+   `eventThrottleInterval` or `reloadFailureGracePeriod`.
 2. To assert on N ticks of a ticker loop, sleep N intervals plus half an
-   interval, so a tick landing on the same fake instant as the wake-up is never
-   in doubt. Once that half interval has taken the clock off the tick boundary,
-   later whole-interval sleeps in the same test are already unambiguous. A grace
-   period or throttle window is a duration, not a tick count, so sleep it
-   exactly.
+   interval. Then no tick lands on the same fake instant as the wake-up. After that half interval moves the clock off the tick boundary,
+   later whole-interval sleeps in the same test are unambiguous. A grace period
+   or throttle window is a duration, not a tick count. Sleep it exactly.
 3. `time.Sleep(d)` inside a bubble means "advance the clock by d". Follow it
    with `synctest.Wait()` before asserting on anything a background goroutine
    produced.
@@ -29,8 +28,8 @@ the `k8s.io/kubernetes` module.
    complete, a drain or a send the loop has to consume, where fake time makes
    the bound exact.
 5. Cancel and drain every goroutine you started before the bubble function
-   returns; fake time stops advancing once the root goroutine exits, so a
-   goroutine still waiting on a timer deadlocks and `synctest.Test` panics.
+   returns. Fake time stops when the root goroutine exits. A goroutine that
+   still waits on a timer then deadlocks, and `synctest.Test` panics.
    Bound the drain with `time.After` so a loop that ignored the cancel fails
    instead of hanging.
 6. Use the bubble's shadowed `t` inside the bubble, including for `t.Context()`
@@ -69,8 +68,8 @@ func TestTickDoesSomething(t *testing.T) {
 ## What stays outside a bubble
 
 - Tests that drive the real fsnotify watcher through `ca.watch`, such as
-  `TestWatchReloadsCA`. The watcher goroutine blocks in a kernel syscall, which
-  synctest does not count as durably blocked, so fake time would never advance.
+  `TestWatchReloadsCA`. The watcher goroutine blocks in a kernel syscall.
+  synctest does not count that as durably blocked, so fake time never advances.
   Test the loop through the `watchLoop` seam instead, which takes the event
   channels as parameters.
 - The envtest controller suite and the Kind e2e suite. Those talk to real
@@ -85,3 +84,7 @@ func TestTickDoesSomething(t *testing.T) {
   not sleep past the certificate lifetime.
 - Production code has no injected clock, because a bubble makes one redundant.
   If you want a clock to inject, put the test in a bubble instead.
+
+Next: [CONTRIBUTING.md](../../CONTRIBUTING.md#pull-requests) lists the checks to
+run before you open a pull request. To verify a test that uses a bubble, run
+it with `go test -race -count=1 -run <TestName> ./<package>`.

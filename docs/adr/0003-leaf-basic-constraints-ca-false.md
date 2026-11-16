@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-08-18
 decision-makers: RafPe
 ---
@@ -23,7 +23,7 @@ template := &x509.Certificate{
 `crypto/x509.CreateCertificate` emits the basicConstraints extension only when
 `BasicConstraintsValid` is true, so **issued leaves carried no basicConstraints
 extension at all**. This surfaced in the Stage 3 e2e work, which set out to
-assert `cA:FALSE` on every leaf and found there was nothing to assert; the
+assert `cA:FALSE` on every leaf and found there was nothing to assert. The
 assertion it settled on pinned the *absence*
 (`test/e2e/key_semantics_test.go`, `expectConformantLeaf`).
 
@@ -39,7 +39,7 @@ absence is standards-conformant:
   certificates when validated by a conforming implementation.
 - Current CA/Browser Forum Baseline Requirements treat basicConstraints as
   **optional** for subscriber certificates rather than mandatory. An earlier
-  internal note claimed the BRs require it; that overstated the position and is
+  internal note claimed the BRs require it. That overstated the position and is
   corrected here so the overstatement does not get cited back.
 
 The argument for asserting it anyway is that "conforming implementation" is a
@@ -52,7 +52,7 @@ cannot enumerate its verifiers, so it should not rely on all of them being
 strict.
 
 The certificate profile is also read by people. A leaf that states its
-end-entity status is auditable in one `openssl x509 -text`; a leaf that omits
+end-entity status is auditable in one `openssl x509 -text`. A leaf that omits
 the extension requires the reader to know RFC 5280 6.1.4 before they can
 conclude anything from what is not there.
 
@@ -73,7 +73,7 @@ recorded under Alternatives Considered.
 Worth knowing before someone "corrects" the test: DER omits a field encoded at
 its DEFAULT, and `cA` is `BOOLEAN DEFAULT FALSE` with `pathLenConstraint`
 `OPTIONAL`. The emitted extension value is therefore an **empty SEQUENCE**
-(`30 00`). There is no explicit `FALSE` byte to find; `openssl x509 -text`
+(`30 00`). There is no explicit `FALSE` byte to find. `openssl x509 -text`
 still prints `CA:FALSE`, and that empty SEQUENCE is the strongest single thing
 to assert on, because it pins both the value and the absent `pathLenConstraint`
 without depending on any parser's sentinel for "unset".
@@ -103,7 +103,7 @@ removed.
   low, but it is not zero: a consumer pinning an exact certificate fingerprint
   or DER length sees a change on the next issuance. Certificates are
   short-lived (24h default) and rotate constantly, so such a consumer is
-  already broken by rotation; this only makes the breakage arrive sooner.
+  already broken by rotation. This only makes the breakage arrive sooner.
 * Bad, because the e2e assertion that pinned the absence had to be inverted in
   the same change or the suite goes red. That coupling is the point of the
   assertion existing — it is what caught the profile change — but it does mean
@@ -123,7 +123,7 @@ removed.
 * **Dependencies**: none. This does not rest on the allowlist boundary or on
   any flag.
 * **Patterns to follow**: assert on the certificate parsed back from DER, never
-  on the template. The template is the request; the DER is the artifact the
+  on the template. The template is the request. The DER is the artifact the
   workload is handed, and only one of the two is evidence.
 * **Patterns to avoid**: do not add `MaxPathLen` / `MaxPathLenZero` to the
   template to "complete" the extension. Do not reach for `ExtraExtensions` to
@@ -174,12 +174,12 @@ removed.
 
 * RFC 5280 4.2.1.9 (Basic Constraints) and 6.1.4 (path validation).
 * Found by the Stage 3 e2e work. `test/e2e/key_semantics_test.go`,
-  `expectConformantLeaf`, now requires the extension's presence; before this
+  `expectConformantLeaf`, now requires the extension's presence. Before this
   record it pinned the absence, with a comment saying that any extension
   appearing there must be reviewed and must carry `cA:FALSE`. This is that
   review.
 * [ADR-0001](0001-verified-identity-allowlist-boundary.md) — the identity
-  boundary. Untouched here; listed so the two are not confused, since both
+  boundary. Untouched here. Listed so the two are not confused, since both
   concern what an issued certificate may say.
 * `CONTRIBUTING.md`'s "When an ADR is required" list does not literally name
   an unconditional change to certificate contents — its closest entry is *a
@@ -188,8 +188,35 @@ removed.
   certificate the signer issues contains, and that reasoning should outlive
   the pull request that carried it.
 
-**Revisit if**: a verifier is found that rejects a leaf carrying a critical
-basicConstraints (which would reopen the criticality question, and would be
-worth reporting upstream); or the CA/Browser Forum Baseline Requirements move
-basicConstraints from optional to required for subscriber certificates, which
-would turn this from a judgement call into a conformance obligation.
+* Implementation: `Sign` in
+  [`internal/authority/authority.go`](../../internal/authority/authority.go),
+  tested by `TestSignAssertsBasicConstraintsCAFalse` in
+  [`internal/authority/sign_test.go`](../../internal/authority/sign_test.go) and
+  by `expectConformantLeaf` in
+  [`test/e2e/key_semantics_test.go`](../../test/e2e/key_semantics_test.go).
+
+**Revisit if** one of these occurs:
+
+* A verifier is found that rejects a leaf carrying a critical basicConstraints
+  (which would reopen the criticality question, and would be worth reporting
+  upstream).
+* The CA/Browser Forum Baseline Requirements move basicConstraints from
+  optional to required for subscriber certificates, which would turn this from
+  a judgement call into a conformance obligation.
+
+### Status update (2026-11-16)
+
+This note records the state of the code at release 3.1.0. The decision above is
+unchanged.
+
+* Status changed from `proposed` to `accepted` on 2026-11-16. The decision
+  shipped in release 2.4.0 (PR
+  [#107](https://github.com/RafPe/pod-certificate-signer/pull/107), CHANGELOG
+  2.4.0).
+* `Sign` in `internal/authority/authority.go` sets `BasicConstraintsValid: true`
+  and does not set `IsCA`. The comment at the field cites ADR-0003.
+* `TestSignAssertsBasicConstraintsCAFalse` is now in
+  `internal/authority/sign_test.go`, not in `authority_test.go`.
+* The open Verification item is now true in the code: `expectConformantLeaf`
+  requires `BasicConstraintsValid` on every issued leaf. This note does not
+  record an e2e run.

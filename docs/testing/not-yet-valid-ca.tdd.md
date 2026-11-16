@@ -1,9 +1,9 @@
 # Not-yet-valid CA rejection — TDD evidence
 
 Issue: [#137](https://github.com/RafPe/pod-certificate-signer/issues/137) —
-`validateCACertificate` never checked `NotBefore`, so a CA whose validity
-opens ahead of the local clock loaded cleanly, passed readiness and signed
-leaves that fail chain verification on every peer.
+`validateCACertificate` did not check `NotBefore`. A CA whose validity
+starts after the local clock time loaded without error and passed readiness. It
+then signed leaves that fail chain verification on every peer.
 
 ## Journeys
 
@@ -26,14 +26,21 @@ leaves that fail chain verification on every peer.
 
 ## Coverage and E2E
 
-`make test` is green across the repository. `internal/authority`
-sits at 86.8% statement coverage with `validateCACertificate` itself at 100%
+Measured when the fix merged (PR
+[#140](https://github.com/RafPe/pod-certificate-signer/pull/140), release
+3.0.1): `make test` passed across the repository. `internal/authority` had
+86.8% statement coverage, and `validateCACertificate` had 100%
 (`go tool cover -func`). `make lint` (golangci-lint, including
-`--build-tags=e2e`) reports 0 issues.
+`--build-tags=e2e`) reported 0 issues.
 
-The E2E entry joins the nightly-labelled `DescribeTable` in
-`test/e2e/ca_lifecycle_test.go`, so per-PR CI compiles it and nightly runs it.
-It was additionally executed once locally against a Kind cluster with
+The E2E entry is in the nightly-labelled `DescribeTable` in
+`test/e2e/ca_failure_modes_test.go`. It was in `test/e2e/ca_lifecycle_test.go`
+until PR [#183](https://github.com/RafPe/pod-certificate-signer/pull/183) split
+that file. Per-PR CI compiles it, and the nightly run executes it. At the time
+of the fix, it also ran once locally against a Kind cluster with
 `-ginkgo.focus='should run successfully|a CA certificate that is not yet
 valid'` (the first spec resolves `controllerPodName`, which the log
 assertions read): 2 of 106 specs ran, both passed in 274s.
+
+Related: [ADR-0004](../adr/0004-bootstrapped-previous-ca-history.md) records
+why the previous-CA history goes through the same validity check.

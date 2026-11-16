@@ -86,15 +86,15 @@ configuration with its own tests and its own e2e install profile.
   `docs/configuration.md` now describe what a reader actually gets.
 * Good, because the reachable-by-default posture is the *narrow* one. Previously
   the only default-reachable way to put a chosen name into a certificate was
-  `--allow-unverified-identities`, which lifts every constraint at once;
-  interpolation reaches exactly the pod's own identity and nothing else. Making the
+  `--allow-unverified-identities`, which lifts every constraint at once.
+  Interpolation reaches exactly the pod's own identity and nothing else. Making the
   bounded mechanism the default makes the unbounded one less tempting.
 * Neutral, because the identity model is untouched. A denial that fired before the
   flip because the value was not the pod's still fires after it, with the same
   message.
 * Bad, because a `${...}` value that is *malformed* (an unknown variable, an
   unterminated placeholder) now denies the request where it used to deny it for a
-  different reason. The reason string changes; the outcome does not. An operator
+  different reason. The reason string changes. The outcome does not. An operator
   who relied on the blanket "`${` is denied" behaviour as a crude admission control
   must set `signer.enable_annotation_interpolation: false` explicitly.
 * Bad, because the default now lives in two places — the binary constant and the
@@ -181,10 +181,45 @@ configuration with its own tests and its own e2e install profile.
   allowlist boundary the "no new issuable identity" argument rests on. Its
   follow-up list names both the example fix and the removal of the e2e's
   `allow_unverified_identities` masking.
-* `docs/configuration.md` — "Interpolating pod identity into values" and
-  "What bounds interpolation" document the user-visible behaviour.
+* [`docs/configuration.md`](../configuration.md#interpolating-pod-identity-into-values)
+  — "Interpolating pod identity into values" and
+  [What bounds interpolation](../configuration.md#what-bounds-interpolation)
+  document the user-visible behaviour.
+* Implementation: `defaultEnableAnnotationInterpolation` in
+  [`cmd/podcertificate-signer/main.go`](../../cmd/podcertificate-signer/main.go),
+  `signer.enable_annotation_interpolation` in
+  [`charts/pod-certificate-signer/values.yaml`](../../charts/pod-certificate-signer/values.yaml),
+  and `interpolate` / `interpolationVars` in
+  [`internal/podcertificate/identity.go`](../../internal/podcertificate/identity.go).
 
-**Revisit if**: the interpolation variable table gains an entry that does not come
-from an apiserver-verified request field (which would break the argument above at
-its root); or `--enable-annotation-interpolation=false` is found to have no users
-and the flag becomes a candidate for removal.
+**Revisit if** one of these occurs:
+
+* The interpolation variable table gains an entry that does not come from an
+  apiserver-verified request field (which would break the argument above at its
+  root).
+* `--enable-annotation-interpolation=false` is found to have no users and the
+  flag becomes a candidate for removal.
+
+### Status update (2026-11-16)
+
+This note records the state of the code at release 3.1.0. The decision above is
+unchanged. It shipped in release 2.3.0.
+
+* `interpolate` and `interpolationVars` are now in
+  `internal/podcertificate/identity.go`, not in `podcertificate.go`.
+* The flag is now registered in `registerFlags` in
+  `cmd/podcertificate-signer/main.go`, not in `main()`. The flag registration
+  still reads the named constant `defaultEnableAnnotationInterpolation`.
+* `TestChartInterpolationDefaultMatchesBinary` no longer exists. PR
+  [#183](https://github.com/RafPe/pod-certificate-signer/pull/183) (release
+  3.1.0) replaced it with `TestChartSecurityDefaultsMatchBinary` in
+  `cmd/podcertificate-signer/main_test.go`. That test pins
+  `signer.enable_annotation_interpolation` and three other security defaults
+  against their binary constants.
+* Since release 3.1.0, the `duration` and `refresh` annotations also resolve
+  `${...}` placeholders. With `--enable-annotation-interpolation=false`, a
+  `${...}` value in these annotations causes a denial (CHANGELOG 3.1.0).
+* The open Verification item: `--set signer.enable_annotation_interpolation`
+  appears in exactly one install profile, `interpolation-disabled`, with the
+  value `false` (`test/e2e/install_profiles_test.go`). This note does not record
+  an e2e run.
