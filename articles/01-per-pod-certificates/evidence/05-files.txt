@@ -1,0 +1,18 @@
+# date: 2026-11-16T12:57:52Z
+$ kubectl exec pcs-example-workload -- ls /var/run/x509
+ca.crt
+credentialbundle.pem
+# exit code: 0
+
+# date: 2026-11-16T12:58:03Z
+$ kubectl exec pcs-example-workload -- grep -- '-----BEGIN' /var/run/x509/credentialbundle.pem
+[PEM header of the private key block. Redacted: the repository hygiene test rejects this header in a tracked file.]
+-----BEGIN CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+# exit code: 0
+
+# date: 2026-11-16T12:58:03Z
+$ kubectl exec pcs-example-workload -- grep -- '-----BEGIN' /var/run/x509/ca.crt
+-----BEGIN CERTIFICATE-----
+# exit code: 0
+

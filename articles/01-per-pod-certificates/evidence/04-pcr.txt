@@ -1,0 +1,147 @@
+# date: 2026-11-16T12:57:51Z
+$ kubectl get podcertificaterequests -n default
+NAME        PODNAME                SERVICEACCOUNTNAME   NODENAME                   SIGNERNAME           STATE    UNVERIFIEDUSERANNOTATIONS
+req-44ct7   pcs-example-workload   default              pcs-art-01-control-plane   example.org/signer   Issued   example.org/signer-cn=${pod.name}.${pod.namespace}.svc.${cluster.fqdn},example.org/signer-san=${pod.name}.${pod.namespace}.svc,${pod.serviceAccountName}.${pod.namespace},example.org/signer-uris=spiffe://${cluster.fqdn}/ns/${pod.namespace}/sa/${pod.serviceAccountName}
+# exit code: 0
+
+# date: 2026-11-16T12:57:51Z
+$ kubectl get podcertificaterequests -n default -o jsonpath='{range .items[*].status.conditions[*]}{.type}{"\t"}{.status}{"\t"}{.reason}{"\t"}{.message}{"\n"}{end}'
+Issued	True	CertificateIssued	certificate issued
+# exit code: 0
+
+# date: 2026-11-16T12:57:51Z
+$ kubectl get podcertificaterequests -n default -o yaml
+apiVersion: v1
+items:
+- apiVersion: certificates.k8s.io/v1
+  kind: PodCertificateRequest
+  metadata:
+    creationTimestamp: "2026-11-16T12:57:44Z"
+    generateName: req-
+    name: req-44ct7
+    namespace: default
+    ownerReferences:
+    - apiVersion: v1
+      kind: Pod
+      name: pcs-example-workload
+      uid: 3d0696b5-0265-4d62-bd34-a139139fdd5f
+    resourceVersion: "857"
+    uid: a7263c33-2a99-4e21-bb21-d1f249b8a49f
+  spec:
+    maxExpirationSeconds: 86400
+    nodeName: pcs-art-01-control-plane
+    nodeUID: 3558872b-8019-4e2d-acfd-fd52a953b6bb
+    podName: pcs-example-workload
+    podUID: 3d0696b5-0265-4d62-bd34-a139139fdd5f
+    serviceAccountName: default
+    serviceAccountUID: f993f130-a2d9-4a7a-ab3e-f47af09af0e0
+    signerName: example.org/signer
+    stubPKCS10Request: MH8wMwIBADAAMCowBQYDK2VwAyEAktZwwIc/uNzqQFp3uoJHyjcgYYPsn7SD+JEOMXNkdFugADAFBgMrZXADQQDsx+xWBz6SJMmSdg3EjQp3Co2jVtUhgt0swI1aanTnxZCQp2XASLOmli/BYpD3zVVk1eKKdVVZu+5c2bsPVOYF
+    unverifiedUserAnnotations:
+      example.org/signer-cn: ${pod.name}.${pod.namespace}.svc.${cluster.fqdn}
+      example.org/signer-san: ${pod.name}.${pod.namespace}.svc,${pod.serviceAccountName}.${pod.namespace}
+      example.org/signer-uris: spiffe://${cluster.fqdn}/ns/${pod.namespace}/sa/${pod.serviceAccountName}
+  status:
+    beginRefreshAt: "2026-11-17T12:41:44Z"
+    certificateChain: |
+      -----BEGIN CERTIFICATE-----
+      MIIB6TCCAY+gAwIBAgIQJh4ytub2072nov+HvHaMNjAKBggqhkjOPQQDAjAdMRsw
+      GQYDVQQDExJwY3MtYXJ0LTAxIHRlc3QgQ0EwHhcNMjYxMTE2MTI1NjQ0WhcNMjYx
+      MTE3MTI1NjQ0WjA5MTcwNQYDVQQDEy5wY3MtZXhhbXBsZS13b3JrbG9hZC5kZWZh
+      dWx0LnN2Yy5jbHVzdGVyLmxvY2FsMCowBQYDK2VwAyEAktZwwIc/uNzqQFp3uoJH
+      yjcgYYPsn7SD+JEOMXNkdFujgcMwgcAwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQM
+      MAoGCCsGAQUFBwMBMAwGA1UdEwEB/wQCMAAwHwYDVR0jBBgwFoAURlKdfERxDroH
+      mAjufsJDu+Fxo6owagYDVR0RBGMwYYIgcGNzLWV4YW1wbGUtd29ya2xvYWQuZGVm
+      YXVsdC5zdmOCD2RlZmF1bHQuZGVmYXVsdIYsc3BpZmZlOi8vY2x1c3Rlci5sb2Nh
+      bC9ucy9kZWZhdWx0L3NhL2RlZmF1bHQwCgYIKoZIzj0EAwIDSAAwRQIhAJje0dCV
+      mVEfuiSfkcnDe42mQ6PVolDfasumHrrDpTt2AiA/LIicEYczsNTmq3z4VKP+/p9w
+      /FsIBYyKHJ/Y2W/j4g==
+      -----END CERTIFICATE-----
+      -----BEGIN CERTIFICATE-----
+      MIIBfDCCASGgAwIBAgIRAP1XtJ40JccYM585wKacMeYwCgYIKoZIzj0EAwIwHTEb
+      MBkGA1UEAxMScGNzLWFydC0wMSB0ZXN0IENBMB4XDTI2MTExNjExNTQxNFoXDTI2
+      MTIxNjEyNTQxNFowHTEbMBkGA1UEAxMScGNzLWFydC0wMSB0ZXN0IENBMFkwEwYH
+      KoZIzj0CAQYIKoZIzj0DAQcDQgAEuSalc5U0jMVJDvDsrX3wGWqx5EcSGD4v/HZ3
+      kZf+28nTyh6PxyfMF9mjO/1UinLc75xDDjUam+iS6MewiP/b16NCMEAwDgYDVR0P
+      AQH/BAQDAgKEMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFEZSnXxEcQ66B5gI
+      7n7CQ7vhcaOqMAoGCCqGSM49BAMCA0kAMEYCIQDnf8YWhowtDblbYi7mCBZy8C34
+      gdiBUSeMXdfTc7UP4wIhANk0GCStGTFxrSwJM7dse4aHa0O3VcQunFsUfCCe3G2N
+      -----END CERTIFICATE-----
+    conditions:
+    - lastTransitionTime: "2026-11-16T12:57:44Z"
+      message: certificate issued
+      reason: CertificateIssued
+      status: "True"
+      type: Issued
+    notAfter: "2026-11-17T12:56:44Z"
+    notBefore: "2026-11-16T12:56:44Z"
+kind: List
+metadata:
+  resourceVersion: ""
+# exit code: 0
+
+# date: 2026-11-16T12:57:51Z
+$ kubectl get podcertificaterequests -n default -o jsonpath='{range .items[*].metadata.managedFields[*]}{.manager}{"\t"}{.operation}{"\t"}{.subresource}{"\n"}{end}'
+kubelet	Update	
+manager	Update	status
+# exit code: 0
+
+# date: 2026-11-16T12:58:03Z
+$ kubectl get podcertificaterequests -n default -o yaml --show-managed-fields | sed -n '/managedFields/,/name: req-/p'
+    managedFields:
+    - apiVersion: certificates.k8s.io/v1
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:metadata:
+          f:generateName: {}
+          f:ownerReferences:
+            .: {}
+            k:{"uid":"3d0696b5-0265-4d62-bd34-a139139fdd5f"}: {}
+        f:spec:
+          f:maxExpirationSeconds: {}
+          f:nodeName: {}
+          f:nodeUID: {}
+          f:podName: {}
+          f:podUID: {}
+          f:serviceAccountName: {}
+          f:serviceAccountUID: {}
+          f:signerName: {}
+          f:stubPKCS10Request: {}
+          f:unverifiedUserAnnotations:
+            .: {}
+            f:example.org/signer-cn: {}
+            f:example.org/signer-san: {}
+            f:example.org/signer-uris: {}
+      manager: kubelet
+      operation: Update
+      time: "2026-11-16T12:57:44Z"
+    - apiVersion: certificates.k8s.io/v1
+      fieldsType: FieldsV1
+      fieldsV1:
+        f:status:
+          f:beginRefreshAt: {}
+          f:certificateChain: {}
+          f:conditions:
+            .: {}
+            k:{"type":"Issued"}:
+              .: {}
+              f:lastTransitionTime: {}
+              f:message: {}
+              f:reason: {}
+              f:status: {}
+              f:type: {}
+          f:notAfter: {}
+          f:notBefore: {}
+      manager: manager
+      operation: Update
+      subresource: status
+      time: "2026-11-16T12:57:44Z"
+    name: req-44ct7
+# exit code: 0
+
+# date: 2026-11-16T13:00:42Z
+$ kubectl -n pcs-system logs -l app.kubernetes.io/name=pod-certificate-signer --tail=-1 --prefix | grep req-44ct7
+[pod/pod-certificate-signer-64f6896f67-l6p7x/pod-certificate-signer] 2026-11-16T12:57:44Z	INFO	PodCertificateSigner	issued certificate	{"name": "req-44ct7", "namespace": "default", "podName": "pcs-example-workload", "podNamespace": "default", "commonName": "pcs-example-workload.default.svc.cluster.local", "dnsNames": ["pcs-example-workload.default.svc", "default.default"], "ipAddresses": null, "uris": [{"Scheme":"spiffe","Opaque":"","User":null,"Host":"cluster.local","Path":"/ns/default/sa/default","Fragment":"","RawQuery":"","RawPath":"","RawFragment":"","ForceQuery":false,"OmitHost":false}], "extKeyUsage": [1], "notAfter": "2026-11-17T12:56:44Z", "beginRefreshAt": "2026-11-17T12:41:44Z"}
+[pod/pod-certificate-signer-64f6896f67-l6p7x/pod-certificate-signer] 2026-11-16T12:57:44Z	INFO	PodCertificateSigner	request is already terminal; nothing to do	{"name": "req-44ct7", "namespace": "default", "podName": "pcs-example-workload", "podNamespace": "default"}
+# exit code: 0
+

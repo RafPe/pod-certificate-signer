@@ -1,0 +1,34 @@
+# date: 2026-11-16T13:16:40Z
+$ kubectl get clustertrustbundle example.org:signer:bundle
+NAME                        SIGNERNAME
+example.org:signer:bundle   example.org/signer
+# exit code: 0
+
+# date: 2026-11-16T13:16:40Z
+$ kubectl get podcertificaterequests -n default
+NAME        PODNAME                SERVICEACCOUNTNAME   NODENAME                   SIGNERNAME                 STATE     UNVERIFIEDUSERANNOTATIONS
+req-5sksd   pcs-example-workload   default              pcs-art-01-control-plane   example.org/signer         Issued    example.org/signer-cn=${pod.name}.${pod.namespace}.svc.${cluster.fqdn},example.org/signer-san=${pod.name}.${pod.namespace}.svc,${pod.serviceAccountName}.${pod.namespace},example.org/signer-uris=spiffe://${cluster.fqdn}/ns/${pod.namespace}/sa/${pod.serviceAccountName}
+req-nfmgp   pcs-wrong-signer       default              pcs-art-01-control-plane   example.org/other-signer   Pending   <none>
+# exit code: 0
+
+# date: 2026-11-16T13:16:40Z
+$ kubectl exec pcs-example-workload -- cat /var/run/x509/credentialbundle.pem \
+  | openssl verify -CAfile <(kubectl exec pcs-example-workload -- cat /var/run/x509/ca.crt)
+stdin: OK
+# exit code: 0
+
+# date: 2026-11-16T13:16:40Z
+$ kubectl delete -f examples/workload-pod.yaml
+pod "pcs-example-workload" deleted from default namespace
+# exit code: 0
+
+# date: 2026-11-16T13:17:11Z
+$ kubectl delete -f wrong-signer-pod.yaml
+pod "pcs-wrong-signer" deleted from default namespace
+# exit code: 0
+
+# date: 2026-11-16T13:17:13Z
+$ kubectl get podcertificaterequests -A
+No resources found
+# exit code: 0
+

@@ -1,0 +1,16 @@
+# date: 2026-11-16T12:57:44Z
+$ kubectl apply -f examples/workload-pod.yaml
+pod/pcs-example-workload created
+# exit code: 0
+
+# date: 2026-11-16T12:57:44Z
+$ kubectl wait --for=condition=Ready pod/pcs-example-workload --timeout=120s
+pod/pcs-example-workload condition met
+# exit code: 0
+
+# date: 2026-11-16T12:57:51Z
+$ kubectl get pod pcs-example-workload
+NAME                   READY   STATUS    RESTARTS   AGE
+pcs-example-workload   1/1     Running   0          7s
+# exit code: 0
+

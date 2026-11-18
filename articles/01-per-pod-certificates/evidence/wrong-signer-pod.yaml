@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pcs-wrong-signer
+  namespace: default
+spec:
+  restartPolicy: Never
+  containers:
+  - name: sleeper
+    image: busybox:1.37
+    command: ["sleep", "600"]
+    volumeMounts:
+    - name: x509
+      mountPath: /var/run/x509
+      readOnly: true
+  volumes:
+  - name: x509
+    projected:
+      sources:
+      - podCertificate:
+          keyType: ED25519
+          signerName: example.org/other-signer
+          credentialBundlePath: credentialbundle.pem

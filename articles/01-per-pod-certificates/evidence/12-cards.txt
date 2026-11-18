@@ -1,0 +1,67 @@
+# date: 2026-11-16T13:14:27Z
+$ kubectl apply -f examples/workload-pod.yaml
+pod/pcs-example-workload created
+# exit code: 0
+
+# date: 2026-11-16T13:14:27Z
+$ kubectl wait --for=condition=Ready pod/pcs-example-workload --timeout=120s
+pod/pcs-example-workload condition met
+# exit code: 0
+
+# date: 2026-11-16T13:14:29Z
+$ kubectl get podcertificaterequests -n default \
+    -o jsonpath='{range .items[*].status.conditions[*]}{.type} {.reason}{"\n"}{end}'
+Issued CertificateIssued
+# exit code: 0
+
+# date: 2026-11-16T13:14:29Z
+$ kubectl get podcertificaterequests -n default \
+    -o jsonpath='{range .items[*].metadata.managedFields[*]}{.manager} {.subresource}{"\n"}{end}'
+kubelet 
+manager status
+# exit code: 0
+
+# date: 2026-11-16T13:14:30Z
+$ kubectl exec pcs-example-workload -- ls /var/run/x509
+ca.crt
+credentialbundle.pem
+# exit code: 0
+
+# date: 2026-11-16T13:14:30Z
+$ kubectl exec pcs-example-workload -- cat /var/run/x509/credentialbundle.pem \
+    | openssl x509 -noout -subject -issuer -dates \
+      -ext subjectAltName,extendedKeyUsage,keyUsage,basicConstraints \
+    | tr ',' '\n'
+subject=CN=pcs-example-workload.default.svc.cluster.local
+issuer=CN=pcs-art-01 test CA
+notBefore=Nov 16 13:13:27 2026 GMT
+notAfter=Nov 17 13:13:27 2026 GMT
+X509v3 Key Usage: critical
+    Digital Signature
+X509v3 Extended Key Usage: 
+    TLS Web Server Authentication
+X509v3 Basic Constraints: critical
+    CA:FALSE
+X509v3 Subject Alternative Name: 
+    DNS:pcs-example-workload.default.svc
+ DNS:default.default
+ URI:spiffe://cluster.local/ns/default/sa/default
+# exit code: 0
+
+# date: 2026-11-16T13:14:30Z
+$ kubectl get podcertificaterequests -n default -o yaml | grep -E "^    (notBefore|notAfter|beginRefreshAt|maxExpirationSeconds):|creationTimestamp"
+    creationTimestamp: "2026-11-16T13:14:27Z"
+    maxExpirationSeconds: 86400
+    beginRefreshAt: "2026-11-17T12:58:27Z"
+    notAfter: "2026-11-17T13:13:27Z"
+    notBefore: "2026-11-16T13:13:27Z"
+# exit code: 0
+
+# date: 2026-11-16T13:16:40Z
+$ kubectl -n pcs-system logs -l app.kubernetes.io/name=pod-certificate-signer --tail=-1 | grep "issued certificate" | grep -o "^.*issued certificate	{\"name\": \"[a-z0-9-]*\""
+2026-11-16T12:57:44Z	INFO	PodCertificateSigner	issued certificate	{"name": "req-44ct7"
+2026-11-16T13:03:01Z	INFO	PodCertificateSigner	issued certificate	{"name": "req-njwxd"
+2026-11-16T13:11:32Z	INFO	PodCertificateSigner	issued certificate	{"name": "req-z2hgf"
+2026-11-16T13:14:27Z	INFO	PodCertificateSigner	issued certificate	{"name": "req-5sksd"
+# exit code: 0
+

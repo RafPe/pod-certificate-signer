@@ -1,0 +1,37 @@
+# date: 2026-11-16T13:12:26Z
+$ kubectl apply -f wrong-signer-pod.yaml
+pod/pcs-wrong-signer created
+# exit code: 0
+
+# date: 2026-11-16T13:13:26Z
+$ kubectl get pod pcs-wrong-signer
+NAME               READY   STATUS              RESTARTS   AGE
+pcs-wrong-signer   0/1     ContainerCreating   0          60s
+# exit code: 0
+
+# date: 2026-11-16T13:13:26Z
+$ kubectl describe pod pcs-wrong-signer | sed -n '/^Events:/,$p'
+Events:
+  Type     Reason       Age                From               Message
+  ----     ------       ----               ----               -------
+  Normal   Scheduled    60s                default-scheduler  Successfully assigned default/pcs-wrong-signer to pcs-art-01-control-plane
+  Warning  FailedMount  28s (x7 over 59s)  kubelet            MountVolume.SetUp failed for volume "x509" : credential bundle is not issued yet
+# exit code: 0
+
+# date: 2026-11-16T13:13:26Z
+$ kubectl get podcertificaterequests -A -o custom-columns=NAME:.metadata.name,POD:.spec.podName,SIGNER:.spec.signerName,CONDITIONS:.status.conditions[*].type
+NAME        POD                SIGNER                     CONDITIONS
+req-lp8lt   pcs-wrong-signer   example.org/other-signer   <none>
+# exit code: 0
+
+# date: 2026-11-16T13:13:27Z
+$ kubectl -n pcs-system logs -l app.kubernetes.io/name=pod-certificate-signer --tail=-1 | grep 'another signer' | grep -o '"signerName.*'
+"signerName": "example.org/other-signer", "controllerSignerName": "example.org/signer"}
+"signerName": "example.org/other-signer", "controllerSignerName": "example.org/signer"}
+# exit code: 0
+
+# date: 2026-11-16T13:13:27Z
+$ kubectl delete -f wrong-signer-pod.yaml
+pod "pcs-wrong-signer" deleted from default namespace
+# exit code: 0
+

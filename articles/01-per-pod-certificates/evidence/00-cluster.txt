@@ -1,0 +1,22 @@
+# date: 2026-11-16T12:54:54Z
+$ kubectl version
+Client Version: v1.35.0
+Kustomize Version: v5.7.1
+Server Version: v1.37.0
+Warning: version difference between client (1.35) and server (1.37) exceeds the supported minor version skew of +/-1
+# exit code: 0
+
+# date: 2026-11-16T12:54:54Z
+$ kubectl get nodes -o wide
+NAME                       STATUS   ROLES           AGE   VERSION   INTERNAL-IP     EXTERNAL-IP   OS-IMAGE                       KERNEL-VERSION                                CONTAINER-RUNTIME
+pcs-art-01-control-plane   Ready    control-plane   25s   v1.37.0   192.168.107.4   <none>        Debian GNU/Linux 13 (trixie)   7.2.12-orbstack-00394-gbecdd6130068 (arm64)   containerd://2.3.4
+# exit code: 0
+
+# date: 2026-11-16T12:54:54Z
+$ kubectl api-resources --api-group=certificates.k8s.io
+NAME                         SHORTNAMES   APIVERSION               NAMESPACED   KIND
+certificatesigningrequests   csr          certificates.k8s.io/v1   false        CertificateSigningRequest
+clustertrustbundles                       certificates.k8s.io/v1   false        ClusterTrustBundle
+podcertificaterequests                    certificates.k8s.io/v1   true         PodCertificateRequest
+# exit code: 0
+

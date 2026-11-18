@@ -1,0 +1,38 @@
+# date: 2026-11-16T13:03:01Z
+$ kubectl apply -f examples/workload-pod.yaml
+pod/pcs-example-workload created
+# exit code: 0
+
+# date: 2026-11-16T13:03:01Z
+$ kubectl wait --for=condition=Ready pod/pcs-example-workload --timeout=120s
+pod/pcs-example-workload condition met
+# exit code: 0
+
+# date: 2026-11-16T13:03:02Z
+$ kubectl get clustertrustbundle example.org:signer:bundle
+NAME                        SIGNERNAME
+example.org:signer:bundle   example.org/signer
+# exit code: 0
+
+# date: 2026-11-16T13:03:02Z
+$ kubectl get podcertificaterequests -n default
+NAME        PODNAME                SERVICEACCOUNTNAME   NODENAME                   SIGNERNAME           STATE    UNVERIFIEDUSERANNOTATIONS
+req-njwxd   pcs-example-workload   default              pcs-art-01-control-plane   example.org/signer   Issued   example.org/signer-cn=${pod.name}.${pod.namespace}.svc.${cluster.fqdn},example.org/signer-san=${pod.name}.${pod.namespace}.svc,${pod.serviceAccountName}.${pod.namespace},example.org/signer-uris=spiffe://${cluster.fqdn}/ns/${pod.namespace}/sa/${pod.serviceAccountName}
+# exit code: 0
+
+# date: 2026-11-16T13:03:02Z
+$ kubectl exec pcs-example-workload -- cat /var/run/x509/credentialbundle.pem \
+  | openssl verify -CAfile <(kubectl exec pcs-example-workload -- cat /var/run/x509/ca.crt)
+stdin: OK
+# exit code: 0
+
+# date: 2026-11-16T13:03:02Z
+$ kubectl delete -f examples/workload-pod.yaml
+pod "pcs-example-workload" deleted from default namespace
+# exit code: 0
+
+# date: 2026-11-16T13:03:33Z
+$ kubectl get podcertificaterequests -n default
+No resources found in default namespace.
+# exit code: 0
+

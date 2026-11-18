@@ -1,0 +1,15 @@
+# date: 2026-11-16T13:00:57Z
+$ kubectl delete -f wrong-signer-pod.yaml
+pod "pcs-wrong-signer" deleted from default namespace
+# exit code: 0
+
+# date: 2026-11-16T13:00:59Z
+$ kubectl delete -f examples/workload-pod.yaml
+pod "pcs-example-workload" deleted from default namespace
+# exit code: 0
+
+# date: 2026-11-16T13:01:31Z
+$ kubectl get podcertificaterequests -A
+No resources found
+# exit code: 0
+

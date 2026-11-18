@@ -1,0 +1,25 @@
+# date: 2026-11-16T13:11:32Z
+$ kubectl apply -f examples/workload-pod.yaml
+pod/pcs-example-workload created
+# exit code: 0
+
+# date: 2026-11-16T13:11:32Z
+$ kubectl wait --for=condition=Ready pod/pcs-example-workload --timeout=120s
+pod/pcs-example-workload condition met
+# exit code: 0
+
+# date: 2026-11-16T13:11:33Z
+$ kubectl exec pcs-example-workload -- which openssl
+command terminated with exit code 1
+# exit code: 1
+
+# date: 2026-11-16T13:11:33Z
+$ kubectl exec pcs-example-workload -- openssl version
+error: Internal error occurred: Internal error occurred: error executing command in container: failed to exec in container: failed to start exec "950fd9b623c44e8b517dccdbf092e702e16e42b2455e4cd92eda1c25bf62ce6a": OCI runtime exec failed: exec failed: unable to start container process: exec: "openssl": executable file not found in $PATH
+# exit code: 1
+
+# date: 2026-11-16T13:11:34Z
+$ kubectl delete -f examples/workload-pod.yaml
+pod "pcs-example-workload" deleted from default namespace
+# exit code: 0
+
