@@ -1,0 +1,5 @@
+# Latest stable versions checked against PyPI JSON on 2026-11-16.
+Markdown==3.11.3
+playwright==1.65.2
+# Transitive dependency checked on 2026-11-16.
+greenlet==3.5.6

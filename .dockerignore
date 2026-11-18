@@ -13,3 +13,6 @@ bin/
 .codegraph/
 .ecc/
 .git/
+
+# The article series: text and images, never part of an image build.
+articles/

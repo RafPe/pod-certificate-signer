@@ -1,0 +1,52 @@
+# date: 2026-11-16T12:57:24Z
+$ helm install pod-certificate-signer oci://ghcr.io/rafpe/charts/pod-certificate-signer --version 3.1.0 --namespace pcs-system --set signer.name=example.org/signer --set signer.ca.secretRef.name=podcertificate-signer-ca
+Pulled: ghcr.io/rafpe/charts/pod-certificate-signer:3.1.0
+Digest: sha256:d5408db07764d3676a9314b35f02035e0ed318f01cc53574f845454583002728
+NAME: pod-certificate-signer
+LAST DEPLOYED: Mon Nov 16 14:57:26 2026
+NAMESPACE: pcs-system
+STATUS: deployed
+REVISION: 1
+DESCRIPTION: Install complete
+TEST SUITE: None
+# exit code: 0
+
+# date: 2026-11-16T12:57:26Z
+$ kubectl -n pcs-system rollout status deploy/pod-certificate-signer --timeout=180s
+Waiting for deployment "pod-certificate-signer" rollout to finish: 0 of 2 updated replicas are available...
+Waiting for deployment "pod-certificate-signer" rollout to finish: 1 of 2 updated replicas are available...
+deployment "pod-certificate-signer" successfully rolled out
+# exit code: 0
+
+# date: 2026-11-16T12:57:36Z
+$ kubectl get clustertrustbundle
+NAME                                                            SIGNERNAME
+example.org:signer:bundle                                       example.org/signer
+kubernetes.io:kube-apiserver-serving:ecb6f5dc135f94dd439d0dd1   kubernetes.io/kube-apiserver-serving
+# exit code: 0
+
+# date: 2026-11-16T12:57:36Z
+$ kubectl -n pcs-system get pods -o wide
+NAME                                      READY   STATUS    RESTARTS   AGE   IP           NODE                       NOMINATED NODE   READINESS GATES
+pod-certificate-signer-64f6896f67-l6p7x   1/1     Running   0          10s   10.244.0.5   pcs-art-01-control-plane   <none>           <none>
+pod-certificate-signer-64f6896f67-spck5   1/1     Running   0          10s   10.244.0.6   pcs-art-01-control-plane   <none>           <none>
+# exit code: 0
+
+# date: 2026-11-16T12:57:36Z
+$ kubectl -n pcs-system get deploy pod-certificate-signer -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}{.spec.template.spec.containers[0].args}{"\n"}'
+ghcr.io/rafpe/pod-certificate-signer:v3.1.0
+# exit code: 0
+
+# date: 2026-11-16T13:00:42Z
+$ helm get values pod-certificate-signer -n pcs-system --all | grep -E 'cluster_fqdn|name: example|replicaCount'
+replicaCount: 2
+  cluster_fqdn: cluster.local
+  name: example.org/signer
+# exit code: 0
+
+# date: 2026-11-16T13:00:42Z
+$ kubectl -n pcs-system get deploy pod-certificate-signer -o yaml | grep -E -- '- --(signer-name|cluster-fqdn)'
+        - --signer-name=example.org/signer
+        - --cluster-fqdn=cluster.local
+# exit code: 0
+

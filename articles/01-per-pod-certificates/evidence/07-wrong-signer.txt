@@ -1,0 +1,66 @@
+# date: 2026-11-16T12:58:18Z
+$ cat wrong-signer-pod.yaml | grep -n signerName
+22:          signerName: example.org/other-signer
+# exit code: 0
+
+# date: 2026-11-16T12:58:18Z
+$ kubectl apply -f wrong-signer-pod.yaml
+pod/pcs-wrong-signer created
+# exit code: 0
+
+# date: 2026-11-16T12:59:18Z
+$ kubectl get pod pcs-wrong-signer
+NAME               READY   STATUS              RESTARTS   AGE
+pcs-wrong-signer   0/1     ContainerCreating   0          60s
+# exit code: 0
+
+# date: 2026-11-16T12:59:18Z
+$ kubectl get podcertificaterequests -A -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,POD:.spec.podName,SIGNER:.spec.signerName,CONDITIONS:.status.conditions[*].type
+NS        NAME        POD                    SIGNER                     CONDITIONS
+default   req-44ct7   pcs-example-workload   example.org/signer         Issued
+default   req-m5wp4   pcs-wrong-signer       example.org/other-signer   <none>
+# exit code: 0
+
+# date: 2026-11-16T12:59:18Z
+$ kubectl get events -n default --field-selector involvedObject.name=pcs-wrong-signer
+LAST SEEN   TYPE      REASON        OBJECT                 MESSAGE
+60s         Normal    Scheduled     pod/pcs-wrong-signer   Successfully assigned default/pcs-wrong-signer to pcs-art-01-control-plane
+28s         Warning   FailedMount   pod/pcs-wrong-signer   MountVolume.SetUp failed for volume "x509" : credential bundle is not issued yet
+# exit code: 0
+
+# date: 2026-11-16T12:59:18Z
+$ kubectl describe pod pcs-wrong-signer | sed -n '/^Events:/,$p'
+Events:
+  Type     Reason       Age                From               Message
+  ----     ------       ----               ----               -------
+  Normal   Scheduled    60s                default-scheduler  Successfully assigned default/pcs-wrong-signer to pcs-art-01-control-plane
+  Warning  FailedMount  28s (x7 over 60s)  kubelet            MountVolume.SetUp failed for volume "x509" : credential bundle is not issued yet
+# exit code: 0
+
+# date: 2026-11-16T12:59:18Z
+$ kubectl -n pcs-system logs -l app.kubernetes.io/name=pod-certificate-signer --tail=-1 --prefix | grep 'another signer'
+[pod/pod-certificate-signer-64f6896f67-l6p7x/pod-certificate-signer] 2026-11-16T12:58:18Z	INFO	PodCertificateSigner	request is addressed to another signer; ignoring	{"name": "req-m5wp4", "namespace": "default", "podName": "pcs-wrong-signer", "podNamespace": "default", "signerName": "example.org/other-signer", "controllerSignerName": "example.org/signer"}
+# exit code: 0
+
+# date: 2026-11-16T13:00:42Z
+$ kubectl describe podcertificaterequest -n default req-m5wp4 | sed -n '/^Spec:/,/^Events/p' | grep -v -E 'Stub|^\s+[A-Za-z0-9+/=]{40,}'
+Spec:
+  Max Expiration Seconds:  86400
+  Node Name:               pcs-art-01-control-plane
+  Node UID:                3558872b-8019-4e2d-acfd-fd52a953b6bb
+  Pod Name:                pcs-wrong-signer
+  Pod UID:                 20ad2693-1e0f-4044-88f3-6c03b04b0468
+  Service Account Name:    default
+  Service Account UID:     f993f130-a2d9-4a7a-ab3e-f47af09af0e0
+  Signer Name:             example.org/other-signer
+  stubPKCS10Request:       MH8wMwIBADAAMCowBQYDK2VwAyEAq9k45sShvWr+DHHNclV58RNkFit87arwwrFzAiC2FqOgADAFBgMrZXADQQCELVlveumGR5PixWFHksYRupONQ7cIldyPcrcNLE84/2uNGm+O78R9iM7yijheS3i3ehjlskG430QUfTc11oEL
+Status:
+Events:  <none>
+# exit code: 0
+
+# date: 2026-11-16T13:00:42Z
+$ kubectl describe podcertificaterequest -n default req-m5wp4 | grep -E '^(Status|Events):' -A3
+Status:
+Events:  <none>
+# exit code: 0
+

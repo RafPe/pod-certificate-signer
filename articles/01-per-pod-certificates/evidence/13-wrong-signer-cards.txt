@@ -1,0 +1,45 @@
+# date: 2026-11-16T13:14:38Z
+$ kubectl apply -f wrong-signer-pod.yaml
+pod/pcs-wrong-signer created
+# exit code: 0
+
+# date: 2026-11-16T13:15:38Z
+$ kubectl get pod pcs-wrong-signer
+NAME               READY   STATUS              RESTARTS   AGE
+pcs-wrong-signer   0/1     ContainerCreating   0          60s
+# exit code: 0
+
+# date: 2026-11-16T13:15:39Z
+$ kubectl get events -n default \
+    --field-selector involvedObject.name=pcs-wrong-signer,reason=FailedMount \
+    -o custom-columns=REASON:.reason,MESSAGE:.message
+REASON        MESSAGE
+FailedMount   MountVolume.SetUp failed for volume "x509" : credential bundle is not issued yet
+FailedMount   MountVolume.SetUp failed for volume "x509" : credential bundle is not issued yet
+FailedMount   MountVolume.SetUp failed for volume "x509" : credential bundle is not issued yet
+# exit code: 0
+
+# date: 2026-11-16T13:15:39Z
+$ kubectl get podcertificaterequests -A \
+    -o custom-columns=POD:.spec.podName,SIGNER:.spec.signerName,STATE:.status.conditions[*].type
+POD                    SIGNER                     STATE
+pcs-example-workload   example.org/signer         Issued
+pcs-wrong-signer       example.org/other-signer   <none>
+# exit code: 0
+
+# date: 2026-11-16T13:15:39Z
+$ kubectl -n pcs-system logs -l app.kubernetes.io/name=pod-certificate-signer --tail=-1 \
+    | grep 'another signer' | tail -1 | grep -o '"signerName.*'
+"signerName": "example.org/other-signer", "controllerSignerName": "example.org/signer"}
+# exit code: 0
+
+# date: 2026-11-16T13:15:39Z
+$ kubectl describe podcertificaterequest -n default -l "!x" 2>/dev/null | grep -E "^(Name|Status|Events):"
+Name:         req-5sksd
+Status:
+Events:
+Name:         req-nfmgp
+Status:
+Events:  <none>
+# exit code: 0
+

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="836" height="470" viewBox="0 0 836 470" font-family="-apple-system, 'SF Pro Rounded', 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#faf6ea"/><stop offset="1" stop-color="#f3ebd6"/></linearGradient>
+    <linearGradient id="stripe" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#2f63d6"/><stop offset="1" stop-color="#2a9d5c"/></linearGradient>
+  </defs>
+  <rect width="836" height="470" fill="url(#bg)"/>
+  <rect width="836" height="8" fill="url(#stripe)"/>
+  <text x="48" y="96" font-size="18" font-weight="700" fill="#2f63d6" letter-spacing="1">KUBERNETES · POD CERTIFICATE SIGNER</text>
+  <text x="48" y="190" font-size="72" font-weight="800" fill="#2f63d6">Sample</text>
+  <text x="48" y="270" font-size="72" font-weight="800" fill="#1f2a44">cover</text>
+  <text x="48" y="330" font-size="24" fill="#5b6785">A placeholder for the render tool sample</text>
+</svg>

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="560" viewBox="0 0 1400 560" role="img" aria-labelledby="title desc" font-family="-apple-system, 'SF Pro Rounded', 'Segoe UI', Helvetica, Arial, sans-serif">
+<title id="title">From source to preview</title><desc id="desc">Article source supplies the renderer. The renderer creates a preview.</desc>
+<defs>
+<linearGradient id="bg"><stop stop-color="#faf6ea"/><stop offset="1" stop-color="#f3ebd6"/></linearGradient>
+<linearGradient id="stripe"><stop stop-color="#2f63d6"/><stop offset="1" stop-color="#2a9d5c"/></linearGradient>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8Z" fill="#2f63d6"/></marker>
+</defs>
+<rect width="1400" height="560" fill="url(#bg)"/><rect width="1400" height="8" fill="url(#stripe)"/>
+<text x="40" y="76" font-size="36" font-weight="750" fill="#1f2a44">From source to preview</text>
+<g fill="white" stroke="#e3ddcb" stroke-width="2">
+<rect x="40" y="150" width="340" height="160" rx="18"/>
+<rect x="530" y="150" width="340" height="160" rx="18"/>
+<rect x="1020" y="150" width="340" height="160" rx="18"/>
+</g>
+<g fill="#1f2a44" font-size="28" font-weight="700">
+<text x="68" y="206">Article source</text><text x="558" y="206">Renderer</text><text x="1048" y="206">Preview</text>
+</g>
+<g fill="#5b6785" font-size="23">
+<text x="68" y="256">Markdown and assets</text><text x="558" y="256">Checks the code text</text><text x="1048" y="256">HTML and images</text>
+</g>
+<g fill="none" stroke="#2f63d6" stroke-width="3" marker-end="url(#arrow)"><path d="M380 230 H520"/><path d="M870 230 H1010"/></g>
+<g fill="#1f2a44" font-size="21" text-anchor="middle"><text x="450" y="202">Read</text><text x="940" y="202">Render</text></g>
+<rect x="40" y="366" width="1320" height="74" rx="18" fill="#e8efff" stroke="#cbd8fa"/>
+<text x="68" y="413" font-size="27" font-weight="700" fill="#2f63d6">One source supplies the code card and the copyable text.</text>
+<text x="40" y="512" font-size="23" fill="#5b6785">This diagram describes the toolkit. It does not describe certificate issuance.</text>
+</svg>

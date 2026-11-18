@@ -1,0 +1,68 @@
+# date: 2026-11-16T12:58:03Z
+$ kubectl exec pcs-example-workload -- cat /var/run/x509/credentialbundle.pem | openssl x509 -noout -subject -issuer -dates -ext subjectAltName,extendedKeyUsage,keyUsage,basicConstraints
+subject=CN=pcs-example-workload.default.svc.cluster.local
+issuer=CN=pcs-art-01 test CA
+notBefore=Nov 16 12:56:44 2026 GMT
+notAfter=Nov 17 12:56:44 2026 GMT
+X509v3 Key Usage: critical
+    Digital Signature
+X509v3 Extended Key Usage: 
+    TLS Web Server Authentication
+X509v3 Basic Constraints: critical
+    CA:FALSE
+X509v3 Subject Alternative Name: 
+    DNS:pcs-example-workload.default.svc, DNS:default.default, URI:spiffe://cluster.local/ns/default/sa/default
+# exit code: 0
+
+# date: 2026-11-16T12:58:03Z
+$ kubectl exec pcs-example-workload -- cat /var/run/x509/credentialbundle.pem | openssl x509 -noout -text
+Certificate:
+    Data:
+        Version: 3 (0x2)
+        Serial Number:
+            26:1e:32:b6:e6:f6:d3:bd:a7:a2:ff:87:bc:76:8c:36
+        Signature Algorithm: ecdsa-with-SHA256
+        Issuer: CN=pcs-art-01 test CA
+        Validity
+            Not Before: Nov 16 12:56:44 2026 GMT
+            Not After : Nov 17 12:56:44 2026 GMT
+        Subject: CN=pcs-example-workload.default.svc.cluster.local
+        Subject Public Key Info:
+            Public Key Algorithm: ED25519
+                ED25519 Public-Key:
+                pub:
+                    92:d6:70:c0:87:3f:b8:dc:ea:40:5a:77:ba:82:47:ca:
+                    37:20:61:83:ec:9f:b4:83:f8:91:0e:31:73:64:74:5b
+        X509v3 extensions:
+            X509v3 Key Usage: critical
+                Digital Signature
+            X509v3 Extended Key Usage: 
+                TLS Web Server Authentication
+            X509v3 Basic Constraints: critical
+                CA:FALSE
+            X509v3 Authority Key Identifier: 
+                46:52:9D:7C:44:71:0E:BA:07:98:08:EE:7E:C2:43:BB:E1:71:A3:AA
+            X509v3 Subject Alternative Name: 
+                DNS:pcs-example-workload.default.svc, DNS:default.default, URI:spiffe://cluster.local/ns/default/sa/default
+    Signature Algorithm: ecdsa-with-SHA256
+    Signature Value:
+        30:45:02:21:00:98:de:d1:d0:95:99:51:1f:ba:24:9f:91:c9:c3:7b:8d:a6:43:a3:
+        d5:a2:50:df:6a:cb:a6:1e:ba:c3:a5:3b:76:02:20:3f:2c:88:9c:11:87:33:b0:d4:
+        e6:ab:7c:f8:54:a3:fe:fe:9f:70:fc:5b:08:05:8c:8a:1c:9f:d8:d9:6f:e3:e2
+# exit code: 0
+
+# date: 2026-11-16T12:58:03Z
+$ kubectl exec pcs-example-workload -- cat /var/run/x509/credentialbundle.pem | openssl verify -CAfile <(kubectl exec pcs-example-workload -- cat /var/run/x509/ca.crt)
+stdin: OK
+# exit code: 0
+
+# date: 2026-11-16T12:58:04Z
+$ kubectl get pod pcs-example-workload -o jsonpath='{.spec.serviceAccountName}{"\n"}'
+default
+# exit code: 0
+
+# date: 2026-11-16T13:00:42Z
+$ openssl version
+OpenSSL 4.1.0 23 Oct 2026 (Library: OpenSSL 4.1.0 23 Oct 2026)
+# exit code: 0
+

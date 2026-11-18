@@ -1,0 +1,13 @@
+# Everything below is an output of _shared/render.py. Run the render tool to
+# make it again. Git tracks the sources: text, evidence, SVG diagrams and the
+# cover (cover.jpg), which no command makes again.
+*/assets/*.png
+*/*/assets/*.png
+*/assets/*.html
+*/*/assets/*.html
+preview.html
+desktop.png
+mobile.png
+card-inspection.html
+card-inspection.png
+__pycache__/
