@@ -32,14 +32,20 @@ What happens next:
 1. **The controller reloads the CA.** Every replica watches the mounted CA
    files (fsnotify) and reloads them in place. It also reloads them every 60
    seconds. New certificates get the new CA without a rollout. Kubelet updates
-   a mounted Secret on its sync period (up to about 1 minute), so expect a
-   short delay. Mount the Secret as a plain volume. Kubelet **never** updates
-   a `subPath` mount after the pod starts.
+   a mounted Secret on its sync period and after its cache delay, so expect a
+   delay. The delay can be more than 1 minute. In our test on Kubernetes
+   1.37.0, the leader reloaded 29 to 62 seconds after the apply. The standby
+   replica reloaded 36 to 79 seconds after the apply. Mount the Secret as a
+   plain volume. Kubelet **never** updates a `subPath` mount after the pod
+   starts.
 2. **The old CA stays trusted.** The elected leader publishes the
    `ClusterTrustBundle` again, with the new CA first and the previous CAs after
    it. It keeps up to `--max-previous-ca-certs` (default `2`) previous CAs.
    Workloads that mount the bundle continue to verify peers that still have a
-   certificate from the old CA.
+   certificate from the old CA. This order applies to the `ClusterTrustBundle`
+   object. In our test, the mounted `ca.crt` files listed the CAs in a
+   different order. Applications must not rely on the order of the CAs in the
+   mounted file.
 3. **Old certificates expire on their own.** An issued certificate stays valid
    until it expires. Its lifetime is at most the request's `duration` (default
    `24h`, capped by `maxExpirationSeconds`). Kubelet then requests a new
@@ -89,22 +95,57 @@ anchor.
 Rotation is one `kubectl apply`, but it is not instant and it is not atomic.
 The four items below decide if the rotation is quiet or if it stops a fleet.
 
-**Allow up to about 6 minutes for the new CA to reach running workloads.** In
-our e2e tests, a full rotation reached the mounted `ca.crt` files after
-**5m13s** and **5m26s** on two runs. The controller is not the cause of the
-delay. It reloads and publishes within seconds after the new Secret reaches
-its mount. Kubelet is the cause:
+**The delay until the new CA reaches running workloads depends on the
+projection form and on the Kubernetes version.** The controller is not the
+cause of the delay. It reloads and publishes within seconds after the new
+Secret reaches its mount. Kubelet is the cause:
 
-- For a projection that names the `ClusterTrustBundle` by `name`, kubelet
-  serves the bundle from a normalization cache with a **hard-coded 5-minute
-  TTL**. **No flag makes this shorter.**
+- Kubelet serves a projected `ClusterTrustBundle` from a normalization cache
+  with a **hard-coded 5-minute TTL**. **No flag makes this TTL shorter.**
 - Kubelet then writes the new value at the next pod sync (`--sync-frequency`,
   default 1 minute).
+- Before Kubernetes 1.38, a change to a bundle with a `spec.signerName` does
+  not clear the cache entries that kubelet keys by object `name`. This
+  signer's bundle always has a `spec.signerName`. Thus a projection by `name`
+  keeps the old anchors until the TTL expires
+  ([kubernetes#141439](https://github.com/kubernetes/kubernetes/issues/141439)).
+- [kubernetes#141459](https://github.com/kubernetes/kubernetes/pull/141459)
+  clears these entries when the bundle changes. This change is in the tag
+  `v1.38.0-beta.0`. As of 2026-11-16, Kubernetes 1.38.0 is not released. As
+  of the same date, the change is not in the 1.37 branch, and no cherry-pick
+  PR exists.
 
-Plan the maintenance window for six minutes, not for the time of the apply.
+| Projection form | Kubernetes 1.37 | Kubernetes 1.38 and later |
+| --- | --- | --- |
+| `signerName` (with `labelSelector`) | Upstream measured 0 to 95 seconds. Our rotation test measured **50 to 124 seconds** after the Secret apply, and 20 to 61 seconds after the bundle update. | kubernetes#141459 changes only the entries keyed by `name`. Not measured. |
+| `name` | Up to about 6 minutes: the TTL plus one pod sync. Our e2e tests measured **5m13s** and **5m26s** on two runs. Our rotation test measured **274 to 315 seconds** after the Secret apply, and 211 to 271 seconds after the bundle update. Upstream measured 290 to 374 seconds. | Kubelet clears the entry when the bundle changes. Upstream measured 0 to 95 seconds for the comparable case. Not measured. |
 
-**Rotate with an overlap window. Do not swap the CAs.** During those six
-minutes, some pods have a certificate from the old CA and some from the new CA.
+The upstream figures come from the description of kubernetes#141459. Upstream
+measured them on kind clusters without the change. One pod mounted one bundle
+three ways. The comparable case for 1.38 is a projection by `name` of a bundle
+without a `spec.signerName`. The e2e figures come from the e2e suite of this
+repository. It projects by `name` on a `kindest/node:v1.37.0` cluster.
+
+The rotation test figures come from one manual test on 2026-11-16. It used
+Kubernetes 1.37.0 on Kind, chart 3.1.0 and one node. One pod mounted the
+bundle by `signerName` and by `name`. The test made three rotations. We
+counted each time from the Secret apply. The leader reloaded and published
+the bundle 29 to 62 seconds after the apply. The three rotations ran 5 to 6
+minutes apart and share one kubelet cache rhythm. Thus they are not
+independent samples. The ranges are not bounds.
+[`examples/workload-pod.yaml`](../examples/workload-pod.yaml) and
+[Getting started](./getting-started.md) project by `signerName`.
+
+The two forms trust different sets of CAs. A projection by `name` trusts one
+named `ClusterTrustBundle` object. A projection by `signerName` trusts every
+bundle for that signer that the `labelSelector` selects. `labelSelector: {}`
+selects all of them. Do not change the form only to get a shorter delay.
+
+Plan the maintenance window for the delay in the table, not for the time of
+the apply. On Kubernetes 1.37 with the `name` form, plan for six minutes.
+
+**Rotate with an overlap window. Do not swap the CAs.** During the delay, some
+pods have a certificate from the old CA and some from the new CA.
 Verification must work in both directions. `signer.max_previous_ca_certs`
 (default `2`) makes this possible. The published bundle contains the new CA
 *and* its predecessors, so peers on both sides of the change stay trusted. To
@@ -116,9 +157,9 @@ rotate:
 
 > [!TIP]
 > **Do not restart the workloads to get the new CA.** A restart of every pod
-> replaces a six-minute wait with a restart of the fleet. The restarted pods
-> also read their anchors through the same cache. The overlap window exists so
-> that no pod must restart.
+> replaces the wait in the table above with a restart of the fleet. The
+> restarted pods also read their anchors through the same cache. The overlap
+> window exists so that no pod must restart.
 
 **Applications must read the file again.** Kubelet writes a new `ca.crt` under
 a running container and sends no notification: no signal, no restart, no
