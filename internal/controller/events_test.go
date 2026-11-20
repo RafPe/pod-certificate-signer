@@ -147,7 +147,7 @@ func TestReconcileOtherTransientErrorsEmitNoEvent(t *testing.T) {
 		// A transient error that is not the CA (a failed API read, say) is routed
 		// through the same branch, so assert on that branch directly.
 		ctx := logr.NewContext(t.Context(), logr.Discard())
-		if _, err := r.requeueOrRecordTerminal(ctx, pcr, errors.New("etcdserver: request timed out")); err == nil {
+		if _, err := r.requeueOrRecordTerminal(ctx, pcr, nil, errors.New("etcdserver: request timed out")); err == nil {
 			t.Fatal("requeueOrRecordTerminal() error = nil, want the transient error returned so the reconcile requeues")
 		}
 

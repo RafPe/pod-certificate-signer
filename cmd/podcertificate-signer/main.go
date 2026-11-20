@@ -251,7 +251,7 @@ func run(ctx context.Context, fs *flag.FlagSet, f *flags) error {
 		return fmt.Errorf("add ClusterTrustBundle publisher runnable: %w", err)
 	}
 
-	reconciler, err := controller.NewPodCertificateRequestReconciler(mgr, controllerName, f.signerName, ca, f.certOpts)
+	reconciler, err := controller.NewPodCertificateRequestReconciler(mgr, controllerName, f.signerName, ca, f.certOpts, nil, nil)
 	if err != nil {
 		return fmt.Errorf("create controller %s: %w", controllerName, err)
 	}
