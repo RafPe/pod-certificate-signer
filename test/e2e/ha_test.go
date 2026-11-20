@@ -169,12 +169,14 @@ func defineHighAvailabilityTests() {
 		})
 
 		// Point the pod-targeted helpers at the current leader before every
-		// spec, not once in BeforeAll: leadership moves twice in this
-		// container, and controllerLogLineCount (and therefore
-		// expectTerminalConditionStable, and therefore expectDenied) reads one
-		// pod's log by name. Aimed at a follower it would wait out its whole
-		// timeout for a reconcile that is happening in the other pod, and fail
-		// as though the controller had stopped reconciling.
+		// spec, not once in BeforeAll: leadership moves at least eight times
+		// in this container (four leader deletions, a standby promotion, a
+		// rolling upgrade, a scale-to-zero and a restart of every replica),
+		// and the eviction can move it once more. controllerLogLineCount (and
+		// therefore expectTerminalConditionStable, and therefore expectDenied)
+		// reads one pod's log by name. Aimed at a follower it would wait out
+		// its whole timeout for a reconcile that is happening in the other
+		// pod, and fail as though the controller had stopped reconciling.
 		BeforeEach(func() {
 			focusControllerOnLeader()
 		})
