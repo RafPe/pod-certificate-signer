@@ -200,6 +200,31 @@ func TestAuditIssuedEmitsSignedThenPublished(t *testing.T) {
 	}
 }
 
+// The Issued condition message carries the same serial and fingerprint as the
+// signed record of the same reconcile, so the API server audit log and the
+// record join on the same two values.
+func TestAuditIssuedMessageMatchesSignedRecord(t *testing.T) {
+	h := newAuditHarness(t, interceptor.Funcs{}, nil)
+
+	if err := h.reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	records := h.rec.snapshot()
+	assertEvents(t, records, signedPair, publishedPair)
+	stored := &certificatesv1.PodCertificateRequest{}
+	if err := h.r.Get(context.Background(), h.key, stored); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(stored.Status.Conditions) != 1 {
+		t.Fatalf("conditions = %+v, want a single Issued condition", stored.Status.Conditions)
+	}
+	signed := records[0].Certificate
+	want := "certificate issued: serial=" + signed.SerialHex + " fingerprint=" + signed.Fingerprint
+	if got := stored.Status.Conditions[0].Message; got != want {
+		t.Errorf("condition message = %q, want %q: the serial and fingerprint of the signed record", got, want)
+	}
+}
+
 // Each result of the Issued status write has its own follow-up record. The
 // follow-up is emitted also when the write returns an error and the reconcile
 // requeues.

@@ -20,9 +20,12 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -73,6 +76,11 @@ var _ = Describe("PodCertificateRequest Controller", func() {
 			leaf, err := x509.ParseCertificate(block.Bytes)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(leaf.Subject.CommonName).To(Equal(got.Spec.PodName))
+			sum := sha256.Sum256(leaf.Raw)
+			Expect(got.Status.Conditions[0].Message).To(Equal(fmt.Sprintf(
+				"certificate issued: serial=%s fingerprint=X509SHA256=%s",
+				leaf.SerialNumber.Text(16), hex.EncodeToString(sum[:]))),
+				"the Issued condition message carries the serial and the fingerprint of the leaf")
 
 			Expect(got.Status.NotBefore).NotTo(BeNil())
 			Expect(got.Status.NotAfter).NotTo(BeNil())

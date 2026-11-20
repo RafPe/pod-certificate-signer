@@ -457,6 +457,33 @@ Join an audit event to a record with these rules:
 5. A missing or incomplete audit event means unknown, not "not published".
    Audit export can be off, filtered or truncated.
 
+The signer writes the Issued condition message in the same status update. The
+message carries the serial and the fingerprint as text, at the field path
+`responseObject.status.conditions[].message`. It has this exact format:
+
+```text
+certificate issued: serial=<serialHex> fingerprint=<fingerprint>
+```
+
+`<serialHex>` is the value of `certificate.serialHex` in the record.
+`<fingerprint>` is the value of `certificate.fingerprint`, with its
+`X509SHA256=` prefix. For example:
+
+```text
+certificate issued: serial=3fa91c0e77b2d4a8056e1f9c2b7d6a40 fingerprint=X509SHA256=6b6b594029e086a3f31c51c726ac8b0035b31300730145c85dfd1193d33246c4
+```
+
+The message is a convenience for search. The authoritative check stays rule
+2: the SHA-256 of the first certificate in
+`responseObject.status.certificateChain`. The audit event holds the message
+and the chain only at audit level `RequestResponse`.
+
+`kubectl describe` on the PodCertificateRequest and the Kubernetes Event for
+the issuance show the same message. Neither is a lasting trail.
+kube-controller-manager deletes a PodCertificateRequest 15 minutes after its
+creation (checked on Kubernetes v1.37). Kubernetes Events expire after 1 hour
+by default.
+
 On managed clusters you cannot set the audit policy. According to the policies
 that EKS, GKE and AKS publish, they record this write at `RequestResponse`.
 EKS export is off by default. AKS needs a diagnostic setting. Not verified: no

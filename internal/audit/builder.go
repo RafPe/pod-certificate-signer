@@ -55,7 +55,7 @@ func (b *Builder) Signed(pcr *certificatesv1.PodCertificateRequest, pod *corev1.
 	rec.Certificate = certificate(cert)
 	rec.Issuer = &Issuer{
 		Subject:     cert.Issuer.Subject.String(),
-		SerialHex:   cert.Issuer.SerialNumber.Text(16),
+		SerialHex:   SerialHex(cert.Issuer),
 		Fingerprint: Fingerprint(cert.Issuer),
 	}
 	return rec
@@ -97,6 +97,12 @@ func (b *Builder) Terminal(event Event, reason, message string, pcr *certificate
 func Fingerprint(cert *x509.Certificate) string {
 	sum := sha256.Sum256(cert.Raw)
 	return "X509SHA256=" + hex.EncodeToString(sum[:])
+}
+
+// SerialHex returns the serial number of cert in lowercase hex, with no
+// separators and no leading zeros.
+func SerialHex(cert *x509.Certificate) string {
+	return cert.SerialNumber.Text(16)
 }
 
 func (b *Builder) envelope(event Event, reason string) Record {
@@ -150,7 +156,7 @@ func (b *Builder) workload(pcr *certificatesv1.PodCertificateRequest, pod *corev
 func certificate(cert *podcertificate.Certificate) *Certificate {
 	leaf := cert.Leaf
 	c := &Certificate{
-		SerialHex:     leaf.SerialNumber.Text(16),
+		SerialHex:     SerialHex(leaf),
 		SerialDecimal: leaf.SerialNumber.String(),
 		Fingerprint:   Fingerprint(leaf),
 		CertificateDetails: &CertificateDetails{

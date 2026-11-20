@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/audit"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/outcome"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
@@ -112,7 +113,19 @@ func (r *PodCertificateRequestReconciler) recordIssued(ctx context.Context, pcr 
 	pcr.Status.NotAfter = &metav1.Time{Time: cert.NotAfter}
 	pcr.Status.BeginRefreshAt = &metav1.Time{Time: beginRefreshAt(cert)}
 
-	return r.recordOutcome(ctx, pcr, outcome.Issued, outcome.CertificateIssued, "certificate issued")
+	return r.recordOutcome(ctx, pcr, outcome.Issued, outcome.CertificateIssued, issuedMessage(cert))
+}
+
+// issuedMessage returns the Issued condition message. It carries the serial
+// and the fingerprint of the leaf in the form of the audit record, so the API
+// server audit log, kubectl describe and the Kubernetes Event show them as
+// text. A certificate without a parsed leaf gets the message without them.
+func issuedMessage(cert *podcertificate.Certificate) string {
+	if cert.Leaf == nil {
+		return "certificate issued"
+	}
+	return fmt.Sprintf("certificate issued: serial=%s fingerprint=%s",
+		audit.SerialHex(cert.Leaf), audit.Fingerprint(cert.Leaf))
 }
 
 // recordOutcome sets the condition for kind on the PodCertificateRequest,

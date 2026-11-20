@@ -326,6 +326,13 @@ func TestFingerprint(t *testing.T) {
 	}
 }
 
+func TestSerialHex(t *testing.T) {
+	cert := &x509.Certificate{SerialNumber: big.NewInt(0x0a0b)}
+	if got, want := SerialHex(cert), "a0b"; got != want {
+		t.Errorf("SerialHex() = %q, want %q", got, want)
+	}
+}
+
 func TestOwner(t *testing.T) {
 	notController := func(name string) metav1.OwnerReference {
 		ref := replicaSetOwner()

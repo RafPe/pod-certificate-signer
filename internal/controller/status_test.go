@@ -2,7 +2,11 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -316,13 +320,126 @@ func TestRecordIssued(t *testing.T) {
 	if got.Status.NotBefore == nil || got.Status.NotAfter == nil || got.Status.BeginRefreshAt == nil {
 		t.Error("notBefore, notAfter and beginRefreshAt must all be set on issuance")
 	}
+	// The certificate has no parsed leaf, so the message has no serial and no
+	// fingerprint to carry.
+	if msg := got.Status.Conditions[0].Message; msg != "certificate issued" {
+		t.Errorf("condition message = %q, want %q", msg, "certificate issued")
+	}
 	select {
 	case e := <-rec.Events:
-		if !strings.Contains(e, corev1.EventTypeNormal) {
-			t.Errorf("event = %q, want a normal event", e)
+		if want := "Normal CertificateIssued certificate issued"; e != want {
+			t.Errorf("event = %q, want %q", e, want)
 		}
 	default:
 		t.Error("no event recorded")
+	}
+}
+
+// wantIssuedMessage returns the Issued condition message for leaf. It formats
+// the serial and the fingerprint here, not through the audit package, so a
+// change of format in the code under test fails the test.
+func wantIssuedMessage(leaf *x509.Certificate) string {
+	sum := sha256.Sum256(leaf.Raw)
+	return fmt.Sprintf("certificate issued: serial=%s fingerprint=X509SHA256=%s",
+		leaf.SerialNumber.Text(16), hex.EncodeToString(sum[:]))
+}
+
+// The Issued condition message carries the serial and the fingerprint of the
+// leaf as text, so the API server audit log and kubectl describe show them
+// without PEM parsing. The Kubernetes Event carries the same message.
+func TestRecordIssuedMessageCarriesSerialAndFingerprint(t *testing.T) {
+	r, rec, store, pcr := statusWriteFixture(t, interceptor.Funcs{}, interceptor.Funcs{})
+	cert := stubCert()
+	want := wantIssuedMessage(cert.Leaf)
+
+	if _, err := r.recordIssued(context.Background(), pcr, cert); err != nil {
+		t.Fatalf("recordIssued: %v", err)
+	}
+
+	stored := &certificatesv1.PodCertificateRequest{}
+	if err := store.Get(context.Background(), client.ObjectKeyFromObject(pcr), stored); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(stored.Status.Conditions) != 1 {
+		t.Fatalf("conditions = %+v, want a single Issued condition", stored.Status.Conditions)
+	}
+	if got := stored.Status.Conditions[0].Message; got != want {
+		t.Errorf("condition message = %q, want %q", got, want)
+	}
+	select {
+	case e := <-rec.Events:
+		if wantEvent := "Normal CertificateIssued " + stored.Status.Conditions[0].Message; e != wantEvent {
+			t.Errorf("event = %q, want %q: the Kubernetes Event carries the condition message", e, wantEvent)
+		}
+	default:
+		t.Error("no event recorded")
+	}
+}
+
+// Reconcile stores the Issued condition message and logs the serial and the
+// fingerprint on the issued certificate line. A certificate without a parsed
+// leaf keeps the plain message, adds no keys to the line and does not panic.
+func TestReconcileIssuedMessageAndLogLine(t *testing.T) {
+	withLeaf := stubCert()
+	withoutLeaf := stubCert()
+	withoutLeaf.Leaf = nil
+	sum := sha256.Sum256(withLeaf.Leaf.Raw)
+	serialKey := `"serial"="` + withLeaf.Leaf.SerialNumber.Text(16) + `"`
+	fingerprintKey := `"fingerprint"="X509SHA256=` + hex.EncodeToString(sum[:]) + `"`
+
+	cases := []struct {
+		name        string
+		cert        *podcertificate.Certificate
+		wantMessage string
+		wantKeys    bool
+	}{
+		{"with a leaf", withLeaf, wantIssuedMessage(withLeaf.Leaf), true},
+		{"without a leaf", withoutLeaf, "certificate issued", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pcr, pod := livePCR(t, "pod-uid", "pod-uid")
+			pcr.Spec.SignerName = "example.org/signer"
+			pcr.UID = "request-uid"
+			cl := fake.NewClientBuilder().
+				WithScheme(newTestScheme(t)).
+				WithObjects(pcr, pod).
+				WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
+				Build()
+			stub := &stubSigner{name: pcr.Spec.SignerName, cert: tc.cert}
+			var lines []string
+			r := &PodCertificateRequestReconciler{
+				Client: cl, APIReader: cl, Log: captureLogger(&lines), Signer: stub, SignerName: stub.name,
+				EventRecorder: events.NewFakeRecorder(10),
+			}
+
+			if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pcr)}); err != nil {
+				t.Fatalf("Reconcile() error = %v", err)
+			}
+
+			stored := &certificatesv1.PodCertificateRequest{}
+			if err := cl.Get(context.Background(), client.ObjectKeyFromObject(pcr), stored); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if len(stored.Status.Conditions) != 1 {
+				t.Fatalf("conditions = %+v, want a single Issued condition", stored.Status.Conditions)
+			}
+			if got := stored.Status.Conditions[0].Message; got != tc.wantMessage {
+				t.Errorf("condition message = %q, want %q", got, tc.wantMessage)
+			}
+			const issuedLine = `"msg"="issued certificate"`
+			if n := countLinesContaining(lines, issuedLine); n != 1 {
+				t.Fatalf("issued certificate lines = %d, want 1; log = %q", n, lines)
+			}
+			gotKeys := countLinesContaining(lines, issuedLine, serialKey, fingerprintKey) == 1
+			if gotKeys != tc.wantKeys {
+				t.Errorf("issued certificate line carries %s and %s = %v, want %v; log = %q",
+					serialKey, fingerprintKey, gotKeys, tc.wantKeys, lines)
+			}
+			if !tc.wantKeys && countLinesContaining(lines, issuedLine, `"serial"=`) != 0 {
+				t.Errorf("issued certificate line carries a serial, want none without a leaf; log = %q", lines)
+			}
+		})
 	}
 }
 

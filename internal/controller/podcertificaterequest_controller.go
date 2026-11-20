@@ -258,14 +258,21 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		return r.requeue(&pcr, err)
 	}
 	if result == writePersisted {
-		logger.Info("issued certificate",
+		keysAndValues := []any{
 			"commonName", cert.Config.CommonName,
 			"dnsNames", cert.Config.DNSNames,
 			"ipAddresses", cert.Config.IPAddresses,
 			"uris", cert.Config.URIs,
 			"extKeyUsage", cert.Config.ExtKeyUsage,
 			"notAfter", cert.NotAfter.Format(time.RFC3339),
-			"beginRefreshAt", beginRefreshAt(cert).Format(time.RFC3339))
+			"beginRefreshAt", beginRefreshAt(cert).Format(time.RFC3339),
+		}
+		if cert.Leaf != nil {
+			keysAndValues = append(keysAndValues,
+				"serial", audit.SerialHex(cert.Leaf),
+				"fingerprint", audit.Fingerprint(cert.Leaf))
+		}
+		logger.Info("issued certificate", keysAndValues...)
 	}
 	return ctrl.Result{}, nil
 }

@@ -141,7 +141,9 @@ already terminal. It also occurs when the write conflicted and the re-read
 found a terminal condition, which can be this reconcile's own committed write.
 
 The API server audit log is the second trail for these cases. It is also
-best-effort on managed clusters. A guarantee that no certificate is published
+best-effort on managed clusters. The Issued condition message in the audited
+status write carries the serial and the fingerprint as text, in the form of the
+record, so a search needs no PEM parsing. A guarantee that no certificate is published
 without a stored record needs a durable sink that acknowledges before the
 status write. That is out of scope.
 
