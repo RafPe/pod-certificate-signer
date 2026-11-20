@@ -101,8 +101,38 @@ requires the commit status `gate:e2e`, not the job `test:e2e`. The gate job in
 `test-e2e.yml` sets it to pending, and the e2e job sets it to success or
 failure. Release PRs (label `autorelease: pending`) run e2e without the label.
 Dependabot adds `ci/e2e` to gomod (`/`) and docker updates. A PR from a fork
-cannot post the status: a maintainer adds the label, checks the e2e result and
-merges with the ruleset bypass.
+cannot post the status, and `review:approve` never approves it. A maintainer
+adds the label, checks the e2e result and merges with the ruleset bypass.
+
+### Review and merge
+
+The `main` ruleset requires one approving review, all required checks and all
+review threads resolved. The approval normally comes from `review:approve`.
+The flow for a PR from this repository:
+
+1. Open the PR with one `release/*` label, `ci/e2e` and
+   `review/claude-allowed`.
+2. Wait until all required checks pass.
+3. The repository owner comments `@claude review` on the PR.
+4. Claude posts a summary with a verdict. `review:approve` approves the PR as
+   `github-actions[bot]` only if these conditions are all true:
+   - the verdict is approve
+   - the PR head is the commit that Claude reviewed
+   - the PR does not come from a fork
+5. Fix the valid findings and resolve the review threads. After a push, the
+   owner comments `@claude review` again. The second review checks the new
+   commits and the earlier findings.
+6. Merge with squash or rebase. The ruleset blocks merge commits.
+
+Any push to the PR branch after the approval dismisses the approval. This
+includes **Update branch**, which the strict status checks can need. Each push
+needs a new `@claude review`.
+
+Dependabot PRs follow the same flow. Gomod (`/`) and docker PRs get `ci/e2e`
+automatically. Add `ci/e2e` by hand to the `internal/tools` and GitHub Actions
+PRs. Add `review/claude-allowed` and start a review, or merge with the ruleset
+bypass. Release PRs and fork PRs also merge with the bypass.
+[docs/releasing.md](docs/releasing.md#repository-setup) describes the ruleset.
 
 ## Architecture Decision Records
 
@@ -152,9 +182,11 @@ status update.
 ### Review
 
 **An ADR needs at least one approving maintainer review before it merges as
-`accepted`.** This is the one place in the project where a second review is
-mandatory. Ordinary PRs merge on green CI. A decision that governs future code
-must not be self-approved. An ADR can merge as `proposed` without that review.
+`accepted`.** This is the one place in the project where a human review is
+mandatory. Ordinary PRs merge with the approval from `review:approve` (see
+[Review and merge](#review-and-merge)). That approval does not count as the
+maintainer review of an ADR. A decision that governs future code must not be
+self-approved. An ADR can merge as `proposed` without that review.
 It does not bind anything until a maintainer accepts it.
 
 Put a short `ADR-NNNN` comment at the entry point of the code that the ADR

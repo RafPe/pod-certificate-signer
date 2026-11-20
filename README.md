@@ -135,8 +135,8 @@ For rollout and scope details, see [configuration](./docs/configuration.md#preve
 Releases need a review and use labels. Each ordinary PR has exactly one
 `release/*` label. Each non-skip PR adds a changelog fragment. Ordinary merges
 never publish a release. To release, a maintainer runs **Prepare Release** and
-reviews the `release/next` PR that the automation owns. The merge of that PR
-starts these steps:
+reviews the `release/next` PR that the automation owns. The maintainer merges
+that PR with the `main` ruleset bypass. The merge starts these steps:
 
 - full verification and E2E tests
 - an immutable `vX.Y.Z` tag

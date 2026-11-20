@@ -311,7 +311,7 @@ these reasons:
 
 | Check | Status | Rationale |
 | ----- | ------ | --------- |
-| Code-Review | Accepted, narrowing | The project has one maintainer. Ordinary PRs merge after automated checks (tests, lint, e2e, secret scan) without a second human review. Two categories have a human review. A release publishes only after a maintainer approves the generated release PR ([#86](https://github.com/RafPe/pod-certificate-signer/pull/86)). An Architecture Decision Record needs at least one approving maintainer review before acceptance (see [CONTRIBUTING.md](CONTRIBUTING.md#review)). Thus a person reviews the decisions that govern future code and the artifacts that users get. Nobody reviews the routine changes between them. |
+| Code-Review | Accepted, narrowing | The project has one maintainer. The `main` ruleset requires one approving review and the automated checks (tests, lint, e2e, secret scan) on every PR. For ordinary PRs, the approval comes from the automated Claude review (`.github/workflows/claude-review.yml`), not from a second person. Two categories have a human review. A release publishes only after a maintainer reviews the generated release PR and merges it with the ruleset bypass ([#86](https://github.com/RafPe/pod-certificate-signer/pull/86)). An Architecture Decision Record needs at least one approving maintainer review before acceptance (see [CONTRIBUTING.md](CONTRIBUTING.md#review)). Thus a person reviews the decisions that govern future code and the artifacts that users get. Nobody reviews the routine changes between them. |
 | Fuzzing | Accepted | There is no continuous fuzzing. The Go standard library parses x509, PEM and PKCS#10. Unit tests cover the parsing that this project adds. |
 | CII-Best-Practices | Accepted | The project does not apply for an OpenSSF Best Practices badge at this stage. |
 | Vulnerabilities | Accepted (case-by-case) | Scorecard flags an OSV entry when the package is in the dependency graph. This project triages by `govulncheck` reachability. We accept and document findings that have no reachable call path. |
@@ -323,7 +323,10 @@ We do not accept the checks below. The repository has these controls:
   keyless cosign, and attaches an SPDX SBOM to the image. The workflow does not
   sign the Helm chart.
 - Pinned-Dependencies and Token-Permissions: workflows pin third-party actions
-  by commit SHA and declare `permissions`.
-- Dependency-Update-Tool: Dependabot (`.github/dependabot.yml`).
+  by commit SHA and declare `permissions`. The repository setting
+  `sha_pinning_required` makes Actions refuse an action that is not pinned to
+  a full commit SHA. The default `GITHUB_TOKEN` permission is read-only.
+- Dependency-Update-Tool: Dependabot (`.github/dependabot.yml`), with
+  Dependabot alerts and Dependabot security updates on.
 
 If one of these controls stops working, treat it as a bug and report it.
