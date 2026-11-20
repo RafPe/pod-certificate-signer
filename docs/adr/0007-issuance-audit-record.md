@@ -143,9 +143,9 @@ found a terminal condition, which can be this reconcile's own committed write.
 The API server audit log is the second trail for these cases. It is also
 best-effort on managed clusters. The Issued condition message in the audited
 status write carries the serial and the fingerprint as text, in the form of the
-record, so a search needs no PEM parsing. A guarantee that no certificate is published
-without a stored record needs a durable sink that acknowledges before the
-status write. That is out of scope.
+record, so a search needs no PEM parsing. A guarantee that no certificate is
+published without a stored record needs a durable sink that acknowledges
+before the status write. That is out of scope.
 
 ### Non-goals
 
@@ -185,11 +185,17 @@ changed with it, because the record needs to know the result of each write:
 - A status write that returns 404 because the request was deleted no longer
   requeues.
 
+Two visible outputs also changed:
+
+- The Issued condition message and its Kubernetes Event carry the serial and
+  the fingerprint of the certificate.
+- The `issued certificate` log line carries `serial` and `fingerprint`.
+
 ## Alternatives Considered
 
 | | Approach | Result |
 | --- | --- | --- |
-| A | Use only the API server audit log, with a `RequestResponse` rule for `podcertificaterequests/status` | Kept as the second trail. Not sufficient alone: export is off by default on EKS, the event has no owner, and the serial must be parsed from PEM. |
+| A | Use only the API server audit log, with a `RequestResponse` rule for `podcertificaterequests/status` | Kept as the second trail. Not sufficient alone: export is off by default on EKS, the event has no owner, and the serial and the fingerprint are plain text only in the Issued condition message that this signer version writes. |
 | B | The signer writes its own JSON record to stdout | Chosen. |
 | C | Embed the `k8s.io/apiserver` audit backends and write `audit.k8s.io/v1` events | Rejected. It is a heavy dependency for the signer. Its policy file has nothing to match on, because a controller has no HTTP request path. |
 | D | Create one CRD object for each issuance | Rejected. It adds etcd load for each pod on each rotation, and it needs a retention controller. |

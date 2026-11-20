@@ -475,8 +475,10 @@ certificate issued: serial=3fa91c0e77b2d4a8056e1f9c2b7d6a40 fingerprint=X509SHA2
 
 The message is a convenience for search. The authoritative check stays rule
 2: the SHA-256 of the first certificate in
-`responseObject.status.certificateChain`. The audit event holds the message
-and the chain only at audit level `RequestResponse`.
+`responseObject.status.certificateChain`. The message is text that the signer
+writes next to the certificate, and the chain is the certificate that kubelet
+receives, so only a hash of the chain proves which certificate was published.
+The audit event has `responseObject` only at audit level `RequestResponse`.
 
 `kubectl describe` on the PodCertificateRequest and the Kubernetes Event for
 the issuance show the same message. Neither is a lasting trail.
