@@ -350,6 +350,14 @@ func TestOwner(t *testing.T) {
 			name:      "two ownerReferences without a controller",
 			ownerRefs: []metav1.OwnerReference{notController("a"), notController("b")},
 		},
+		{
+			name: "ownerReference with controller explicitly false",
+			ownerRefs: []metav1.OwnerReference{func() metav1.OwnerReference {
+				ref := replicaSetOwner()
+				ref.Controller = new(false)
+				return ref
+			}()},
+		},
 	}
 	cert := newTestCertificate(t, testSerial)
 	b := newTestBuilder(t, DefaultOptions())
@@ -399,26 +407,126 @@ func TestSuppliedKeysOnlyByDefault(t *testing.T) {
 }
 
 func TestFollowUpRecord(t *testing.T) {
+	tests := []struct {
+		event  Event
+		reason string
+	}{
+		{event: EventPublished, reason: ReasonStatusWritten},
+		{event: EventSuperseded, reason: ReasonOtherWriterWon},
+		{event: EventUnknown, reason: ReasonWriteAmbiguous},
+	}
 	cert := newTestCertificate(t, testSerial)
 	b := newTestBuilder(t, testOptions())
 	signed := b.Signed(testPCR(), testPod(replicaSetOwner()), cert, map[string]string{"example.com/pod-signer-san": "a"})
+	for _, tt := range tests {
+		t.Run(string(tt.event), func(t *testing.T) {
+			got := recordMap(t, b.FollowUp(tt.event, tt.reason, signed))
 
-	got := recordMap(t, b.FollowUp(EventSuperseded, ReasonOtherWriterWon, signed))
+			want := decodeGolden(t, fmt.Sprintf(`{
+				"kind": "CertificateAuditRecord",
+				"schemaVersion": "v1",
+				"event": %q,
+				"reason": %q,
+				"signerName": "example.com/pod-signer",
+				"request": {"namespace": "payments", "name": "pcr-7xk2q", "uid": "pcr-uid"},
+				"certificate": {
+					"serialHex": "3fa91c0e77b2d4a8056e1f9c2b7d6a40",
+					"serialDecimal": "84619430957250172514404220402520648256",
+					"fingerprint": %q
+				}
+			}`, tt.event, tt.reason, Fingerprint(cert.Leaf)))
+			assertJSONEqual(t, got, want)
+		})
+	}
+}
 
-	want := decodeGolden(t, fmt.Sprintf(`{
+func TestFollowUpWithoutCertificateDetails(t *testing.T) {
+	b := newTestBuilder(t, DefaultOptions())
+	signed := b.Signed(testPCR(), testPod(), newTestCertificate(t, testSerial), nil)
+	envelope := `
 		"kind": "CertificateAuditRecord",
 		"schemaVersion": "v1",
-		"event": "superseded",
-		"reason": "OtherWriterWon",
+		"event": "published",
+		"reason": "StatusWritten",
 		"signerName": "example.com/pod-signer",
-		"request": {"namespace": "payments", "name": "pcr-7xk2q", "uid": "pcr-uid"},
-		"certificate": {
-			"serialHex": "3fa91c0e77b2d4a8056e1f9c2b7d6a40",
-			"serialDecimal": "84619430957250172514404220402520648256",
-			"fingerprint": %q
-		}
-	}`, Fingerprint(cert.Leaf)))
-	assertJSONEqual(t, got, want)
+		"request": {"namespace": "payments", "name": "pcr-7xk2q", "uid": "pcr-uid"}`
+	tests := []struct {
+		name        string
+		certificate *Certificate
+		want        string
+	}{
+		{name: "no certificate", want: "{" + envelope + "}"},
+		{
+			name: "certificate without details",
+			certificate: &Certificate{
+				SerialHex:     signed.Certificate.SerialHex,
+				SerialDecimal: signed.Certificate.SerialDecimal,
+				Fingerprint:   signed.Certificate.Fingerprint,
+			},
+			want: fmt.Sprintf(`{%s,
+				"certificate": {
+					"serialHex": "3fa91c0e77b2d4a8056e1f9c2b7d6a40",
+					"serialDecimal": "84619430957250172514404220402520648256",
+					"fingerprint": %q
+				}
+			}`, envelope, signed.Certificate.Fingerprint),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			from := signed
+			from.Certificate = tt.certificate
+
+			got := recordMap(t, b.FollowUp(EventPublished, ReasonStatusWritten, from))
+
+			assertJSONEqual(t, got, decodeGolden(t, tt.want))
+		})
+	}
+}
+
+func TestWorkloadWithoutPodKeys(t *testing.T) {
+	tests := []struct {
+		name                string
+		labels, annotations map[string]string
+	}{
+		{name: "empty maps", labels: map[string]string{}, annotations: map[string]string{}},
+		{name: "nil maps"},
+	}
+	b := newTestBuilder(t, testOptions())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pod := testPod(replicaSetOwner())
+			pod.Labels, pod.Annotations = tt.labels, tt.annotations
+
+			got := recordMap(t, b.Terminal(EventFailed, "Failed", "", testPCR(), pod, nil))
+
+			want := decodeGolden(t, `{
+				"pod": {"name": "api-6c9f7d5b8-x2lqp", "uid": "pod-uid"},
+				"serviceAccount": {"name": "api", "uid": "sa-uid"},
+				"node": {"name": "ip-10-0-3-17", "uid": "node-uid"},
+				"owner": {"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "api-6c9f7d5b8", "uid": "rs-uid"},
+				"labels": {},
+				"annotations": {},
+				"omitted": {"labels": 0, "annotations": 0}
+			}`)
+			assertJSONEqual(t, group(t, got, "workload"), want)
+		})
+	}
+}
+
+func TestSuppliedValuesWithNilSupplied(t *testing.T) {
+	opts := DefaultOptions()
+	opts.RecordSuppliedValues = true
+	b := newTestBuilder(t, opts)
+
+	request := group(t, recordMap(t, b.Terminal(EventFailed, "Failed", "", testPCR(), nil, nil)), "request")
+
+	if v, ok := request["suppliedValues"].(map[string]any); !ok || len(v) != 0 {
+		t.Errorf("request.suppliedValues = %#v, want {}", request["suppliedValues"])
+	}
+	if v, ok := request["suppliedKeys"].([]any); !ok || len(v) != 0 {
+		t.Errorf("request.suppliedKeys = %#v, want []", request["suppliedKeys"])
+	}
 }
 
 func TestTerminalRecord(t *testing.T) {

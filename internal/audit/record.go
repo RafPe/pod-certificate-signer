@@ -127,7 +127,9 @@ type Certificate struct {
 	SerialDecimal string `json:"serialDecimal"`
 	Fingerprint   string `json:"fingerprint"`
 	// CertificateDetails is set only in a signed record. encoding/json inlines
-	// its fields when it is set and leaves them out when it is nil.
+	// its fields when it is set and leaves them out when it is nil. It is nil
+	// in every follow-up record, so check it before you read a promoted field
+	// such as DNSNames: that read panics on a nil pointer.
 	*CertificateDetails
 }
 
