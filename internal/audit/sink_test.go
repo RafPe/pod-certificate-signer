@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -102,6 +104,20 @@ func (l *logLines) get() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return append([]string(nil), l.lines...)
+}
+
+var droppedName = regexp.MustCompile(`^"msg"="audit record dropped" .*"name"="([^"]*)"`)
+
+// droppedNames returns request.name of each per-record drop line in lines.
+// Other lines are left out.
+func droppedNames(lines []string) []string {
+	var names []string
+	for _, line := range lines {
+		if m := droppedName.FindStringSubmatch(line); m != nil {
+			names = append(names, m[1])
+		}
+	}
+	return names
 }
 
 // testRecord returns a denied record for the request named name.
@@ -365,8 +381,8 @@ func TestSinkCloseStopsTheWriter(t *testing.T) {
 			if calls, names := w.written(); calls != 1 || names[0] != "blocked" {
 				t.Errorf("writer got %d calls with records %v, want only blocked", calls, names)
 			}
-			if got := logs.get(); len(got) != 0 {
-				t.Errorf("logged %q, want nothing", got)
+			if got := droppedNames(logs.get()); len(got) != 1 || got[0] != "waiting" {
+				t.Errorf("logged drops of %v, want one drop of the waiting record", got)
 			}
 		})
 	})
@@ -398,15 +414,64 @@ func TestSinkRecordAfterCloseDropsAtOnce(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := newTestBuilder(t, DefaultOptions())
 		var buf lockedBuffer
-		s := NewWriterSink(&buf, b, logr.Discard(), DefaultWriteTimeout)
+		logger, logs := newTestLogger()
+		s := NewWriterSink(&buf, b, logger, DefaultWriteTimeout)
 		s.Close()
+		signed := b.Signed(testPCR(), testPod(), newTestCertificate(t, testSerial), nil)
 
-		if d := timedRecord(t.Context(), s, testRecord(b, "after-close")); d != 0 {
+		if d := timedRecord(t.Context(), s, signed); d != 0 {
 			t.Errorf("Record after Close took %v, want 0", d)
 		}
 		synctest.Wait()
 		if got := buf.String(); got != "" {
 			t.Errorf("wrote %q after Close, want nothing", got)
+		}
+		got := logs.get()
+		want := []string{
+			`"msg"="audit record dropped"`, `"error"="the audit sink is closed"`, `"event"="signed"`,
+			`"namespace"="payments"`, `"name"="pcr-7xk2q"`, `"uid"="pcr-uid"`,
+			fmt.Sprintf(`"fingerprint"=%q`, signed.Certificate.Fingerprint),
+		}
+		if len(got) != 1 {
+			t.Fatalf("logged %q, want one line about the dropped record", got)
+		}
+		for _, field := range want {
+			if !strings.Contains(got[0], field) {
+				t.Errorf("logged %q, want it to contain %s", got[0], field)
+			}
+		}
+	})
+}
+
+func TestSinkWriterTakesNoLineAfterClose(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := newTestBuilder(t, DefaultOptions())
+		var buf lockedBuffer
+		logger, logs := newTestLogger()
+		s := NewWriterSink(&buf, b, logger, DefaultWriteTimeout)
+		s.Close()
+		synctest.Wait()
+		// When Close and a hand-over happen at the same instant, the writer
+		// loop can take the line after Close. write is where that line goes.
+		rec := testRecord(b, "late")
+		line, err := b.Encode(rec)
+		if err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+		pw := &pendingWrite{line: line, rec: rec, done: make(chan struct{})}
+
+		s.write(pw)
+
+		select {
+		case <-pw.done:
+		default:
+			t.Error("write did not release the Record call that waits for it")
+		}
+		if got := buf.String(); got != "" {
+			t.Errorf("wrote %q after Close, want nothing", got)
+		}
+		if got := droppedNames(logs.get()); len(got) != 1 || got[0] != "late" {
+			t.Errorf("logged drops of %v, want one drop of the late record", got)
 		}
 	})
 }
@@ -432,19 +497,24 @@ func TestSinkCloseIsIdempotentAndRaceFree(t *testing.T) {
 			t.Errorf("Record and Close took %v, want 0", d)
 		}
 		synctest.Wait()
+		// Every record is either written or logged as dropped, never both.
+		var names []string
 		if out := strings.TrimSuffix(buf.String(), "\n"); out != "" {
-			lines := strings.Split(out, "\n")
-			for _, line := range lines {
+			for _, line := range strings.Split(out, "\n") {
 				if !json.Valid([]byte(line)) {
 					t.Errorf("line %q is not valid JSON", line)
 				}
-			}
-			if len(lines) > 50 {
-				t.Errorf("got %d lines, want at most 50", len(lines))
+				names = append(names, recordName(line))
 			}
 		}
-		if got := logs.get(); len(got) != 0 {
-			t.Errorf("logged %q, want nothing", got)
+		names = append(names, droppedNames(logs.get())...)
+		slices.Sort(names)
+		want := make([]string, 50)
+		for i := range want {
+			want[i] = fmt.Sprintf("pcr-%02d", i)
+		}
+		if !slices.Equal(names, want) {
+			t.Errorf("written and dropped records = %v, want each of %v once", names, want)
 		}
 	})
 }

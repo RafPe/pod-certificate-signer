@@ -18,6 +18,9 @@ const DefaultWriteTimeout = 2 * time.Second
 // before the writer takes its line and no write is in progress.
 var errNotTaken = errors.New("the write timeout passed before the audit writer took the record")
 
+// errClosed is the reason a record is dropped at or after Close.
+var errClosed = errors.New("the audit sink is closed")
+
 // Recorder writes audit records.
 type Recorder interface {
 	// Record writes rec. It returns when the line is written, when the write
@@ -27,8 +30,7 @@ type Recorder interface {
 
 // WriterSink is a [Recorder] that writes each record as one line to an
 // io.Writer, such as stdout. One goroutine owns the writer, so lines are never
-// interleaved. A record that cannot be written within the write timeout is
-// dropped and reported on the logger.
+// interleaved.
 //
 // [NewWriterSink] starts the writer goroutine and [WriterSink.Close] stops it.
 // The sink does not follow a context, so records emitted while the manager
@@ -38,7 +40,13 @@ type Recorder interface {
 // A write that is still blocked when a Record call times out stalls the sink.
 // While the sink is stalled, Record drops each record at once and counts it.
 // When the blocked write returns, the sink logs the count and takes records
-// again.
+// again. Close logs the count if the sink is still stalled.
+//
+// Every other dropped record is logged on its own line with its event, request
+// namespace, name and uid, and certificate fingerprint when it has one: a
+// record that does not encode, a record whose context is done before the
+// hand-over, a record whose write timeout passes before the hand-over while no
+// write is in progress, and every record dropped at or after Close.
 type WriterSink struct {
 	w            io.Writer
 	b            *Builder
@@ -60,8 +68,10 @@ type WriterSink struct {
 	// Record sets stalled after a timeout only if its own handed-over write
 	// is not completed, or, when it timed out before the hand-over, only if
 	// writing is true.
-	// Close clears stalled and reports the open count. After Close, closed
-	// makes every Record drop at once, so stalled no longer matters.
+	// Close clears stalled and reports the open count. After Close, stalled
+	// is never set again, and closed makes every Record drop at once. The
+	// writer checks closed before each Write, so no line is written after
+	// Close.
 	mu      sync.Mutex
 	closed  bool
 	writing bool
@@ -72,6 +82,8 @@ type WriterSink struct {
 // pendingWrite is one line that Record handed over to the writer goroutine.
 type pendingWrite struct {
 	line []byte
+	// rec is the record of line. The writer names it when it drops line.
+	rec Record
 	// completed is set when the Write call returned. It is guarded by
 	// WriterSink.mu.
 	completed bool
@@ -127,19 +139,26 @@ func (s *WriterSink) Close() {
 // returned.
 func (s *WriterSink) Record(ctx context.Context, rec Record) {
 	s.mu.Lock()
-	if s.closed || s.stalled {
+	closed := s.closed
+	stalled := s.stalled && !closed
+	if stalled {
 		s.dropped++
-		s.mu.Unlock()
-		return
 	}
 	s.mu.Unlock()
+	if closed {
+		s.logDrop(errClosed, rec)
+		return
+	}
+	if stalled {
+		return
+	}
 
 	line, err := s.b.Encode(rec)
 	if err != nil {
 		s.logDrop(err, rec)
 		return
 	}
-	pw := &pendingWrite{line: line, done: make(chan struct{})}
+	pw := &pendingWrite{line: line, rec: rec, done: make(chan struct{})}
 	timer := time.NewTimer(s.writeTimeout)
 	defer timer.Stop()
 
@@ -147,13 +166,17 @@ func (s *WriterSink) Record(ctx context.Context, rec Record) {
 	case s.writes <- pw:
 	case <-timer.C:
 		s.mu.Lock()
-		blocked := s.writing
-		if blocked {
+		closed = s.closed
+		counted := s.writing && !closed
+		if counted {
 			s.stalled = true
 			s.dropped++
 		}
 		s.mu.Unlock()
-		if !blocked {
+		switch {
+		case closed:
+			s.logDrop(errClosed, rec)
+		case !counted:
 			s.logDrop(errNotTaken, rec)
 		}
 		return
@@ -161,9 +184,7 @@ func (s *WriterSink) Record(ctx context.Context, rec Record) {
 		s.logDrop(ctx.Err(), rec)
 		return
 	case <-s.done:
-		s.mu.Lock()
-		s.dropped++
-		s.mu.Unlock()
+		s.logDrop(errClosed, rec)
 		return
 	}
 
@@ -171,7 +192,7 @@ func (s *WriterSink) Record(ctx context.Context, rec Record) {
 	case <-pw.done:
 	case <-timer.C:
 		s.mu.Lock()
-		if !pw.completed {
+		if !pw.completed && !s.closed {
 			s.stalled = true
 		}
 		s.mu.Unlock()
@@ -191,10 +212,23 @@ func (s *WriterSink) writeLoop() {
 	}
 }
 
+// write writes pw.line, unless the sink is closed. The select in writeLoop
+// can take a line in the same instant as Close, so write drops that line and
+// logs it.
 func (s *WriterSink) write(pw *pendingWrite) {
 	s.mu.Lock()
-	s.writing = true
+	closed := s.closed
+	if closed {
+		pw.completed = true
+	} else {
+		s.writing = true
+	}
 	s.mu.Unlock()
+	if closed {
+		close(pw.done)
+		s.logDrop(errClosed, pw.rec)
+		return
+	}
 
 	_, err := s.w.Write(pw.line)
 
@@ -215,6 +249,10 @@ func (s *WriterSink) write(pw *pendingWrite) {
 }
 
 func (s *WriterSink) logDrop(err error, rec Record) {
-	s.logger.Error(err, "audit record dropped", "event", rec.Event,
-		"namespace", rec.Request.Namespace, "name", rec.Request.Name, "uid", rec.Request.UID)
+	keysAndValues := []any{"event", rec.Event,
+		"namespace", rec.Request.Namespace, "name", rec.Request.Name, "uid", rec.Request.UID}
+	if rec.Certificate != nil {
+		keysAndValues = append(keysAndValues, "fingerprint", rec.Certificate.Fingerprint)
+	}
+	s.logger.Error(err, "audit record dropped", keysAndValues...)
 }

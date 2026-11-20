@@ -195,6 +195,33 @@ func TestEncodeByteBudgetOrder(t *testing.T) {
 	}
 }
 
+func TestEncodeByteBudgetAddsToOmittedCounts(t *testing.T) {
+	opts := budgetOptions()
+	opts.MaxCopiedKeys = 2
+	b := newTestBuilder(t, opts)
+	pod := testPod()
+	pod.Labels = kilobyteValues("label", 3)
+	pod.Annotations = kilobyteValues("example.com/annotation", 3)
+	rec := b.Signed(testPCR(), pod, newTestCertificate(t, testSerial), kilobyteValues("example.com/pod-signer-", 1))
+	if rec.Workload.Omitted != (Omitted{Labels: 1, Annotations: 1}) {
+		t.Fatalf("workload.omitted before Encode = %+v, want 1 label and 1 annotation from MaxCopiedKeys", rec.Workload.Omitted)
+	}
+
+	line, got := encodeLine(t, b, rec)
+
+	if len(line) > 4096 {
+		t.Errorf("line is %d bytes, want at most 4096", len(line))
+	}
+	workload := group(t, got, "workload")
+	wantOmitted := map[string]any{"labels": 3.0, "annotations": 3.0}
+	if omitted := group(t, workload, "omitted"); !reflect.DeepEqual(omitted, wantOmitted) {
+		t.Errorf("workload.omitted = %v, want %v", omitted, wantOmitted)
+	}
+	if _, ok := group(t, got, "request")["suppliedValues"]; !ok {
+		t.Error("request.suppliedValues is absent, want it kept")
+	}
+}
+
 // assertIdentity checks that the reserved identity fields of rec are in the
 // decoded line got.
 func assertIdentity(t *testing.T, got map[string]any, rec Record) {
