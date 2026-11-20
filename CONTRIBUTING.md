@@ -94,6 +94,7 @@ procedure.
 | ------------ | ---------------------------------------------------------------------- |
 | `ci/e2e`     | Runs the per-PR e2e suite (`test:e2e`). Without it the required status `gate:e2e` stays pending with "waiting for label ci/e2e" and the PR cannot merge |
 | `run-nightly` | Runs the full e2e tier (`test:e2e-full`) once, when the label is added |
+| `review/claude-allowed` | Allows an on-demand Claude review (`review:claude`). The repository owner starts it with the PR comment `@claude review`. A clean review of a PR from this repository gets an approval from `review:approve`. Without the label, `review:label-missing` replies and asks for it. Release PRs get no review |
 
 A skipped job counts as passed for a required check. So the `main` ruleset
 requires the commit status `gate:e2e`, not the job `test:e2e`. The gate job in
