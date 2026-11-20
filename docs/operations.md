@@ -111,14 +111,24 @@ Secret reaches its mount. Kubelet is the cause:
   ([kubernetes#141439](https://github.com/kubernetes/kubernetes/issues/141439)).
 - [kubernetes#141459](https://github.com/kubernetes/kubernetes/pull/141459)
   clears these entries when the bundle changes. This change is in the tag
-  `v1.38.0-beta.0`. As of 2026-11-16, Kubernetes 1.38.0 is not released. As
-  of the same date, the change is not in the 1.37 branch, and no cherry-pick
-  PR exists.
+  `v1.38.0-beta.0`. On 2026-11-20, the latest stable release was `v1.37.2`. The
+  `release-1.37` branch still used the earlier cache behavior.
 
-| Projection form | Kubernetes 1.37 | Kubernetes 1.38 and later |
+| Projection form | Kubernetes 1.37 | Kubelet with the fix (verified in v1.38.0-beta.0) |
 | --- | --- | --- |
-| `signerName` (with `labelSelector`) | Upstream measured 0 to 95 seconds. Our rotation test measured **50 to 124 seconds** after the Secret apply, and 20 to 61 seconds after the bundle update. | kubernetes#141459 changes only the entries keyed by `name`. Not measured. |
-| `name` | Up to about 6 minutes: the TTL plus one pod sync. Our e2e tests measured **5m13s** and **5m26s** on two runs. Our rotation test measured **274 to 315 seconds** after the Secret apply, and 211 to 271 seconds after the bundle update. Upstream measured 290 to 374 seconds. | Kubelet clears the entry when the bundle changes. Upstream measured 0 to 95 seconds for the comparable case. Not measured. |
+| `signerName` (with `labelSelector`) | Upstream measured 0 to 95 seconds. Our rotation test measured **50 to 124 seconds** after the Secret apply, and 20 to 61 seconds after the bundle update. | The fix changes only entries keyed by `name`. Our paired test measured **70 seconds** after the bundle update. |
+| `name` | Up to about 6 minutes: the TTL plus one pod sync. Our e2e tests measured **5m13s** and **5m26s** on two runs. Our rotation test measured **274 to 315 seconds** after the Secret apply, and 211 to 271 seconds after the bundle update. Upstream measured 290 to 374 seconds. | Kubelet clears the entry when the bundle changes. Our paired test measured **70 seconds** after the bundle update. |
+
+On 2026-11-20, we compared one direct bundle update on each of two single-node Kind clusters using the default kubelet settings.
+On each node, one pod mounted the same bundle by both selectors. We verified the old CA first.
+We timed from the return of `kubectl apply` until we first read the new CA in each file, with a one-second wait between checks.
+
+| Kubelet version | By object name | By signer name |
+| --- | ---: | ---: |
+| v1.37.0 (without fix) | 300 s | 87 s |
+| v1.38.0-beta.0 (with fix) | 70 s | 70 s |
+
+These observations isolate kubelet projection. They exclude the time needed for Secret propagation, signer reload, and bundle publication.
 
 The upstream figures come from the description of kubernetes#141459. Upstream
 measured them on kind clusters without the change. One pod mounted one bundle

@@ -1,0 +1,37 @@
+main:has(.pcs-guide) > .content-panel:first-child { display: none; }
+.content-panel:has(.pcs-guide) { padding: 0; }
+.content-panel:has(.pcs-guide) .sl-container { max-width: none; }
+main:has(.pcs-guide) .sl-markdown-content { margin: 0; }
+.pcs-guide {
+  color: var(--sl-color-text);
+  font-family: inherit;
+  line-height: 1.6;
+  max-width: 76rem;
+  margin-inline: auto;
+  padding: 2.5rem 2rem 2rem;
+}
+.pcs-guide *, .pcs-guide *::before, .pcs-guide *::after { box-sizing: border-box; }
+.pcs-guide h1, .pcs-guide h2, .pcs-guide p, .pcs-guide ul { margin: 0; }
+.pcs-guide a { color: var(--sl-color-text-accent); text-underline-offset: .2em; }
+.pcs-guide :focus-visible { outline: 2px solid var(--sl-color-text-accent); outline-offset: 4px; }
+.pcs-introduction { max-width: 68ch; }
+.pcs-introduction h1 { color: var(--sl-color-white); font-size: clamp(1.6rem, 2.5vw, 2rem); font-weight: 650; line-height: 1.3; letter-spacing: -.025em; text-wrap: balance; }
+.pcs-introduction > p { margin-top: 1rem; font-size: .95rem; }
+.pcs-introduction > p + p { margin-top: .75rem; }
+.pcs-start-links { display: flex; flex-wrap: wrap; align-items: center; gap: .85rem 1.5rem; margin-top: 1.25rem; font-size: .85rem; font-weight: 600; }
+.pcs-start-links a { display: inline-flex; align-items: center; gap: .75rem; }
+.pcs-start-links .pcs-install-link { background: var(--sl-color-text-accent); color: var(--sl-color-black); text-decoration: none; padding: .55rem .85rem; border-radius: 4px; }
+.pcs-journey { max-width: 72rem; margin-top: 2rem; }
+.pcs-operator-guides { margin-top: 2rem; border-top: 1px solid var(--sl-color-gray-5); padding-top: 1.5rem; }
+.pcs-operator-guides h2 { color: var(--sl-color-white); font-size: 1.2rem; line-height: 1.4; font-weight: 600; }
+.pcs-operator-guides ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.1rem 2rem; list-style: none; padding: 0; margin-top: 1rem; }
+.pcs-operator-guides li { min-width: 0; }
+.pcs-operator-guides li > a { display: inline-flex; gap: .8rem; font-size: .88rem; font-weight: 600; }
+.pcs-operator-guides li > p { max-width: 68ch; font-size: .8rem; margin-top: .3rem; }
+.pcs-icon-attribution { margin-top: 2rem !important; font-size: .68rem; color: var(--sl-color-gray-2); }
+@media (max-width: 640px) {
+  .pcs-guide { padding: 1.5rem 1rem; }
+  .pcs-introduction h1 { font-size: 1.55rem; }
+  .pcs-journey { margin-top: 1.5rem; }
+  .pcs-operator-guides ul { grid-template-columns: 1fr; }
+}

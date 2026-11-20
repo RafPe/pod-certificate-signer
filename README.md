@@ -118,6 +118,19 @@ For rollout and scope details, see [configuration](./docs/configuration.md#preve
 
 ## Documentation
 
+The documentation site includes searchable guides and diagrams for certificate issuance, workload volumes, and CA rotation.
+To preview it locally, run the following commands with Node.js 22.23.4 or later.
+
+```sh
+cd website
+npm ci
+npm run dev
+```
+
+Open the local URL printed by Astro with the path `/pod-certificate-signer/`.
+The documentation workflow builds the site for pull requests and deploys `main` to GitHub Pages.
+Select **GitHub Actions** as the publishing source in the repository’s Pages settings.
+
 | Topic | Where |
 | --- | --- |
 | Install, prerequisites, a working example | [docs/getting-started.md](./docs/getting-started.md) |

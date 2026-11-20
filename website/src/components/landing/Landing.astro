@@ -1,0 +1,31 @@
+---
+import CertificateJourney from './CertificateJourney.astro';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const guides = [
+  { title: 'Certificate configuration', description: 'Configure certificate names, lifetime and key usage. Read the identity constraints that the signer applies.', href: 'configuration/' },
+  { title: 'Operations', description: 'Check controller readiness and diagnose denied requests. Follow the upgrade procedure.', href: 'operations/' },
+  { title: 'CA rotation', description: 'Follow a CA rotation. See how the trust bundle retains previous CA certificates.', href: 'interactive/ca-rotation/' },
+  { title: 'Architecture', description: 'See how kubelet, the API server and the controller interact. Read the security boundaries.', href: 'architecture/' },
+];
+---
+<div class="pcs-guide not-content">
+  <header class="pcs-introduction">
+    <h1 id="pcs-title">Native certificates for Kubernetes pods</h1>
+    <p>The controller validates PodCertificateRequests and signs certificates with your CA. Each certificate must satisfy the signer's identity constraints.</p>
+    <p>Kubelet projects the private key and certificate chain into the workload. A ClusterTrustBundle supplies the CA certificates that workloads use to verify peers.</p>
+    <nav class="pcs-start-links" aria-label="Installation resources">
+      <a class="pcs-install-link" href={`${base}/getting-started/`}>Install the signer <span aria-hidden="true">→</span></a>
+      <a href="https://artifacthub.io/packages/helm/pod-certificate-signer/pod-certificate-signer">Helm chart on Artifact Hub <span aria-hidden="true">↗</span></a>
+    </nav>
+  </header>
+
+  <section class="pcs-journey" aria-label="Certificate lifecycle">
+    <CertificateJourney />
+  </section>
+
+  <section class="pcs-operator-guides" aria-labelledby="guides-heading">
+    <h2 id="guides-heading">Operator guides</h2>
+    <ul>{guides.map(guide => <li><a href={`${base}/${guide.href}`}>{guide.title}<span aria-hidden="true">→</span></a><p>{guide.description}</p></li>)}</ul>
+  </section>
+  <p class="pcs-icon-attribution">Diagram icons: <a href="https://github.com/kubernetes/community/tree/main/icons">Kubernetes community</a> · <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+</div>

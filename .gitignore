@@ -50,3 +50,9 @@ ca-key*
 
 # desloppify local state
 .desloppify/
+
+website/node_modules/
+website/dist/
+website/.astro/
+website/src/content/docs/**/*.md
+website/src/assets/img/

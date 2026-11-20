@@ -2,10 +2,14 @@
 
 `pod-certificate-signer` is a Kubernetes controller for the built-in
 [`PodCertificateRequest`](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#pod-certificate-requests)
-API (`certificates.k8s.io/v1`). A pod can declare a `podCertificate` projected
+API (`certificates.k8s.io/v1`).
+
+A pod can declare a `podCertificate` projected
 volume that names this signer. Kubelet then creates a `PodCertificateRequest`.
-The controller validates the request. Then it issues a short-lived x509
-certificate from your CA, or it denies the request. The controller also
+The controller validates the request. Then it issues a short-lived X.509
+certificate from your CA, or it denies the request.
+
+The controller also
 publishes the signer's CA as a
 [`ClusterTrustBundle`](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#cluster-trust-bundles).
 The bundle holds the current CA and the previous CAs that it keeps across
@@ -16,41 +20,7 @@ The controller is **not** a CSR (`CertificateSigningRequest`) signer. It is
 objects. Kubelet creates these objects, and the kube-apiserver verifies their
 pod identity fields before it stores them.
 
-## Request flow
-
-1. A pod with a `podCertificate` projected volume that names this signer starts
-   on a node. Kubelet generates the key pair and a PKCS#10 CSR. Kubelet creates
-   a `PodCertificateRequest`. The kube-apiserver verifies the pod identity
-   fields of the request.
-2. The reconciler receives the request through a watch. It ignores requests for
-   other signer names. It also ignores requests that have a deletion timestamp
-   or a terminal condition.
-3. The reconciler reads the requesting pod directly. This read is an uncached
-   `get`, never a cached list or watch. The reconciler drops the request if the
-   pod is absent, has a different UID or is being deleted. A drop writes no
-   status.
-4. The reconciler parses the CSR. It resolves the certificate configuration from
-   the request's `unverifiedUserAnnotations`. With `--allow-pod-annotations`
-   (on by default, deprecated), it falls back to the pod annotations. It
-   enforces the identity constraints. It validates the result against the
-   limits that the apiserver applies to the request status.
-5. The certificate authority signs the leaf certificate with the current CA.
-   The reconciler writes the certificate chain, `notBefore`, `notAfter` and
-   `beginRefreshAt` to the request status with the `Issued` condition.
-6. Other results:
-   - An unsupported key gives `Denied` with the reason `UnsupportedKeyType`.
-   - An invalid configuration gives `Denied` with the reason
-     `InvalidUnverifiedUserAnnotations`.
-   - A signing error gives `Failed` with the reason `SigningFailed`.
-   - The reconciler requeues the request with backoff in two cases:
-     - The CA cannot sign yet. It is past its expiry date, or the requested
-       lifetime ends after the CA expires.
-     - An API call fails transiently.
-   - A requeue writes no status.
-7. Kubelet reads the `Issued` status. It writes the private key and the
-   certificate chain into the pod volume and refreshes them. If the pod also
-   declares a `clusterTrustBundle` projected source, kubelet writes the
-   signer's `ClusterTrustBundle` next to them for peer verification.
+## Certificate issuance
 
 ```mermaid
 sequenceDiagram

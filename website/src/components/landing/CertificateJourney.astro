@@ -1,0 +1,36 @@
+---
+import './certificate-journey.css';
+
+const icons = import.meta.env.BASE_URL.replace(/\/$/, '') + '/icons/';
+const components = [
+  { icon: 'deploy', name: 'Signer', incoming: 'Watch requests', outgoing: 'Signed chain' },
+  { icon: 'api', name: 'API server', incoming: 'Create request', outgoing: 'Signed chain' },
+  { icon: 'node', name: 'Kubelet', outgoing: 'Key + chain' },
+  { icon: 'pod', name: 'Pod' },
+];
+---
+<figure class="issuance-map" aria-labelledby="issuance-caption">
+  <figcaption id="issuance-caption">How a pod gets its certificate</figcaption>
+  <div class="issuance-rail" aria-hidden="true">
+    {components.map(({ icon, name, incoming, outgoing }) => <>
+      <div class="issuance-actor">
+        <img src={icons + icon + '.svg'} width="56" height="56" alt="" />
+        <strong>{name}</strong>
+      </div>
+      {outgoing && <div class="issuance-links">
+        {incoming && <div class="issuance-edge incoming"><span>{incoming}</span><i></i></div>}
+        <div class="issuance-edge outgoing">
+          <span>
+            {icon !== 'node' && <svg viewBox="0 0 20 24" width="15" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M3 1h9l5 5v13H3z M12 1v6h5 M6 9h5 M6 12h3" />
+              <circle cx="13" cy="16" r="3" /><path d="m11 18-1 5 3-2 3 2-1-5"/>
+            </svg>}
+            {outgoing}
+          </span><i></i>
+        </div>
+      </div>}
+    </>)}
+  </div>
+  <p>Kubelet creates the key and submits a certificate request. The signer watches the API server and writes the signed chain to request status.</p>
+  <p>Kubelet reads the chain and mounts it with the local private key in the pod.</p>
+</figure>

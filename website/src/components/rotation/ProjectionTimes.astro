@@ -1,0 +1,36 @@
+---
+interface Props {
+  readings: { label: string; version: string; name: number; signerName: number }[];
+}
+const { readings } = Astro.props;
+const axisMax = Math.ceil(Math.max(...readings.map(row => row.name)) / 60) * 60;
+---
+<figure class="projection-times">
+  <figcaption>Time until the pod reads the new CA</figcaption>
+  <p>Bundle projected by object name · seconds after the bundle update</p>
+  <ul>
+    {readings.map(row => <li>
+      <div class="reading">
+        <span>{row.label} <code>{row.version}</code></span>
+        <strong>{row.name} s</strong>
+      </div>
+      <div class="track" aria-hidden="true">
+        <div class="bar" style={{ width: `${100 * row.name / axisMax}%` }}></div>
+      </div>
+    </li>)}
+  </ul>
+  <div class="scale" aria-hidden="true"><span>0 s</span><span>{axisMax / 2} s</span><span>{axisMax} s</span></div>
+</figure>
+<style>
+  .projection-times { margin: 1.5rem 0; max-width: 46rem; padding: clamp(1rem, 3vw, 1.5rem); border: 1px solid var(--pcs-line-2); border-radius: 6px; }
+  figcaption { color: var(--pcs-ink); font-weight: 600; font-size: 1.15rem; }
+  figure p { margin: .25rem 0 1.25rem; color: var(--pcs-muted); }
+  figure ul { margin: 0; padding: 0; list-style: none; }
+  figure li { margin: 0 0 1rem; }
+  .reading, .scale { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
+  .reading { margin-bottom: .4rem; }
+  .reading strong, .scale { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .track { height: .6rem; background: var(--pcs-bg-2); border-inline: 1px solid var(--pcs-line-2); }
+  .bar { height: 100%; background: var(--pcs-blue); }
+  .scale { margin-top: -.55rem; font-size: .85rem; color: var(--pcs-muted); }
+</style>

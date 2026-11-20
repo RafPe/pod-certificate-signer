@@ -51,6 +51,8 @@ kubectl -n pcs-system get secret podcertificate-signer-ca
 
 ## 2. Install the chart
 
+Browse chart versions and values on [Artifact Hub](https://artifacthub.io/packages/helm/pod-certificate-signer/pod-certificate-signer).
+
 Each release publishes the chart to GHCR as an OCI artifact, together with the
 controller image. The chart requires `signer.name` and a CA source:
 
@@ -96,10 +98,17 @@ To manage the release, use `make helm-status`, `make helm-history`,
 
 ## 3. Request a certificate from a workload
 
-A workload declares a `podCertificate` projected volume with the signer name.
-We recommend that the workload also mounts the `ClusterTrustBundle` of the
-signer in the same volume. The workload then has the trust anchors to verify
-its peers:
+Use the `podCertificate` source to give a workload its own private key and certificate chain. A pod can request and present its certificate without mounting a `ClusterTrustBundle`.
+
+### Which side needs the trust bundle?
+
+Suppose a client calls an HTTPS server whose certificate comes from this signer. The server presents its certificate. The **client** needs to trust the signer’s CA and check the server’s DNS name.
+
+Mount the `clusterTrustBundle` source in the client if its TLS trust store needs those CA certificates. Configure the client to read `ca.crt` and reload it after rotation. If its trust store already tracks the CA, the extra mount is optional.
+
+With mutual TLS (mTLS), the server also verifies the client certificate. Each side needs trust anchors for the **other side’s issuer**. The server must also check which client identities it allows, for example by SPIFFE ID.
+
+The example below includes both sources. Omit the `clusterTrustBundle` entry if the pod only needs its own credentials.
 
 ```yaml
     volumeMounts:

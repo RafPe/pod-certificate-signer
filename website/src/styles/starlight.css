@@ -1,0 +1,65 @@
+/* Map Starlight's theme variables onto the shared tokens so the docs and the
+   landing page read as one site. Overrides stay minimal on purpose. */
+:root {
+  --sl-font: var(--pcs-font-body);
+  --sl-font-mono: var(--pcs-font-mono);
+  --sl-color-accent-low: var(--pcs-blue-soft);
+  --sl-color-accent: var(--pcs-blue);
+  --sl-color-accent-high: var(--pcs-blue-ink);
+  --sl-color-white: var(--pcs-ink);
+  --sl-color-gray-1: var(--pcs-ink-2);
+  --sl-color-gray-2: var(--pcs-ink-2);
+  --sl-color-gray-3: var(--pcs-muted);
+  --sl-color-gray-4: var(--pcs-line-2);
+  --sl-color-gray-5: var(--pcs-line);
+  --sl-color-gray-6: var(--pcs-bg-2);
+  --sl-color-gray-7: var(--pcs-bg-2);
+  --sl-color-black: var(--pcs-bg);
+  --sl-color-bg: var(--pcs-bg);
+  --sl-color-bg-nav: var(--pcs-bg-2);
+  --sl-color-bg-sidebar: var(--pcs-bg);
+  --sl-color-hairline: var(--pcs-line);
+  --sl-color-hairline-light: var(--pcs-line);
+  --sl-color-hairline-shade: var(--pcs-line-2);
+  --sl-color-text: var(--pcs-ink-2);
+  --sl-color-text-accent: var(--pcs-blue-ink);
+}
+:root[data-theme="dark"] {
+  --sl-color-white: var(--pcs-ink);
+  --sl-color-black: var(--pcs-bg);
+}
+
+.sl-markdown-content :is(h1,h2,h3), h1#_top { font-family: var(--pcs-font-display); }
+header.header { border-bottom: 2px solid var(--pcs-blue); }
+.site-title { font-weight: 700; letter-spacing: -.035em; }
+html {
+  --sl-text-h1: 1.75rem;
+  --sl-text-h2: 1.375rem;
+  --sl-text-h3: 1.125rem;
+}
+/* Keep prose short enough to scan while giving figures and tables a wider column. */
+[data-has-sidebar] .sl-markdown-content > :is(p, ul, ol, dl, blockquote, details) {
+  max-inline-size: 68ch;
+}
+@media (min-width: 72rem) {
+  html[data-has-sidebar] {
+    --docs-shell: 100rem;
+    --docs-gutter: max(0px, calc((100% - var(--docs-shell)) / 2));
+    --sl-content-width: 64rem;
+  }
+  [data-has-sidebar] .main-frame {
+    inline-size: 100%;
+    max-inline-size: var(--docs-shell);
+    margin-inline: auto;
+  }
+  [data-has-sidebar] .sidebar-pane { inset-inline-start: var(--docs-gutter); }
+  [data-has-sidebar] .main-pane {
+    flex: 1 1 0;
+    min-inline-size: 0;
+    --sl-content-margin-inline: 0;
+  }
+  [data-has-sidebar] .right-sidebar-container { flex: 0 0 16rem; }
+  [data-has-sidebar] .right-sidebar { width: 16rem; }
+  [data-has-sidebar] .sl-container { max-inline-size: var(--sl-content-width); }
+}
+.sl-markdown-content :not(pre) > code { border-radius: 3px; }

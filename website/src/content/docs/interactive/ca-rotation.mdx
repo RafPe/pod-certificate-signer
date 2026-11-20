@@ -1,0 +1,35 @@
+---
+title: CA rotation
+description: How kubelet refreshes projected trust anchors after the signer publishes a new CA.
+---
+
+import ProjectionTimes from '../../../components/rotation/ProjectionTimes.astro';
+import readings from '../../../components/rotation/projection-times.json';
+
+When the signing CA changes, the leader publishes the new CA and the retained CAs in its `ClusterTrustBundle`. Kubelet updates the projected file on a pod sync. Applications must reread the file to use the new anchors.
+
+## When does the pod see the new CA?
+
+A pod can mount a bundle by its object `name` even when the bundle has a `spec.signerName`. On Kubernetes 1.37.0, a change to that bundle left the name-keyed cache entry in place until it expired.
+
+The kubelet fix evicts that entry when the bundle changes. The next pod sync can then project the new anchors. [Kubernetes PR #141459](https://github.com/kubernetes/kubernetes/pull/141459)
+
+<ProjectionTimes readings={readings} />
+
+The example workload selects bundles by `signerName`. That lookup already cleared its cache on updates. In the same test its file changed after **{readings[0].signerName} s** on {readings[0].version} and **{readings[1].signerName} s** on {readings[1].version}.
+
+### How we measured
+
+On November 20, 2026, we ran one update on each of two single-node Kind clusters. Both used the default kubelet sync settings. One running pod mounted the same bundle twice, once by object name and once by signer name.
+
+1. Verify that both mounted files contain the original CA.
+2. Replace the CA in the bundle and start the clock when `kubectl apply` returns.
+3. Read both files, check their SHA-256 hashes, and wait one second between checks. Record the first time each file contains the replacement CA.
+
+These are individual observations. The pod sync schedule and polling interval affect the result. The clock excludes Secret propagation, signer reload, and bundle publication.
+
+### Planning a rotation
+
+Keep the old CA in the trust bundle while workloads still use certificates it signed. Wait at least one full certificate lifetime between rotations. The signer retains two previous CAs by default.
+
+<a href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/operations/#rotation-runbook`}>Read the rotation runbook</a> for the Secret update, overlap window, and application reload checks.

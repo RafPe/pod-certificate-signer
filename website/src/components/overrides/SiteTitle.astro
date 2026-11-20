@@ -1,0 +1,27 @@
+---
+// Starlight `SiteTitle` override: the default title plus the top-level
+// navigation the landing page design calls for. Hidden on narrow screens,
+// where Starlight's mobile menu exposes the full sidebar instead.
+import Default from '@astrojs/starlight/components/SiteTitle.astro';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const here = Astro.url.pathname;
+const links = [
+  { label: 'Installation', path: 'getting-started' },
+  { label: 'Architecture', path: 'architecture' },
+  { label: 'CA rotation', path: 'interactive/ca-rotation' },
+].map(({label, path}) => ({ label, href: `${base}/${path}/` }));
+---
+<Default />
+<nav class="pcs-topnav sl-hidden lg:sl-flex" aria-label="Site sections">
+  {links.map((l) => (
+    <a href={l.href} aria-current={here === l.href ? 'page' : undefined}>{l.label}</a>
+  ))}
+</nav>
+
+<style>
+  .pcs-topnav { align-items: center; gap: 1.1rem; margin-inline-start: 1.25rem; font-size: var(--sl-text-sm); font-weight: 500; white-space: nowrap; }
+  .pcs-topnav a { color: var(--sl-color-gray-2); text-decoration: none; padding-block: .25rem; border-bottom: 2px solid transparent; }
+  .pcs-topnav a:hover { color: var(--sl-color-white); }
+  .pcs-topnav a[aria-current="page"] { color: var(--sl-color-text-accent); border-bottom-color: var(--sl-color-accent); }
+</style>
