@@ -5,25 +5,30 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/audit"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
 )
 
 // An empty --signer-name must be rejected fast, before the controller attempts
 // any Kubernetes API calls, mirroring the required --ca-cert-path handling.
 func TestValidateFlagsRequiresSignerName(t *testing.T) {
-	if err := validateFlags("", podcertificate.Options{ClusterFQDN: "cluster.local"}); err == nil {
+	if err := validateFlags(&flags{certOpts: podcertificate.Options{ClusterFQDN: "cluster.local"}}); err == nil {
 		t.Error("validateFlags(\"\") = nil, want error for empty signer name")
 	}
-	if err := validateFlags("example.org/signer", podcertificate.Options{ClusterFQDN: "cluster.local"}); err != nil {
+	f := &flags{signerName: "example.org/signer", certOpts: podcertificate.Options{ClusterFQDN: "cluster.local"}}
+	if err := validateFlags(f); err != nil {
 		t.Errorf("validateFlags(%q) = %v, want nil", "example.org/signer", err)
 	}
 }
@@ -35,7 +40,7 @@ func TestValidateFlagsRejectsInvalidClusterFQDN(t *testing.T) {
 		"a..example",
 	} {
 		t.Run(clusterFQDN, func(t *testing.T) {
-			err := validateFlags("example.org/signer", podcertificate.Options{ClusterFQDN: clusterFQDN})
+			err := validateFlags(&flags{signerName: "example.org/signer", certOpts: podcertificate.Options{ClusterFQDN: clusterFQDN}})
 			if err == nil {
 				t.Fatalf("validateFlags(clusterFQDN=%q) error = nil, want invalid DNS error", clusterFQDN)
 			}
@@ -55,7 +60,8 @@ func TestValidateFlagsRejectsEmptyClusterFQDN(t *testing.T) {
 	if err := fs.Parse([]string{"--cluster-fqdn="}); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if err := validateFlags("example.org/signer", f.certOpts); err == nil {
+	f.signerName = "example.org/signer"
+	if err := validateFlags(f); err == nil {
 		t.Fatal("validateFlags(--cluster-fqdn=) = nil, want an error for the empty value")
 	}
 }
@@ -188,6 +194,9 @@ func TestChartSecurityDefaultsMatchBinary(t *testing.T) {
 		Metrics struct {
 			Insecure *bool `json:"insecure"`
 		} `json:"metrics"`
+		Audit struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"audit"`
 	}
 	if err := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096).Decode(&values); err != nil {
 		t.Fatalf("decoding %s: %v", path, err)
@@ -203,6 +212,7 @@ func TestChartSecurityDefaultsMatchBinary(t *testing.T) {
 		{"signer.allow_pod_annotations", values.Signer.AllowPodAnnotations, defaultAllowPodAnnotations},
 		// metrics.insecure is the inverse of --metrics-secure.
 		{"metrics.insecure", values.Metrics.Insecure, !defaultMetricsSecure},
+		{"audit.enabled", values.Audit.Enabled, defaultAuditEnabled},
 	}
 	for _, tc := range cases {
 		if tc.got == nil {
@@ -236,6 +246,9 @@ func TestRegisterFlagsDefaults(t *testing.T) {
 		{"allow-pod-annotations", f.certOpts.AllowPodAnnotations, defaultAllowPodAnnotations},
 		// Kubelet CSR SANs are opt-in.
 		{"honor-csr-sans", f.certOpts.HonorCSRSANs, false},
+		{"audit-enabled", f.auditEnabled, defaultAuditEnabled},
+		// Raw supplied values are opt-in: by default a record names the keys only.
+		{"audit-record-supplied-values", f.audit.RecordSuppliedValues, false},
 	}
 	if f.certOpts.ClusterFQDN != podcertificate.DefaultClusterFQDN {
 		t.Errorf("--cluster-fqdn defaults to %q, want %q", f.certOpts.ClusterFQDN, podcertificate.DefaultClusterFQDN)
@@ -245,6 +258,27 @@ func TestRegisterFlagsDefaults(t *testing.T) {
 			t.Errorf("--%s defaults to %t, want %t", d.flag, d.got, d.want)
 		}
 	}
+	if !defaultAuditEnabled {
+		t.Error("defaultAuditEnabled = false, want true: the issuance audit record ships on")
+	}
+	auditDefaults := audit.DefaultOptions()
+	limits := []struct {
+		flag      string
+		got, want int
+	}{
+		{"audit-max-copied-keys", f.audit.MaxCopiedKeys, auditDefaults.MaxCopiedKeys},
+		{"audit-max-value-length", f.audit.MaxValueLength, auditDefaults.MaxValueLength},
+		{"audit-max-record-bytes", f.audit.MaxRecordBytes, auditDefaults.MaxRecordBytes},
+	}
+	for _, l := range limits {
+		if l.got != l.want {
+			t.Errorf("--%s defaults to %d, want %d", l.flag, l.got, l.want)
+		}
+	}
+	if f.audit.PodLabels != nil || f.audit.PodAnnotations != nil {
+		t.Errorf("--audit-pod-labels and --audit-pod-annotations default to %q and %q, want both empty",
+			f.audit.PodLabels, f.audit.PodAnnotations)
+	}
 
 	// Leader election has used a Lease for as long as the chart has granted
 	// coordination.k8s.io RBAC; help text naming a ConfigMap sends an operator
@@ -252,5 +286,123 @@ func TestRegisterFlagsDefaults(t *testing.T) {
 	help := fs.Lookup("leader-election-id").Usage
 	if !strings.Contains(help, "Lease") || strings.Contains(strings.ToLower(help), "configmap") {
 		t.Errorf("--leader-election-id help = %q, want it to name the Lease", help)
+	}
+}
+
+// parseFlags registers every flag on a private FlagSet, parses args and sets
+// a signer name, so validateFlags sees what the binary would see.
+func parseFlags(t *testing.T, args ...string) *flags {
+	t.Helper()
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	f := registerFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		t.Fatalf("Parse(%q) = %v", args, err)
+	}
+	if f.signerName == "" {
+		f.signerName = "example.org/signer"
+	}
+	return f
+}
+
+// The comma-separated lists replace the default on each use, and an empty
+// value is an empty list. The chart renders --audit-pod-labels= by default,
+// so an empty value that became one empty entry would stop a default install.
+func TestAuditListFlagsParse(t *testing.T) {
+	cases := []struct {
+		name            string
+		args            []string
+		wantLabels      []string
+		wantAnnotations []string
+	}{
+		{"empty values", []string{"--audit-pod-labels=", "--audit-pod-annotations="}, nil, nil},
+		{"lists", []string{"--audit-pod-labels=team,app.kubernetes.io/*", "--audit-pod-annotations=a/b"},
+			[]string{"team", "app.kubernetes.io/*"}, []string{"a/b"}},
+		{"last use wins", []string{"--audit-pod-labels=a", "--audit-pod-labels=b,c"}, []string{"b", "c"}, nil},
+		{"spaces and empty entries", []string{"--audit-pod-labels= team, app ,,", "--audit-pod-annotations= , "},
+			[]string{"team", "app"}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := parseFlags(t, tc.args...)
+			if !slices.Equal(f.audit.PodLabels, tc.wantLabels) {
+				t.Errorf("pod labels = %q, want %q", f.audit.PodLabels, tc.wantLabels)
+			}
+			if !slices.Equal(f.audit.PodAnnotations, tc.wantAnnotations) {
+				t.Errorf("pod annotations = %q, want %q", f.audit.PodAnnotations, tc.wantAnnotations)
+			}
+			if err := validateFlags(f); err != nil {
+				t.Errorf("validateFlags(%q) = %v, want nil", tc.args, err)
+			}
+		})
+	}
+}
+
+// An invalid audit option must stop the binary before it connects to the API
+// server, the same as an invalid --cluster-fqdn.
+func TestValidateFlagsRejectsInvalidAuditOptions(t *testing.T) {
+	for _, arg := range []string{
+		"--audit-max-copied-keys=0",
+		"--audit-pod-annotations=*",
+		"--audit-pod-labels=a*b",
+		"--audit-max-value-length=4097",
+		"--audit-max-record-bytes=4095",
+	} {
+		t.Run(arg, func(t *testing.T) {
+			if err := validateFlags(parseFlags(t, arg)); err == nil {
+				t.Errorf("validateFlags(%s) = nil, want an error", arg)
+			}
+		})
+	}
+}
+
+// With audit off, the audit options are not read, so they cannot stop the
+// binary.
+func TestValidateFlagsIgnoresAuditOptionsWhenDisabled(t *testing.T) {
+	f := parseFlags(t, "--audit-enabled=false", "--audit-max-copied-keys=0", "--audit-pod-annotations=*")
+	if err := validateFlags(f); err != nil {
+		t.Errorf("validateFlags() = %v, want nil while audit is disabled", err)
+	}
+}
+
+// Audit off must hand the reconciler the untyped nil recorder. A nil
+// *audit.WriterSink inside the interface is not == nil and would turn audit
+// on with a nil sink.
+func TestNewAuditRecorderDisabledReturnsNil(t *testing.T) {
+	f := parseFlags(t, "--audit-enabled=false")
+	recorder, builder, closeAudit, err := newAuditRecorder(f, io.Discard, logr.Discard())
+	if err != nil {
+		t.Fatalf("newAuditRecorder() error = %v", err)
+	}
+	if recorder != nil || builder != nil {
+		t.Errorf("newAuditRecorder() = (%#v, %v), want (nil, nil) while audit is disabled", recorder, builder)
+	}
+	closeAudit()
+}
+
+// Audit on returns a recorder that writes one line for each record to the
+// writer, and its builder. The close function stops the recorder: a record
+// after it is not written.
+func TestNewAuditRecorderEnabled(t *testing.T) {
+	f := parseFlags(t)
+	var out bytes.Buffer
+	recorder, builder, closeAudit, err := newAuditRecorder(f, &out, logr.Discard())
+	if err != nil {
+		t.Fatalf("newAuditRecorder() error = %v", err)
+	}
+	if recorder == nil || builder == nil {
+		t.Fatalf("newAuditRecorder() = (%v, %v), want both set while audit is enabled", recorder, builder)
+	}
+
+	// Record returns after the write, so out is safe to read here.
+	recorder.Record(context.Background(), audit.Record{Event: audit.EventPublished})
+	written := out.String()
+	if strings.Count(written, "\n") != 1 || !strings.Contains(written, string(audit.EventPublished)) {
+		t.Fatalf("written = %q, want one line with the record", written)
+	}
+
+	closeAudit()
+	recorder.Record(context.Background(), audit.Record{Event: audit.EventPublished})
+	if out.String() != written {
+		t.Errorf("a record after close wrote %q, want nothing", strings.TrimPrefix(out.String(), written))
 	}
 }

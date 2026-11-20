@@ -205,7 +205,7 @@ flowchart LR
 
 | Component | Responsibility | Leader-gated |
 | --- | --- | --- |
-| **PodCertificateRequest reconciler** | Watches `PodCertificateRequest`s for the configured signer name. Reads the requesting pod with an uncached `get`. Runs the validation. Records the `Issued`, `Denied` or `Failed` outcome on the request status and emits an Event for it. Otherwise it requeues or drops the request. | **Yes**. controller-runtime gates controllers on leader election by default. See [ADR-0006](adr/0006-release-leader-lease-on-cancel.md). |
+| **PodCertificateRequest reconciler** | Watches `PodCertificateRequest`s for the configured signer name. Reads the requesting pod with an uncached `get`. Runs the validation. Records the `Issued`, `Denied` or `Failed` outcome on the request status and emits an Event for it. Otherwise it requeues or drops the request. Writes the issuance audit record to stdout ([Auditing](./auditing.md), [ADR-0007](adr/0007-issuance-audit-record.md)). | **Yes**. controller-runtime gates controllers on leader election by default. See [ADR-0006](adr/0006-release-leader-lease-on-cancel.md). |
 | **Certificate configuration** | Parses the kubelet CSR and the annotation contract. Enforces the identity constraints. Resolves `${...}` interpolation. Validates duration, refresh time and EKU against the apiserver status contract. | Not applicable. The reconciler calls this library. |
 | **Certificate authority** | Holds the CA in memory. Reads the CA certificate and key from the read-only mount at startup. Reloads them on fsnotify events and every 60 seconds. Refuses a lifetime that ends after the CA expires. Signs the leaf certificate. Keeps up to `--max-previous-ca-certs` previous CAs in the trust bundle PEM. | No. Every replica keeps its CA current. |
 | **ClusterTrustBundle publisher** | Names and assembles the signer's `ClusterTrustBundle` from the trust bundle of the certificate authority. Publishes it at start, on each CA change and on a 10-minute drift-repair tick. Each publish gets the bundle, then creates or patches it. Runs one publish at a time and retries with backoff. At startup, every replica reads the existing bundle to load the previous-CA history ([ADR-0004](adr/0004-bootstrapped-previous-ca-history.md)). | **Yes**, for the publish. Only the elected leader writes the shared resource. The startup read runs on every replica. |
@@ -255,5 +255,7 @@ components behave during CA rotation, leader changes and restarts.
   constraints, the CLI flags and the Helm values.
 - [Operations](./operations.md): CA rotation, leader election, readiness,
   metrics, upgrades and troubleshooting.
+- [Auditing](./auditing.md): the issuance audit record, and how to join a
+  certificate serial or fingerprint to the pod that requested it.
 - [Architecture decision records](./adr/README.md): the reasons behind the
   design.

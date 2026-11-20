@@ -68,6 +68,13 @@ spec:
             - --honor-csr-sans={{ .Values.signer.honor_csr_sans }}
             - --allow-unverified-identities={{ .Values.signer.allow_unverified_identities }}
             - --allow-pod-annotations={{ .Values.signer.allow_pod_annotations }}
+            - --audit-enabled={{ .Values.audit.enabled }}
+            - {{ printf "--audit-pod-labels=%s" (join "," .Values.audit.pod_labels) | quote }}
+            - {{ printf "--audit-pod-annotations=%s" (join "," .Values.audit.pod_annotations) | quote }}
+            - --audit-max-copied-keys={{ .Values.audit.max_copied_keys }}
+            - --audit-max-value-length={{ .Values.audit.max_value_length }}
+            - --audit-max-record-bytes={{ .Values.audit.max_record_bytes }}
+            - --audit-record-supplied-values={{ .Values.audit.record_supplied_values }}
           {{- with .Values.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}

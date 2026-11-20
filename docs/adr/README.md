@@ -33,6 +33,7 @@ when a change needs an ADR and how a maintainer reviews it.
 | [0004](0004-bootstrapped-previous-ca-history.md) | Bound and validate the previous-CA history bootstrapped from the ClusterTrustBundle | Accepted | 2.4.0 |
 | [0005](0005-bounded-metrics-surface.md) | Expose a bounded metrics surface, and never label a metric with a per-request identity | Accepted | 2.4.0 |
 | [0006](0006-release-leader-lease-on-cancel.md) | Release the leader Lease on a voluntary shutdown | Accepted | 3.0.1 |
+| [0007](0007-issuance-audit-record.md) | Write a best-effort issuance audit record to stdout | Proposed | Not released |
 
 Next: read [CONTRIBUTING.md](../../CONTRIBUTING.md#when-an-adr-is-required) to
 find out when a change needs a new ADR.

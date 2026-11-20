@@ -2,9 +2,11 @@ package controller
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/outcome"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/testutil"
 )
 
 // stubSigner is a test double for the podSigner seam on the reconciler. It
@@ -77,7 +80,7 @@ func TestProcessReachesSigner(t *testing.T) {
 	stub := &stubSigner{name: "example.org/signer", cert: want}
 	r, pcr, ctx := newSigningHarness(t, stub)
 
-	got, err := r.signRequest(ctx, pcr)
+	_, got, err := r.signRequest(ctx, pcr)
 	if err != nil {
 		t.Fatalf("signRequest() error = %v, want nil", err)
 	}
@@ -109,7 +112,7 @@ func TestProcessLongPodNameEmitsDefaultSANWarning(t *testing.T) {
 	}
 	ctx := logr.NewContext(context.Background(), logr.Discard())
 
-	cert, err := r.signRequest(ctx, pcr)
+	_, cert, err := r.signRequest(ctx, pcr)
 	if err != nil {
 		t.Fatalf("signRequest() error = %v, want nil (the CN carries the identity)", err)
 	}
@@ -165,7 +168,7 @@ func TestProcessClassifiesSignerErrors(t *testing.T) {
 			stub := &stubSigner{name: "example.org/signer", err: tc.signErr}
 			r, pcr, ctx := newSigningHarness(t, stub)
 
-			cert, err := r.signRequest(ctx, pcr)
+			_, cert, err := r.signRequest(ctx, pcr)
 			if cert != nil {
 				t.Fatalf("signRequest() cert = %v, want nil", cert)
 			}
@@ -204,9 +207,34 @@ func livePCR(t *testing.T, requestUID, podUID types.UID) (*certificatesv1.PodCer
 	return pcr, pod
 }
 
+// stubCert returns a certificate with a parsed leaf and issuer, so an audit
+// record can be built from it. The chain is the literal "pem-chain", which the
+// status tests match against.
 func stubCert() *podcertificate.Certificate {
-	return &podcertificate.Certificate{CertificateChain: "pem-chain", Config: &podcertificate.Config{}, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour)}
+	pair := stubCertPair()
+	return &podcertificate.Certificate{
+		CertificateChain: "pem-chain",
+		Leaf:             pair.leaf,
+		Issuer:           pair.issuer,
+		Config:           &podcertificate.Config{},
+		NotBefore:        time.Now(),
+		NotAfter:         time.Now().Add(time.Hour),
+	}
 }
+
+// stubCertPair generates the leaf and issuer of stubCert once for the test
+// binary. Neither is modified after it is built.
+var stubCertPair = sync.OnceValue(func() struct{ leaf, issuer *x509.Certificate } {
+	leaf, err := testutil.NewNonCA("mypod", time.Hour)
+	if err != nil {
+		panic(fmt.Sprintf("generate stub leaf: %v", err))
+	}
+	issuer, err := testutil.NewCA("stub-ca", time.Hour)
+	if err != nil {
+		panic(fmt.Sprintf("generate stub issuer: %v", err))
+	}
+	return struct{ leaf, issuer *x509.Certificate }{leaf.Cert, issuer.Cert}
+})
 
 // When the manager cache misses but the pod exists on a live read, the
 // controller must re-read via the APIReader and proceed to sign, instead of
@@ -219,7 +247,7 @@ func TestProcessCacheMissReadsLive(t *testing.T) {
 	r := &PodCertificateRequestReconciler{Client: cache, APIReader: live, Log: logr.Discard(), Signer: stub, SignerName: stub.name}
 	ctx := logr.NewContext(context.Background(), logr.Discard())
 
-	cert, err := r.signRequest(ctx, pcr)
+	_, cert, err := r.signRequest(ctx, pcr)
 	if err != nil {
 		t.Fatalf("signRequest() error = %v, want nil (live read should find the pod)", err)
 	}
@@ -249,7 +277,7 @@ func TestProcessStalePodUIDDropped(t *testing.T) {
 	}
 	ctx := logr.NewContext(context.Background(), logr.Discard())
 
-	cert, err := r.signRequest(ctx, pcr)
+	_, cert, err := r.signRequest(ctx, pcr)
 	if cert != nil || !errors.Is(err, errDropRequest) {
 		t.Fatalf("got (%v, %v), want (nil, errDropRequest) for a UID-mismatched pod", cert, err)
 	}
@@ -274,7 +302,7 @@ func TestProcessPodNotFoundDropsAsStale(t *testing.T) {
 		Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10),
 	}
 
-	cert, err := r.signRequest(context.Background(), testPCR())
+	_, cert, err := r.signRequest(context.Background(), testPCR())
 	if cert != nil || !errors.Is(err, errDropRequest) {
 		t.Fatalf("got (%v, %v), want (nil, errDropRequest) for a stale request", cert, err)
 	}
@@ -292,7 +320,7 @@ func TestProcessPodGetErrorIsTransient(t *testing.T) {
 		Build()
 	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard()}
 
-	cert, err := r.signRequest(context.Background(), testPCR())
+	_, cert, err := r.signRequest(context.Background(), testPCR())
 	if cert != nil {
 		t.Fatalf("cert = %v, want nil", cert)
 	}
@@ -317,7 +345,7 @@ func TestProcessPodBeingDeletedSkips(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(pod).Build()
 	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard()}
 
-	cert, err := r.signRequest(context.Background(), testPCR())
+	_, cert, err := r.signRequest(context.Background(), testPCR())
 	if cert != nil || !errors.Is(err, errDropRequest) {
 		t.Fatalf("got (%v, %v), want (nil, errDropRequest)", cert, err)
 	}

@@ -328,6 +328,10 @@ func (ca *CertificateAuthority) normalizePreviousCAs() {
 // Failures caused by the CA itself - none loaded, an expired signer, or a
 // cfg.Duration that does not fit inside the remaining CA validity - wrap
 // [ErrCASignerUnusable]; see its doc. Any other error is terminal.
+//
+// Sign parses the new certificate back from its DER. A certificate that
+// cannot be parsed back is a terminal error and is not published. This cannot
+// happen for a certificate that the standard library just created.
 func (ca *CertificateAuthority) Sign(cfg *podcertificate.Config) (*podcertificate.Certificate, error) {
 	// Copy the CA material under the lock and sign without it, so a metrics
 	// scrape or a reload never waits on a signing operation. A reload replaces

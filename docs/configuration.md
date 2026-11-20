@@ -359,6 +359,30 @@ directly.
   -allow-unverified-identities
         Allow cn/san/ip-san/uris values that do not resolve to the pod's verified
         identity. Off by default.
+  -audit-enabled
+        Write a best-effort issuance audit record, one JSON line on stdout,
+        for each signing attempt and each terminal outcome. The signer reports
+        a dropped record on the operational log. On by default.
+  -audit-max-copied-keys int
+        Maximum number of pod labels that one record copies, and separately
+        of pod annotations. 1 to 256 (default 32).
+  -audit-max-record-bytes int
+        Maximum size of one record line in bytes. 4096 to 262144 (default 16384).
+  -audit-max-value-length int
+        Maximum length in bytes of each label value, annotation value,
+        supplied value and denial or failure message. The signer cuts a
+        longer value to this limit and then appends "...[truncated]"
+        (14 bytes). 1 to 4096 (default 256).
+  -audit-pod-annotations value
+        Comma-separated pod annotation keys to copy into each record. Exact
+        keys or prefixes that end in "*". A bare "*" is not allowed. Empty by
+        default.
+  -audit-pod-labels value
+        Comma-separated pod label keys to copy into each record. Exact keys or
+        prefixes that end in "*". A bare "*" copies all labels. Empty by default.
+  -audit-record-supplied-values
+        Add the raw values of the supplied configuration annotations to the
+        record. Off by default: the record has only their names.
   -ca-cert-path string        CA certificate file.
   -ca-key-path string         CA private key file.
   -cluster-fqdn string        FQDN of the cluster (default "cluster.local").
@@ -387,6 +411,9 @@ directly.
   -signer-name string         Only sign requests with this .spec.signerName. Required.
   -zap-* ...                  Standard zap logging flags (encoder, level, time encoding).
 ```
+
+The `-audit-*` flags configure the issuance audit record. The chart sets them
+from the `audit` values. See [Auditing](auditing.md).
 
 The chart sets `--leader-election-id` to the release `fullname`, not to the flag
 default. The chart sets `--zap-log-level`, `--zap-encoder` and

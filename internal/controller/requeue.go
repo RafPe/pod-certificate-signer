@@ -23,7 +23,13 @@ import (
 // reconcile returns, so logging it too would report each failure twice. A
 // terminal outcome is logged once, at the severity it deserves - a denial is
 // the requester's misconfiguration, a failure is the signer's.
-func (r *PodCertificateRequestReconciler) requeueOrRecordTerminal(ctx context.Context, pcr *certificatesv1.PodCertificateRequest, err error) (ctrl.Result, error) {
+//
+// pod is the live pod signRequest returned, or nil. When audit is on, a
+// terminal outcome gets its denied or failed record only once its status
+// write persisted: a write that lost the race, found the request gone, was
+// refused or may not have committed records nothing.
+func (r *PodCertificateRequestReconciler) requeueOrRecordTerminal(ctx context.Context, pcr *certificatesv1.PodCertificateRequest,
+	pod *corev1.Pod, err error) (ctrl.Result, error) {
 	var te *terminalError
 	if !errors.As(err, &te) {
 		return r.requeue(pcr, err)
@@ -35,8 +41,12 @@ func (r *PodCertificateRequestReconciler) requeueOrRecordTerminal(ctx context.Co
 	} else {
 		logger.Error(te.err, "request failed", "reason", te.reason)
 	}
-	if werr := r.recordTerminal(ctx, pcr, te); werr != nil {
+	result, werr := r.recordTerminal(ctx, pcr, te)
+	if werr != nil {
 		return r.requeue(pcr, werr)
+	}
+	if result == writePersisted {
+		r.auditTerminal(ctx, pcr, pod, te)
 	}
 	return ctrl.Result{}, nil
 }

@@ -21,8 +21,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"go.uber.org/zap/zapcore"
@@ -33,6 +35,7 @@ import (
 	// is used and this is inert.
 	_ "k8s.io/client-go/plugin/pkg/client/auth/oidc"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -46,6 +49,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/audit"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/controller"
 	signermetrics "github.com/rafpe/kubernetes-podcertificate-signer/internal/metrics"
@@ -92,6 +96,11 @@ const (
 	// configuration fallback on until it is removed in 4.0.0. Mirrored by the
 	// chart value signer.allow_pod_annotations.
 	defaultAllowPodAnnotations = true
+
+	// defaultAuditEnabled turns the issuance audit record on: a best-effort
+	// JSON line on stdout for each signing attempt and each terminal outcome.
+	// Mirrored by the chart value audit.enabled.
+	defaultAuditEnabled = true
 )
 
 func init() {
@@ -109,12 +118,32 @@ type flags struct {
 	requireCAHistory                  bool
 	manager                           managerConfig
 	certOpts                          podcertificate.Options
+	auditEnabled                      bool
+	audit                             audit.Options
+}
+
+// commaList is a flag.Value for a comma-separated list. Each use replaces the
+// list. Set removes the spaces around each entry and ignores empty entries, so
+// an empty value, or one with only commas and spaces, is an empty list.
+type commaList []string
+
+func (l *commaList) String() string { return strings.Join(*l, ",") }
+
+func (l *commaList) Set(value string) error {
+	var entries []string
+	for entry := range strings.SplitSeq(value, ",") {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			entries = append(entries, entry)
+		}
+	}
+	*l = entries
+	return nil
 }
 
 // registerFlags declares every command-line flag on fs and returns the struct
 // their parsed values land in.
 func registerFlags(fs *flag.FlagSet) *flags {
-	f := &flags{}
+	f := &flags{audit: audit.DefaultOptions()}
 	fs.StringVar(&f.signerName, "signer-name", "", "Only sign PodCertificateRequests with this .spec.signerName. Required.")
 	fs.StringVar(&f.caCertPath, "ca-cert-path", "", "CA certificate file.")
 	fs.StringVar(&f.caKeyPath, "ca-key-path", "", "CA private key file.")
@@ -158,6 +187,28 @@ func registerFlags(fs *flag.FlagSet) *flags {
 		"Fall back to the pod's own annotations for configuration values the PodCertificateRequest does not carry in "+
 			"spec.unverifiedUserAnnotations. Deprecated and removed in 4.0.0; on by default until then. Set to false once "+
 			"every workload has moved to spec.unverifiedUserAnnotations, so pod annotations stop influencing issuance.")
+	fs.BoolVar(&f.auditEnabled, "audit-enabled", defaultAuditEnabled,
+		"Write a best-effort issuance audit record, one JSON line on stdout, for each signing attempt and each "+
+			"terminal outcome. The signer reports a dropped record on the operational log. On by default. The "+
+			"operational log stays on stderr.")
+	fs.Var((*commaList)(&f.audit.PodLabels), "audit-pod-labels",
+		"Comma-separated pod label keys to copy into each audit record. Each entry is an exact key or a prefix that "+
+			"ends in \"*\". A bare \"*\" copies every label. Empty by default.")
+	fs.Var((*commaList)(&f.audit.PodAnnotations), "audit-pod-annotations",
+		"Comma-separated pod annotation keys to copy into each audit record. Each entry is an exact key or a prefix "+
+			"that ends in \"*\". A bare \"*\" is not allowed. Empty by default.")
+	fs.IntVar(&f.audit.MaxCopiedKeys, "audit-max-copied-keys", f.audit.MaxCopiedKeys,
+		"Maximum number of pod labels, and separately of pod annotations, that one audit record copies (1 to 256).")
+	fs.IntVar(&f.audit.MaxValueLength, "audit-max-value-length", f.audit.MaxValueLength,
+		"Maximum length in bytes of each label value, annotation value, supplied value and denial or failure "+
+			"message in an audit record (1 to 4096). The signer cuts a longer value to this limit and then appends "+
+			"\"...[truncated]\" (14 bytes).")
+	fs.IntVar(&f.audit.MaxRecordBytes, "audit-max-record-bytes", f.audit.MaxRecordBytes,
+		"Maximum size in bytes of one audit record line (4096 to 262144). The signer removes the copied pod "+
+			"annotations, then the labels, then the supplied values from a longer record.")
+	fs.BoolVar(&f.audit.RecordSuppliedValues, "audit-record-supplied-values", f.audit.RecordSuppliedValues,
+		"Add the raw values of the supplied certificate configuration annotations to the audit record. Off by "+
+			"default: the record has only their names.")
 	return f
 }
 
@@ -187,7 +238,7 @@ func main() {
 // Every setup step that fails returns its error, so main has one exit point.
 // mgr.Start is its last statement: see the PRECONDITION in managerOptions.
 func run(ctx context.Context, fs *flag.FlagSet, f *flags) error {
-	if err := validateFlags(f.signerName, f.certOpts); err != nil {
+	if err := validateFlags(f); err != nil {
 		return fmt.Errorf("invalid command-line flags: %w", err)
 	}
 
@@ -251,7 +302,18 @@ func run(ctx context.Context, fs *flag.FlagSet, f *flags) error {
 		return fmt.Errorf("add ClusterTrustBundle publisher runnable: %w", err)
 	}
 
-	reconciler, err := controller.NewPodCertificateRequestReconciler(mgr, controllerName, f.signerName, ca, f.certOpts)
+	// Audit records go to stdout and the operational log to stderr. The sink
+	// is not a manager runnable: a runnable would stop on the same cancel as
+	// the reconcilers, and they still write records while the manager shuts
+	// down. So Close is deferred, and it runs after mgr.Start returns.
+	auditRecorder, auditRecords, closeAudit, err := newAuditRecorder(f, os.Stdout, ctrl.Log.WithName("audit"))
+	if err != nil {
+		return err
+	}
+	defer closeAudit()
+
+	reconciler, err := controller.NewPodCertificateRequestReconciler(mgr, controllerName, f.signerName, ca, f.certOpts,
+		auditRecorder, auditRecords)
 	if err != nil {
 		return fmt.Errorf("create controller %s: %w", controllerName, err)
 	}
@@ -285,9 +347,28 @@ func run(ctx context.Context, fs *flag.FlagSet, f *flags) error {
 	return nil
 }
 
+// newAuditRecorder returns the audit recorder and record builder for the
+// reconciler, and the function that closes the recorder. The recorder writes
+// to w and logs dropped records to logger. With audit disabled, the recorder
+// and the builder are the untyped nil, which turns audit off in the
+// reconciler, and the close function does nothing.
+func newAuditRecorder(f *flags, w io.Writer, logger logr.Logger) (audit.Recorder, *audit.Builder, func(), error) {
+	if !f.auditEnabled {
+		return nil, nil, func() {}, nil
+	}
+	builder, err := audit.NewBuilder(f.signerName, f.audit)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("create the audit record builder: %w", err)
+	}
+	sink := audit.NewWriterSink(w, builder, logger, audit.DefaultWriteTimeout)
+	return sink, builder, sink.Close, nil
+}
+
 // validateFlags checks command-line flags that must fail before the controller
-// establishes a Kubernetes API connection.
-func validateFlags(signerName string, certOpts podcertificate.Options) error {
+// establishes a Kubernetes API connection. The audit flags are checked only
+// when audit is enabled.
+func validateFlags(f *flags) error {
+	signerName, certOpts := f.signerName, f.certOpts
 	if signerName == "" {
 		return errors.New("the --signer-name flag is required")
 	}
@@ -301,6 +382,11 @@ func validateFlags(signerName string, certOpts podcertificate.Options) error {
 	}
 	if err := certOpts.Validate(); err != nil {
 		return fmt.Errorf("invalid --cluster-fqdn: %w", err)
+	}
+	if f.auditEnabled {
+		if err := f.audit.Validate(); err != nil {
+			return fmt.Errorf("invalid --audit-* flags: %w", err)
+		}
 	}
 	return nil
 }
@@ -343,7 +429,9 @@ func managerOptions(scheme *runtime.Scheme, baseContext context.Context, cfg man
 		// GracefulShutdownTimeout (30s default); past that deadline the Lease
 		// is released with leader-gated code possibly still live. So every
 		// leader-gated runnable's shutdown must be bounded by its context - an
-		// unbounded retry would break this silently.
+		// unbounded retry would break this silently. A deferred call in run
+		// that returns at once, such as the audit sink's Close, does not
+		// break this precondition.
 		//
 		// ADR-0006 (docs/adr/0006-release-leader-lease-on-cancel.md).
 		LeaderElectionReleaseOnCancel: true,
