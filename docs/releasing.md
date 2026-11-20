@@ -1,8 +1,8 @@
 # Releasing (maintainer runbook)
 
-A maintainer review gates each release. Ordinary pull requests never publish a
-release. Each one adds a SemVer signal and, unless it is `release/skip`, a
-small changelog fragment.
+A maintainer review and merge gate each release.
+Ordinary pull requests never publish a release. Each one adds a SemVer signal
+and, unless it is `release/skip`, a small changelog fragment.
 
 ## Release model
 
@@ -11,7 +11,7 @@ small changelog fragment.
 | Release label | Every ordinary PR has exactly one of `release/major`, `release/minor`, `release/patch`, or `release/skip`. |
 | Changelog fragment | Every PR that is not `release/skip` adds `.changes/unreleased/*.yaml`. A `release/skip` PR adds none. |
 | Prepare Release | A manual workflow calculates the next version, collects the fragments into `CHANGELOG.md`, and opens or updates the `release/next -> main` PR. It never publishes. |
-| Release approval | A maintainer reviews and merges the generated PR, which has the `autorelease: pending` label. |
+| Release approval | A maintainer reviews the generated PR, which has the `autorelease: pending` label, and merges it with the ruleset bypass. |
 | Verification | Before the tag, the exact merge commit must pass the unit checks and the reusable Kind E2E suite. |
 | Publication | The serialized **Release** workflow creates an annotated immutable tag and publishes the signed image and the chart. When both jobs succeed, it makes the draft GitHub Release public. |
 
@@ -32,7 +32,18 @@ fragments, and Prepare Release opens no release PR.
 3. Review the generated `release/next -> main` PR. Check its version, its
    `CHANGELOG.md` section and its release notes. Make sure that no fragments
    remain in `.changes/unreleased/`.
-4. Merge that PR. The merge is the explicit approval to publish.
+4. Wait until all required checks on that PR pass. Then merge it with the
+   ruleset bypass. The merge is the explicit approval to publish:
+
+   ```sh
+   gh pr merge <number> --squash --admin
+   ```
+
+   The PR cannot get the approval that the `main` ruleset requires.
+   `github-actions[bot]` opens it, and `GITHUB_TOKEN` cannot approve a PR of
+   its own identity. `claude-review.yml` also skips PRs with an `autorelease`
+   label. The bypass also skips the required status checks. Thus check that
+   they all passed before you merge.
 5. Monitor the **Release** workflow. It verifies the merge commit, runs the unit
    checks and E2E, creates the annotated tag, publishes the artifacts, and then
    publishes the GitHub Release.
@@ -133,8 +144,10 @@ gh api --method PUT "repos/${OWNER}/${REPO}/actions/permissions/workflow" \
 
 Keep `default_workflow_permissions` at `read`. Every workflow here declares its
 own `permissions:` block. The same flag also lets Actions approve pull
-requests. Thus the branch protection review below is what stops automation from
-approving a release PR.
+requests. `review:approve` uses it. Two things stop automation from approving a
+release PR. GitHub does not let `GITHUB_TOKEN` approve a PR that
+`github-actions[bot]` opened. `claude-review.yml` skips PRs with an
+`autorelease` label.
 
 Create the CI label that gates e2e:
 
@@ -176,10 +189,15 @@ gh variable set CLAUDE_REVIEW_AUTH --body wif
 `can_approve_pull_request_reviews=true` above allows this. The review never
 runs on a release PR, so release PRs need no other token.
 
-Protect `main` with one ruleset. It blocks deletion and force pushes, requires
-a pull request, requires linear history, and allows squash and rebase merges.
-It requires these status checks, strict (the branch must be up to date), each
-pinned to the GitHub Actions app:
+Protect `main` with one ruleset, named `main`. It has these rules:
+
+- It blocks deletion and force pushes.
+- It requires linear history and allows squash and rebase merges only.
+- It requires a pull request with 1 approving review. The approval must come
+  after the last push. A push dismisses earlier approvals. All review threads
+  must be resolved.
+- It requires these status checks, strict (the branch must be up to date), each
+  pinned to the GitHub Actions app (integration ID 15368):
 
 | Check | Source |
 | --- | --- |
@@ -194,11 +212,130 @@ pinned to the GitHub Actions app:
 
 Do not require `test:e2e` itself: GitHub counts a skipped job as passed. Do not
 require a workflow with a path filter: its check never appears on a PR that
-does not touch those paths. The repository admin role is a bypass actor. It
-merges fork PRs, which cannot post `gate:e2e`. Generated release PRs get a
-review like any other PR. New GHCR packages are
-private by default. Make the image and chart packages public. Then follow
-[Artifact Hub](artifact-hub.md).
+does not touch those paths.
+
+The repository admin role (`RepositoryRole` ID 5) is a bypass actor with mode
+`always`. The bypass skips the review and the status checks. The admin uses it
+in these cases:
+
+- Release PRs. Automation cannot approve them (see
+  [Cutting a release](#cutting-a-release)).
+- Fork PRs. They cannot post `gate:e2e`, and `review:approve` never approves
+  them.
+- Dependabot PRs that do not get the `review/claude-allowed` label and a review.
+
+Create the ruleset with this body:
+
+```sh
+gh api --method POST "repos/${OWNER}/${REPO}/rulesets" --input - <<'JSON'
+{
+  "name": "main",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "refs/heads/main"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews_on_push": true,
+        "required_reviewers": [],
+        "require_code_owner_review": false,
+        "require_last_push_approval": true,
+        "required_review_thread_resolution": true,
+        "require_extra_approval_for_unattributed_changes": true,
+        "allowed_merge_methods": [
+          "squash",
+          "rebase"
+        ]
+      }
+    },
+    {
+      "type": "required_linear_history"
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          {
+            "context": "lint:go",
+            "integration_id": 15368
+          },
+          {
+            "context": "test:unit",
+            "integration_id": 15368
+          },
+          {
+            "context": "test:chart",
+            "integration_id": 15368
+          },
+          {
+            "context": "gate:e2e",
+            "integration_id": 15368
+          },
+          {
+            "context": "scan:secrets",
+            "integration_id": 15368
+          },
+          {
+            "context": "scan:vuln",
+            "integration_id": 15368
+          },
+          {
+            "context": "scan:codeql",
+            "integration_id": 15368
+          },
+          {
+            "context": "meta:release-label",
+            "integration_id": 15368
+          }
+        ]
+      }
+    }
+  ],
+  "bypass_actors": [
+    {
+      "actor_id": 5,
+      "actor_type": "RepositoryRole",
+      "bypass_mode": "always"
+    }
+  ]
+}
+JSON
+```
+
+To change the ruleset later, send the whole body with
+`gh api --method PUT "repos/${OWNER}/${REPO}/rulesets/<id>" --input -`. A PUT
+replaces the `rules` array. A rule that is not in the body is removed. Find the
+ID with `gh api "repos/${OWNER}/${REPO}/rulesets"`.
+
+Turn on Dependabot alerts and Dependabot security updates. Require actions
+pinned to a full commit SHA:
+
+```sh
+gh api --method PUT "repos/${OWNER}/${REPO}/vulnerability-alerts"
+gh api --method PUT "repos/${OWNER}/${REPO}/automated-security-fixes"
+gh api --method PUT "repos/${OWNER}/${REPO}/actions/permissions" \
+  -F enabled=true -f allowed_actions=all -F sha_pinning_required=true
+```
+
+New GHCR packages are private by default. Make the image and chart packages
+public. Then follow [Artifact Hub](artifact-hub.md).
 
 To verify the setup, run `gh label list --search release` and
 `gh label list --search autorelease`, and make sure that all five labels show.
