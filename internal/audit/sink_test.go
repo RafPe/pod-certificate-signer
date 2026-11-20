@@ -111,29 +111,6 @@ func testRecord(b *Builder, name string) Record {
 	return b.Terminal(EventDenied, string(outcome.InvalidUserConfig), "denied", pcr, nil, nil)
 }
 
-// runSink runs s.Start until the returned stop function is called. stop
-// checks that Start returns nil.
-func runSink(t *testing.T, s *WriterSink) (stop func()) {
-	t.Helper()
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() { done <- s.Start(ctx) }()
-	return func() {
-		t.Helper()
-		cancel()
-		// Bounded: a Start that ignored the cancel fails the test instead of
-		// hanging it.
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Errorf("Start() = %v, want nil", err)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("Start() did not return after cancellation")
-		}
-	}
-}
-
 // recordAsync calls s.Record in a new goroutine and returns a channel that is
 // closed when Record returns.
 func recordAsync(ctx context.Context, s *WriterSink, rec Record) <-chan struct{} {
@@ -158,8 +135,7 @@ func TestSinkWritesInOrder(t *testing.T) {
 		var buf lockedBuffer
 		logger, logs := newTestLogger()
 		s := NewWriterSink(&buf, b, logger, DefaultWriteTimeout)
-		stop := runSink(t, s)
-		defer stop()
+		defer s.Close()
 
 		var wg sync.WaitGroup
 		for i := range 100 {
@@ -198,8 +174,7 @@ func TestSinkStalledWriter(t *testing.T) {
 		w := newBlockingWriter()
 		logger, logs := newTestLogger()
 		s := NewWriterSink(w, b, logger, DefaultWriteTimeout)
-		stop := runSink(t, s)
-		defer stop()
+		defer s.Close()
 
 		if d := timedRecord(t.Context(), s, testRecord(b, "first")); d != DefaultWriteTimeout {
 			t.Errorf("first Record took %v, want the write timeout %v", d, DefaultWriteTimeout)
@@ -240,8 +215,7 @@ func TestSinkStallsWhileWaitingForHandOver(t *testing.T) {
 		w := newBlockingWriter()
 		logger, logs := newTestLogger()
 		s := NewWriterSink(w, b, logger, DefaultWriteTimeout)
-		stop := runSink(t, s)
-		defer stop()
+		defer s.Close()
 		// The caller of this record gives up after the hand-over, so it does
 		// not mark the sink stalled. Its write stays blocked.
 		ctx, cancel := context.WithCancel(t.Context())
@@ -275,8 +249,7 @@ func TestSinkRecordReturnsOnContextDone(t *testing.T) {
 			w := newBlockingWriter()
 			logger, logs := newTestLogger()
 			s := NewWriterSink(w, b, logger, DefaultWriteTimeout)
-			stop := runSink(t, s)
-			defer stop()
+			defer s.Close()
 			// The writer is busy with this record, so the next one cannot be
 			// handed over.
 			busy := recordAsync(t.Context(), s, testRecord(b, "busy"))
@@ -304,8 +277,7 @@ func TestSinkRecordReturnsOnContextDone(t *testing.T) {
 			w := newBlockingWriter()
 			logger, logs := newTestLogger()
 			s := NewWriterSink(w, b, logger, DefaultWriteTimeout)
-			stop := runSink(t, s)
-			defer stop()
+			defer s.Close()
 
 			ctx, cancel := context.WithCancel(t.Context())
 			start := time.Now()
@@ -340,40 +312,141 @@ func TestSinkRecordReturnsOnContextDone(t *testing.T) {
 	})
 }
 
-func TestSinkStartReturnsOnCancel(t *testing.T) {
+func TestSinkCloseStopsTheWriter(t *testing.T) {
+	t.Run("idle", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			logger, logs := newTestLogger()
+			s := NewWriterSink(&lockedBuffer{}, newTestBuilder(t, DefaultOptions()), logger, DefaultWriteTimeout)
+
+			s.Close()
+
+			// The bubble ends only when every goroutine in it has exited, so a
+			// writer goroutine that ignored Close fails the test.
+			synctest.Wait()
+			if got := logs.get(); len(got) != 0 {
+				t.Errorf("logged %q, want nothing", got)
+			}
+		})
+	})
+	t.Run("with a blocked write", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			b := newTestBuilder(t, DefaultOptions())
+			w := newBlockingWriter()
+			logger, logs := newTestLogger()
+			s := NewWriterSink(w, b, logger, DefaultWriteTimeout)
+			// One caller waits for its blocked write, the other for its
+			// hand-over.
+			blocked := recordAsync(t.Context(), s, testRecord(b, "blocked"))
+			synctest.Wait()
+			waiting := recordAsync(t.Context(), s, testRecord(b, "waiting"))
+			synctest.Wait()
+
+			start := time.Now()
+			s.Close()
+			if d := time.Since(start); d != 0 {
+				t.Errorf("Close took %v, want 0", d)
+			}
+			synctest.Wait()
+			for name, done := range map[string]<-chan struct{}{"blocked": blocked, "waiting": waiting} {
+				select {
+				case <-done:
+				default:
+					t.Errorf("Record %s did not return after Close", name)
+				}
+			}
+			if d := time.Since(start); d != 0 {
+				t.Errorf("Record calls returned after %v, want 0", d)
+			}
+
+			// The blocked write is the only goroutine of the sink left. When it
+			// returns, the writer takes no more lines and exits.
+			close(w.release)
+			synctest.Wait()
+			if calls, names := w.written(); calls != 1 || names[0] != "blocked" {
+				t.Errorf("writer got %d calls with records %v, want only blocked", calls, names)
+			}
+			if got := logs.get(); len(got) != 0 {
+				t.Errorf("logged %q, want nothing", got)
+			}
+		})
+	})
+	t.Run("with dropped records", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			b := newTestBuilder(t, DefaultOptions())
+			w := newBlockingWriter()
+			logger, logs := newTestLogger()
+			s := NewWriterSink(w, b, logger, DefaultWriteTimeout)
+			s.Record(t.Context(), testRecord(b, "stalls"))
+			s.Record(t.Context(), testRecord(b, "dropped-1"))
+			s.Record(t.Context(), testRecord(b, "dropped-2"))
+
+			s.Close()
+
+			if got := logs.get(); len(got) != 1 || !strings.Contains(got[0], `"dropped"=2`) {
+				t.Errorf("logged %q, want one line that reports 2 dropped records", got)
+			}
+			close(w.release)
+			synctest.Wait()
+			if got := logs.get(); len(got) != 1 {
+				t.Errorf("logged %q, want only the line from Close", got)
+			}
+		})
+	})
+}
+
+func TestSinkRecordAfterCloseDropsAtOnce(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := newTestBuilder(t, DefaultOptions())
-		w := newBlockingWriter()
-		logger, logs := newTestLogger()
-		s := NewWriterSink(w, b, logger, DefaultWriteTimeout)
-		stop := runSink(t, s)
-		blocked := recordAsync(t.Context(), s, testRecord(b, "blocked"))
-		synctest.Wait()
+		var buf lockedBuffer
+		s := NewWriterSink(&buf, b, logr.Discard(), DefaultWriteTimeout)
+		s.Close()
 
-		stop()
-
-		// Start has returned. The blocked write is the only goroutine of the
-		// sink left. When it returns, the writer stops and takes no more lines.
-		close(w.release)
-		<-blocked
+		if d := timedRecord(t.Context(), s, testRecord(b, "after-close")); d != 0 {
+			t.Errorf("Record after Close took %v, want 0", d)
+		}
 		synctest.Wait()
-		if d := timedRecord(t.Context(), s, testRecord(b, "after-stop")); d != DefaultWriteTimeout {
-			t.Errorf("Record after Start returned took %v, want the write timeout %v", d, DefaultWriteTimeout)
-		}
-		if calls, names := w.written(); calls != 1 || names[0] != "blocked" {
-			t.Errorf("writer got %d calls with records %v, want only blocked", calls, names)
-		}
-		if got := logs.get(); len(got) != 1 || !strings.Contains(got[0], "after-stop") {
-			t.Errorf("logged %q, want one line about the dropped record", got)
+		if got := buf.String(); got != "" {
+			t.Errorf("wrote %q after Close, want nothing", got)
 		}
 	})
 }
 
-func TestSinkNeedLeaderElection(t *testing.T) {
-	s := NewWriterSink(&lockedBuffer{}, newTestBuilder(t, DefaultOptions()), logr.Discard(), DefaultWriteTimeout)
-	if s.NeedLeaderElection() {
-		t.Error("NeedLeaderElection() = true, want false")
-	}
+func TestSinkCloseIsIdempotentAndRaceFree(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := newTestBuilder(t, DefaultOptions())
+		var buf lockedBuffer
+		logger, logs := newTestLogger()
+		s := NewWriterSink(&buf, b, logger, DefaultWriteTimeout)
+		start := time.Now()
+
+		var wg sync.WaitGroup
+		for i := range 50 {
+			wg.Go(func() { s.Record(t.Context(), testRecord(b, fmt.Sprintf("pcr-%02d", i))) })
+		}
+		wg.Go(s.Close)
+		wg.Go(s.Close)
+		wg.Wait()
+		s.Close()
+
+		if d := time.Since(start); d != 0 {
+			t.Errorf("Record and Close took %v, want 0", d)
+		}
+		synctest.Wait()
+		if out := strings.TrimSuffix(buf.String(), "\n"); out != "" {
+			lines := strings.Split(out, "\n")
+			for _, line := range lines {
+				if !json.Valid([]byte(line)) {
+					t.Errorf("line %q is not valid JSON", line)
+				}
+			}
+			if len(lines) > 50 {
+				t.Errorf("got %d lines, want at most 50", len(lines))
+			}
+		}
+		if got := logs.get(); len(got) != 0 {
+			t.Errorf("logged %q, want nothing", got)
+		}
+	})
 }
 
 // failingWriter fails every Write.
@@ -388,8 +461,7 @@ func TestSinkLogsWriteError(t *testing.T) {
 		b := newTestBuilder(t, DefaultOptions())
 		logger, logs := newTestLogger()
 		s := NewWriterSink(failingWriter{}, b, logger, DefaultWriteTimeout)
-		stop := runSink(t, s)
-		defer stop()
+		defer s.Close()
 
 		if d := timedRecord(t.Context(), s, testRecord(b, "failed")); d != 0 {
 			t.Errorf("Record took %v, want 0", d)
