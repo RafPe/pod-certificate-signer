@@ -195,7 +195,7 @@ Two visible outputs also changed:
 
 | | Approach | Result |
 | --- | --- | --- |
-| A | Use only the API server audit log, with a `RequestResponse` rule for `podcertificaterequests/status` | Kept as the second trail. Not sufficient alone: export is off by default on EKS, the event has no owner, and the serial and the fingerprint are plain text only in the Issued condition message that this signer version writes. |
+| A | Use only the API server audit log, with a `RequestResponse` rule for `podcertificaterequests/status` | Kept as the second trail. Not sufficient alone: export is off by default on EKS, the event has no owner, and in the API server trail the serial and the fingerprint are plain text only in the Issued condition message, so they are there only where the signer runs this version. |
 | B | The signer writes its own JSON record to stdout | Chosen. |
 | C | Embed the `k8s.io/apiserver` audit backends and write `audit.k8s.io/v1` events | Rejected. It is a heavy dependency for the signer. Its policy file has nothing to match on, because a controller has no HTTP request path. |
 | D | Create one CRD object for each issuance | Rejected. It adds etcd load for each pod on each rotation, and it needs a retention controller. |
