@@ -30,6 +30,7 @@ Useful make targets (`make help` shows the full list):
 | `make test`            | Run the unit tests and the envtest controller suite. The target downloads the Kubernetes control-plane binaries |
 | `make test-e2e`        | Run the per-PR e2e suite against a throwaway kind cluster (`pcs-e2e`)  |
 | `make test-e2e-nightly` | Run the full e2e suite, including the specs labelled `nightly`        |
+| `make scan-secrets`    | Scan git history and the working tree with gitleaks, as CI does        |
 | `make build`           | Build the manager binary into `bin/`                                   |
 | `make run`             | Run the controller locally against your current kubeconfig             |
 | `make docker-build`    | Build the OCI image (`IMAGE=<repo:tag>` to override)                   |
@@ -57,7 +58,7 @@ from step 3.
 
 - Target the `main` branch.
 - Keep each PR on one subject. Maintainers review small PRs faster.
-- Make sure `make test` and `make lint` pass.
+- Make sure `make test`, `make lint` and `make scan-secrets` pass.
 - Update the README and the chart docs when you change user-facing behavior.
 
 ### Release labels (required)
@@ -86,6 +87,21 @@ The allowed kinds are `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`,
 ordinary merge does not publish a release. A maintainer prepares a release PR and
 merges it to publish. [docs/releasing.md](docs/releasing.md) gives the
 procedure.
+
+### CI labels
+
+| Label        | Effect                                                                 |
+| ------------ | ---------------------------------------------------------------------- |
+| `ci/e2e`     | Runs the per-PR e2e suite (`test:e2e`). Without it the required status `gate:e2e` stays pending with "waiting for label ci/e2e" and the PR cannot merge |
+| `run-nightly` | Runs the full e2e tier (`test:e2e-full`) once, when the label is added |
+
+A skipped job counts as passed for a required check. So the `main` ruleset
+requires the commit status `gate:e2e`, not the job `test:e2e`. The gate job in
+`test-e2e.yml` sets it to pending, and the e2e job sets it to success or
+failure. Release PRs (label `autorelease: pending`) run e2e without the label.
+Dependabot adds `ci/e2e` to gomod (`/`) and docker updates. A PR from a fork
+cannot post the status: a maintainer adds the label, checks the e2e result and
+merges with the ruleset bypass.
 
 ## Architecture Decision Records
 

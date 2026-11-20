@@ -27,6 +27,7 @@ CONTAINER_TOOL ?= docker
 
 ## Tool Binaries
 KUBECTL ?= kubectl
+GITLEAKS_VERSION ?= 8.30.1
 
 # ENVTEST_K8S_VERSION configures the version of Kubernetes, which will be
 # installed by setup-envtest.
@@ -193,6 +194,13 @@ lint-e2e: ## Run golangci-lint against the e2e package, which is behind //go:bui
 	# golangci-lint skips files whose build tags are not satisfied, so without
 	# --build-tags=e2e the e2e suite is never linted at all.
 	$(GO_TOOL) golangci-lint run --build-tags=e2e ./test/e2e/...
+
+.PHONY: scan-secrets
+scan-secrets: ## Scan git history and the working tree for secrets with gitleaks and .gitleaks.toml.
+	# Same gitleaks version as secret-scan.yml (GITLEAKS_VERSION there). go run
+	# with @version builds it without touching go.mod or internal/tools.
+	$(GOCMD) run github.com/zricethezav/gitleaks/v8@v$(GITLEAKS_VERSION) git --config .gitleaks.toml --redact --no-banner .
+	$(GOCMD) run github.com/zricethezav/gitleaks/v8@v$(GITLEAKS_VERSION) dir --config .gitleaks.toml --redact --no-banner .
 
 .PHONY: lint-fix
 lint-fix:  ## Run golangci-lint linter and perform fixes

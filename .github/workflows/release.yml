@@ -81,8 +81,12 @@ jobs:
   e2e:
     name: "release:e2e"
     needs: verify
+    # A called workflow cannot get more permissions than its caller grants.
+    # test-e2e.yml declares statuses: write for gate:e2e, so the call fails
+    # at start without it, even though a called run posts no status.
     permissions:
       contents: read
+      statuses: write
     uses: ./.github/workflows/test-e2e.yml
     with:
       target_ref: ${{ needs.verify.outputs.sha }}

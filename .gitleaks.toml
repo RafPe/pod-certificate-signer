@@ -18,7 +18,13 @@ description = "Historical, now-removed CA material (key is compromised and revok
 paths = [
   '''hack/ca-key\.pem''',
   '''examples/ca_tls_secret\.yaml''',
+  # More removed CA material that only a full-history scan (make scan-secrets)
+  # reaches: the e2e CA Secret (gone since #18) and the v0.0.1 manifest that
+  # embedded the pcs-ca Secret (gone since #7). Treat those keys as compromised.
+  '''config/e2e/ca_tls_secret\.yaml''',
+  '''manifests/pcs-controller-rc-v0_0_1\.yaml''',
   # The private-key detector test names example PEM headers in a comment; it
-  # holds no real key material.
+  # holds no real key material. internal/hygiene is its path before #184.
   '''test/hygiene/hygiene_test\.go''',
+  '''internal/hygiene/hygiene_test\.go''',
 ]
