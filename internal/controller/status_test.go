@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/outcome"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
 	certificatesv1 "k8s.io/api/certificates/v1"
@@ -16,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -67,6 +69,7 @@ func TestReconcileRetriesStatusConflict(t *testing.T) {
 	const signerName = "example.org/signer"
 	pcr, pod := livePCR(t, "conflict-uid", "conflict-uid")
 	pcr.Spec.SignerName = signerName // otherwise Reconcile returns early and nothing is written
+	pcr.UID = "request-uid"          // the conflict re-read must match a real UID, not two empty ones
 
 	var updateAttempts, successfulWrites int
 	cl := fake.NewClientBuilder().
@@ -133,6 +136,7 @@ func TestReconcileConflictPreservesConcurrentTerminalOutcome(t *testing.T) {
 	const signerName = "example.org/signer"
 	pcr, pod := livePCR(t, "race-uid", "race-uid")
 	pcr.Spec.SignerName = signerName
+	pcr.UID = "request-uid" // the conflict re-read must match a real UID, not two empty ones
 
 	key := client.ObjectKeyFromObject(pcr)
 	var updateAttempts int
@@ -401,4 +405,157 @@ func TestConditionFor(t *testing.T) {
 			t.Errorf("conditionFor(%q) = %q, %q, want %q, %q", tc.kind, condition, event, tc.wantCondition, tc.wantEvent)
 		}
 	}
+}
+
+// replacePCR is a SubResourceUpdate interceptor that simulates a request
+// deleted between the reconcile's read and its status write. The first write
+// deletes the stored request, creates replacement in its place when it is not
+// nil, and returns the conflict kube-apiserver returns for the stale UID. Any
+// later write goes through, so a retry onto the replacement is observable.
+func replacePCR(replacement *certificatesv1.PodCertificateRequest, writes *int) interceptor.Funcs {
+	return interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, c client.Client, _ string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			*writes++
+			if *writes > 1 {
+				return c.Status().Update(ctx, obj, opts...)
+			}
+			old := &certificatesv1.PodCertificateRequest{}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(obj), old); err != nil {
+				return err
+			}
+			if err := c.Delete(ctx, old); err != nil {
+				return err
+			}
+			if replacement != nil {
+				if err := c.Create(ctx, replacement.DeepCopy()); err != nil {
+					return err
+				}
+			}
+			return apierrors.NewConflict(
+				schema.GroupResource{Group: "certificates.k8s.io", Resource: "podcertificaterequests"},
+				obj.GetName(), errors.New("precondition failed: UID in precondition does not match UID in object meta"))
+		},
+	}
+}
+
+// A status write that conflicts because the request was deleted, and possibly
+// replaced by a new request with the same namespace and name, must not apply
+// this reconcile's outcome to whatever the re-read returns. The outcome was
+// computed for the old request, so the reconcile ends without a write, without
+// an event, without an outcome metric and without an error, and the caller's
+// request still describes the old request. The replacement is reconciled
+// through its own create event.
+func TestRecordOutcomeConflictOnReplacedRequest(t *testing.T) {
+	const (
+		oldUID = types.UID("old-request-uid")
+		newUID = types.UID("new-request-uid")
+	)
+	replacement := &certificatesv1.PodCertificateRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns", UID: newUID},
+		Spec:       certificatesv1.PodCertificateRequestSpec{PodName: "other-pod", PodUID: "other-pod-uid"},
+	}
+	type recordFunc func(context.Context, *PodCertificateRequestReconciler, *certificatesv1.PodCertificateRequest) (bool, error)
+	var issue recordFunc = func(ctx context.Context, r *PodCertificateRequestReconciler, pcr *certificatesv1.PodCertificateRequest) (bool, error) {
+		return r.recordIssued(ctx, pcr, stubCert())
+	}
+	var deny recordFunc = func(ctx context.Context, r *PodCertificateRequestReconciler, pcr *certificatesv1.PodCertificateRequest) (bool, error) {
+		te := denied(outcome.InvalidUserConfig, errors.New("not a verified identity")).(*terminalError)
+		return false, r.recordTerminal(ctx, pcr, te)
+	}
+
+	cases := []struct {
+		name        string
+		replacement *certificatesv1.PodCertificateRequest
+		record      recordFunc
+		kind        outcome.Kind
+		reason      outcome.ConditionReason
+		wantLog     []string
+	}{
+		{"denied onto a replacement", replacement, deny, outcome.Denied, outcome.InvalidUserConfig, []string{string(oldUID), string(newUID)}},
+		{"issued onto a replacement", replacement, issue, outcome.Issued, outcome.CertificateIssued, []string{string(oldUID), string(newUID)}},
+		{"denied onto a deleted request", nil, deny, outcome.Denied, outcome.InvalidUserConfig, []string{string(oldUID)}},
+		{"issued onto a deleted request", nil, issue, outcome.Issued, outcome.CertificateIssued, []string{string(oldUID)}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pcr := &certificatesv1.PodCertificateRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns", UID: oldUID},
+				Spec:       certificatesv1.PodCertificateRequestSpec{PodName: "mypod", PodUID: "mypod-uid"},
+			}
+			var writes int
+			cl := fake.NewClientBuilder().
+				WithScheme(newTestScheme(t)).
+				WithObjects(pcr).
+				WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
+				WithInterceptorFuncs(replacePCR(tc.replacement, &writes)).
+				Build()
+			if err := cl.Get(context.Background(), client.ObjectKeyFromObject(pcr), pcr); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			rec := events.NewFakeRecorder(10)
+			var lines []string
+			r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: rec}
+			ctx := logr.NewContext(context.Background(), captureLogger(&lines))
+			before := outcomeCount(tc.kind, tc.reason)
+
+			persisted, err := tc.record(ctx, r, pcr)
+			if err != nil {
+				t.Fatalf("record error = %v, want nil: a request that is gone needs no requeue", err)
+			}
+			if persisted {
+				t.Error("persisted = true, want false: the outcome was not written")
+			}
+			if writes != 1 {
+				t.Errorf("status writes = %d, want 1: no write may follow the conflict", writes)
+			}
+			if pcr.UID != oldUID {
+				t.Errorf("caller's request UID = %q, want %q: the caller must not be handed another request", pcr.UID, oldUID)
+			}
+			select {
+			case e := <-rec.Events:
+				t.Errorf("recorded event %q, want none", e)
+			default:
+			}
+			if got := outcomeCount(tc.kind, tc.reason) - before; got != 0 {
+				t.Errorf("outcome metric moved by %v, want 0", got)
+			}
+
+			if n := countLinesContaining(lines, tc.wantLog...); n != 1 {
+				t.Errorf("log lines naming %v = %d, want 1; log = %q", tc.wantLog, n, lines)
+			}
+
+			if tc.replacement != nil {
+				got := &certificatesv1.PodCertificateRequest{}
+				if err := cl.Get(context.Background(), client.ObjectKeyFromObject(pcr), got); err != nil {
+					t.Fatalf("get replacement: %v", err)
+				}
+				if len(got.Status.Conditions) != 0 || got.Status.CertificateChain != "" {
+					t.Errorf("replacement status = %+v, want it untouched", got.Status)
+				}
+			}
+		})
+	}
+}
+
+// captureLogger records the log lines written at verbosity 0, the production
+// default.
+func captureLogger(lines *[]string) logr.Logger {
+	return funcr.New(func(_, args string) {
+		*lines = append(*lines, args)
+	}, funcr.Options{Verbosity: 0})
+}
+
+// countLinesContaining counts the log lines that contain every one of needles.
+func countLinesContaining(lines []string, needles ...string) int {
+	n := 0
+	for _, line := range lines {
+		all := true
+		for _, needle := range needles {
+			all = all && strings.Contains(line, needle)
+		}
+		if all {
+			n++
+		}
+	}
+	return n
 }
