@@ -156,10 +156,10 @@ signer:
   # defaultAllowPodAnnotations in cmd/podcertificate-signer/main.go.
   allow_pod_annotations: true
 
-# Issuance audit record settings. When enabled, the controller writes a JSON
-# line to stdout for each signing attempt and each terminal outcome. The record
-# is best-effort: the controller reports a dropped record on the operational
-# log, which stays on stderr. See docs/auditing.md.
+# Issuance audit record settings. When enabled, the signer writes a JSON line
+# to stdout for each signing attempt and each terminal outcome. The record is
+# best-effort: the signer reports a dropped record on the operational log,
+# which stays on stderr. See docs/auditing.md.
 audit:
   # Write the audit records. Enabled by default. Keep this value equal to
   # defaultAuditEnabled in cmd/podcertificate-signer/main.go.
@@ -167,7 +167,7 @@ audit:
   # Pod label keys to copy into each record. Each entry is an exact key or a
   # prefix that ends in "*", e.g. [team, "app.kubernetes.io/*"]. A bare "*"
   # copies all labels. The number of different exact keys must not be greater
-  # than max_copied_keys, or the controller does not start. Empty by default,
+  # than max_copied_keys, or the signer does not start. Empty by default,
   # so a record copies no labels.
   pod_labels: []
   # Pod annotation keys to copy into each record. The entries have the same
@@ -178,10 +178,11 @@ audit:
   # annotations. 1 to 256.
   max_copied_keys: 32
   # Maximum length in bytes of each label value, annotation value, supplied
-  # value and denial or failure message in a record. The controller cuts a
-  # longer value and appends "...[truncated]". 1 to 4096.
+  # value and denial or failure message in a record. The signer cuts a longer
+  # value to this limit and then appends "...[truncated]" (14 bytes). 1 to
+  # 4096.
   max_value_length: 256
-  # Maximum size in bytes of one record line. The controller removes the copied
+  # Maximum size in bytes of one record line. The signer removes the copied
   # annotations, then the labels, then the supplied values from a longer
   # record. 4096 to 262144.
   max_record_bytes: 16384

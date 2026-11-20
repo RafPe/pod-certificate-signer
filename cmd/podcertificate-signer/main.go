@@ -123,7 +123,7 @@ type flags struct {
 }
 
 // commaList is a flag.Value for a comma-separated list. Each use replaces the
-// list. Spaces around an entry are removed and empty entries are dropped, so
+// list. Set removes the spaces around each entry and ignores empty entries, so
 // an empty value, or one with only commas and spaces, is an empty list.
 type commaList []string
 
@@ -201,10 +201,11 @@ func registerFlags(fs *flag.FlagSet) *flags {
 		"Maximum number of pod labels, and separately of pod annotations, that one audit record copies (1 to 256).")
 	fs.IntVar(&f.audit.MaxValueLength, "audit-max-value-length", f.audit.MaxValueLength,
 		"Maximum length in bytes of each label value, annotation value, supplied value and denial or failure "+
-			"message in an audit record (1 to 4096). The signer cuts a longer value and appends \"...[truncated]\".")
+			"message in an audit record (1 to 4096). The signer cuts a longer value to this limit and then appends "+
+			"\"...[truncated]\" (14 bytes).")
 	fs.IntVar(&f.audit.MaxRecordBytes, "audit-max-record-bytes", f.audit.MaxRecordBytes,
-		"Maximum size in bytes of one audit record line (4096 to 262144). A longer record drops its copied pod "+
-			"annotations, then its labels, then its supplied values.")
+		"Maximum size in bytes of one audit record line (4096 to 262144). The signer removes the copied pod "+
+			"annotations, then the labels, then the supplied values from a longer record.")
 	fs.BoolVar(&f.audit.RecordSuppliedValues, "audit-record-supplied-values", f.audit.RecordSuppliedValues,
 		"Add the raw values of the supplied certificate configuration annotations to the audit record. Off by "+
 			"default: the record has only their names.")

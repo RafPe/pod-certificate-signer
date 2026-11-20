@@ -371,7 +371,8 @@ directly.
   -audit-max-value-length int
         Maximum length in bytes of each label value, annotation value,
         supplied value and denial or failure message. The signer cuts a
-        longer value and appends "...[truncated]". 1 to 4096 (default 256).
+        longer value to this limit and then appends "...[truncated]"
+        (14 bytes). 1 to 4096 (default 256).
   -audit-pod-annotations value
         Comma-separated pod annotation keys to copy into each record. Exact
         keys or prefixes that end in "*". A bare "*" is not allowed. Empty by

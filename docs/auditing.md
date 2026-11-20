@@ -59,7 +59,8 @@ problem on stderr, under the logger name `audit`. These are the messages:
 | `audit records were dropped before the audit sink closed` | The sink closed while a write was blocked | `dropped`: the count |
 | `failed to write an audit record` | The stdout write returned an error | The error only |
 
-A blocked write is not cancelled. The line is written when stdout accepts it.
+The sink does not cancel a blocked write. The sink writes the line when stdout
+accepts it.
 Only the two count messages tell how many records the sink dropped during a
 block. They do not name the records.
 
@@ -101,9 +102,9 @@ The signer applies these rules:
 - `*` is allowed only as the last character of an entry.
 - A bare `*` copies every label. A bare `*` is not allowed in
   `pod_annotations`.
-- An empty entry is not allowed. The `--audit-pod-labels` and
-  `--audit-pod-annotations` flags remove spaces around each entry and drop
-  empty entries.
+- In the chart values, the chart schema does not allow an empty entry.
+- On the command line, `--audit-pod-labels` and `--audit-pod-annotations`
+  remove spaces around each entry and ignore empty entries.
 - Duplicate and overlapping entries are allowed. A key that matches more than
   one entry is copied one time.
 - `max_copied_keys` applies to labels and to annotations separately.
@@ -280,15 +281,16 @@ Field details:
 | Event | Reason | When the signer writes it | Groups |
 | --- | --- | --- | --- |
 | `signed` | `CertificateIssued` | After signing, before the Issued status write. Nothing is published yet. | `request`, `workload`, `certificate`, `issuer` |
-| `published` | `StatusWritten` | The Issued status write persisted. It also persisted when a conflict re-read found this certificate already in place. | `request` identity, serials, fingerprint |
+| `published` | `StatusWritten` | The Issued status write persisted. The signer also writes `published` when a conflict re-read finds this certificate already in place. | `request` identity, serials, fingerprint |
 | `superseded` | `OtherWriterWon` | Another terminal outcome is on the same request UID | Same as `published` |
 | `superseded` | `RequestGone` | The request was deleted or replaced before the write | Same as `published` |
-| `superseded` | `WriteRejected` | The API server refused the write with a definite 4xx error. The request requeues. | Same as `published` |
-| `unknown` | `WriteAmbiguous` | A timeout, a cancelled context, a 5xx or 429 error, a failed re-read, or conflicts that outlast the retries. The write may be committed. The request requeues. | Same as `published` |
+| `superseded` | `WriteRejected` | The API server refused the write with 400, 401, 403 or 422. The request requeues. | Same as `published` |
+| `unknown` | `WriteAmbiguous` | A timeout, a cancelled context, a 5xx error or a 429 error. Or a 4xx error that is not 400, 401, 403, 404, 409 or 422. Or a failed re-read, or conflicts that outlast the retries. The write may be committed. The request requeues. | Same as `published` |
 | `denied` | The condition reason, `UnsupportedKeyType` or `InvalidUnverifiedUserAnnotations` | The Denied status write persisted | `request`, `workload`, `message`. No `certificate` or `issuer`. |
 | `failed` | `SigningFailed` | The Failed status write persisted | Same as `denied` |
 
-A dropped request and a requeue before signing write no record.
+A request that the signer ignores because its pod is gone or being deleted
+writes no record. A requeue before signing writes no record.
 
 ### Read a sequence
 
@@ -314,8 +316,10 @@ Group records by `request.uid`. Then match each follow-up record to its
   reconcile read the request from a cache that did not yet show the Issued
   condition. Check the earlier
   fingerprint in the API server audit log.
-- A follow-up record with no `signed` record: the sink dropped the `signed`
-  record. Look for the drop on the operational log.
+- A follow-up record with no `signed` record: the sink can have dropped the
+  `signed` record, or the collector can have lost it. A record that the sink
+  drops while a write is blocked is only counted on the operational log. It
+  does not appear by name. See [Dropped records](#dropped-records).
 - `denied` or `failed`: the request reached that terminal outcome. No
   certificate exists for it.
 
@@ -395,15 +399,18 @@ The OpenSSL row and the conversion were checked with OpenSSL 4.1.0.
 
 Not verified: the exact serial casing and padding in deployed Envoy and NGINX
 versions. The conversion above handles case, colons and leading zeros. Scope
-an Envoy or NGINX serial by the issuer. For example, compare the issuer DN
-with `issuer.subject`. The DN text format can differ between these sources and
-the record.
+an Envoy or NGINX serial by the issuer: compare the issuer DN with
+`issuer.subject`. Envoy gives the issuer DN as `%DOWNSTREAM_PEER_ISSUER%`.
+NGINX gives it as `$ssl_client_i_dn`, in RFC 2253 form. The DN text format can
+differ between these sources and the record.
 
 ## The second trail
 
 Use the API server audit log to check the status write behind a `published`
-record, an `unknown` record or a missing record. Add this rule to the API server audit policy, before any rule that
-matches the same requests at a lower level:
+record, an `unknown` record or a missing record.
+
+Add this rule to the API server audit policy, before any rule that matches the
+same requests at a lower level:
 
 ```yaml
 - level: RequestResponse
@@ -418,12 +425,21 @@ Join an audit event to a record with these rules:
    `request.uid`.
 2. Match the first certificate in `responseObject.status.certificateChain`
    to `certificate.fingerprint`. The chain is PEM text. Decode the first PEM
-   block to DER, then take the SHA-256 of the DER. For example:
-   `openssl x509 -outform der | sha256sum` reads the first certificate of a
-   PEM chain on stdin.
-3. Accept only an event at stage `ResponseComplete`, with a success status
-   code, without dry-run, on the `status` subresource, with the Issued
-   condition in the response.
+   block to DER, then take the SHA-256 of the DER. This command reads a PEM
+   chain on stdin and prints the fingerprint in the record form:
+
+   ```sh
+   printf 'X509SHA256=%s\n' "$(openssl x509 -outform der | sha256sum | cut -d' ' -f1)"
+   ```
+
+3. Accept only an audit event that passes all of these tests:
+   - `stage` is `ResponseComplete`.
+   - `responseStatus.code` is a 2xx code.
+   - `objectRef.subresource` is `status`.
+   - `requestURI` does not contain `dryRun=`. The audit event has no other
+     field for dry-run. A dry-run status write returns the same UID and the
+     Issued condition, so only this test excludes it.
+   - `responseObject.status.conditions` has the condition type `Issued`.
 4. Use the namespace and name only as a search index. A 409 also writes an
    audit event, and a new request can reuse a name.
 5. A missing or incomplete audit event means unknown, not "not published".
@@ -438,9 +454,11 @@ event keeps the full response body.
 ## Volume estimate
 
 Each projected podCertificate volume has its own PodCertificateRequest. Each
-issued certificate writes two lines, `signed` and `published`. Kubelet starts
-the refresh at `beginRefreshAt`, which is `refresh` before expiry. With the
-defaults (`duration` 24h, `refresh` 15m), the refresh interval is about 23h45m.
+issued certificate writes two lines, `signed` and `published`. The signer sets
+`beginRefreshAt` to `refresh` before expiry. This estimate assumes that kubelet
+starts the refresh at `beginRefreshAt`. Kubelet behaviour was not checked.
+With the defaults (`duration` 24h, `refresh` 15m) and the 1-minute backdate,
+the refresh interval is about 23h44m.
 
 ```text
 lines per day ≈ projections × (24h / refresh interval) × 2
@@ -455,6 +473,6 @@ In a test build, a `signed` record with two labels and one annotation was
 SANs.
 
 Example: 1,000 running pods with one projection each, default lifetimes and
-no pod starts. That is about 1,011 issuances and 2,021 lines a day, about
+no pod starts. That is about 1,011 issuances and 2,022 lines a day, about
 2.1 MB a day. In a cluster with many pod starts, the pod start term is
 usually the largest.

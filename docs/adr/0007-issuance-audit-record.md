@@ -21,7 +21,7 @@ Before this decision, the signer gave no way to join a serial to a workload:
   serial, fingerprint, pod UID, ServiceAccount, node, owner or issuing CA.
 - Kubernetes Events expire after 1 hour by default.
 - kube-controller-manager deletes a PodCertificateRequest 15 minutes after its
-  creation.
+  creation (checked on Kubernetes v1.37).
 - A pod name does not identify a rollout revision.
 
 The join must work on every cluster. This includes managed clusters where the
@@ -71,9 +71,11 @@ Rules:
 - `superseded` has three reasons. `OtherWriterWon` means another terminal
   outcome is on the same request UID. `RequestGone` means the request was
   deleted or replaced. `WriteRejected` means the API server refused the write
-  with a definite 4xx error.
-- `unknown` has the reason `WriteAmbiguous`: a timeout, a cancelled context, a
-  5xx or 429 error, a failed re-read, or conflicts that outlast the retries.
+  with 400, 401, 403 or 422.
+- `unknown` has the reason `WriteAmbiguous`. The write returned a timeout, a
+  cancelled context, a 5xx error or a 429 error. Or it returned a 4xx error
+  that is not 400, 401, 403, 404, 409 or 422. Or the re-read failed, or the
+  conflicts outlasted the retries.
 - When a conflict re-read of the same request UID shows the Issued condition
   with this reconcile's own certificate chain, the event is `published`. The
   earlier write committed and its response was lost.
@@ -84,7 +86,8 @@ Rules:
 - A rejected or ambiguous write requeues the request. The next reconcile can
   sign again with a new serial, and that attempt gets its own `signed` record.
   It does not sign when it sees the request already terminal.
-- A dropped request and a requeue before signing write no record.
+- A request that the signer ignores because its pod is gone or being deleted
+  writes no record. A requeue before signing writes no record.
 - The signer writes every record with a context that a cancelled reconcile
   does not cancel.
 
@@ -114,6 +117,7 @@ record, in these four cases:
 
 1. The stdout write fails, or the sink drops the record. The sink drops a
    record in these cases:
+   - The record does not encode.
    - The writer does not take it within 2 seconds.
    - An earlier write is blocked past the 2-second timeout.
    - The sink is closed.
@@ -165,8 +169,8 @@ trust boundary, the RBAC or the metrics surface. Two status write behaviours
 changed with it, because the record needs to know the result of each write:
 
 - An Issued write whose conflict re-read finds its own committed certificate is
-  now reported as issued, with its event and metric. Before, the reconcile
-  reported a lost race.
+  now reported as issued, with its Kubernetes Event and metric. Before, the
+  reconcile reported a lost race.
 - A status write that returns 404 because the request was deleted no longer
   requeues.
 
@@ -176,7 +180,7 @@ changed with it, because the record needs to know the result of each write:
 | --- | --- | --- |
 | A | Use only the API server audit log, with a `RequestResponse` rule for `podcertificaterequests/status` | Kept as the second trail. Not sufficient alone: export is off by default on EKS, the event has no owner, and the serial must be parsed from PEM. |
 | B | The signer writes its own JSON record to stdout | Chosen. |
-| C | Embed the `k8s.io/apiserver` audit backends and write `audit.k8s.io/v1` events | Rejected. It is a heavy dependency for a small controller. Its policy file has nothing to match on, because a controller has no HTTP request path. |
+| C | Embed the `k8s.io/apiserver` audit backends and write `audit.k8s.io/v1` events | Rejected. It is a heavy dependency for the signer. Its policy file has nothing to match on, because a controller has no HTTP request path. |
 | D | Create one CRD object for each issuance | Rejected. It adds etcd load for each pod on each rotation, and it needs a retention controller. |
 
 ## More Information
