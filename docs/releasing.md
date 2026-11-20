@@ -143,6 +143,39 @@ gh label create ci/e2e --color 0e8a16 \
   --description 'Run the per-PR e2e suite (sets gate:e2e)' --force
 ```
 
+Set up the on-demand Claude review (`.github/workflows/claude-review.yml`).
+Install the Claude GitHub App on the repository. The review posts its comments
+as `claude[bot]`. Create the label:
+
+```sh
+gh label create review/claude-allowed --color 5319e7 \
+  --description 'Allow an on-demand Claude review (@claude review)' --force
+```
+
+The repository variable `CLAUDE_REVIEW_AUTH` selects the credential. Its value
+is `wif` or `token`. The default is `wif`. Each mode needs these secrets:
+
+| Mode | Required secrets | Optional secrets |
+| --- | --- | --- |
+| `wif` (workload identity federation) | `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID` | `ANTHROPIC_SERVICE_ACCOUNT_ID`, `ANTHROPIC_WORKSPACE_ID` |
+| `token` | `CLAUDE_CODE_OAUTH_TOKEN` | none |
+
+In `wif` mode, the federation rule in the Anthropic organization must accept
+the GitHub OIDC token of this repository on the default branch.
+`issue_comment` runs the workflow file of the default branch. The `token`
+mode puts a long-lived token in a job that reads untrusted PR content. Use it
+only for a short time:
+
+```sh
+gh secret set ANTHROPIC_FEDERATION_RULE_ID
+gh secret set ANTHROPIC_ORGANIZATION_ID
+gh variable set CLAUDE_REVIEW_AUTH --body wif
+```
+
+`review:approve` approves with `GITHUB_TOKEN`. The setting
+`can_approve_pull_request_reviews=true` above allows this. The review never
+runs on a release PR, so release PRs need no other token.
+
 Protect `main` with one ruleset. It blocks deletion and force pushes, requires
 a pull request, requires linear history, and allows squash and rebase merges.
 It requires these status checks, strict (the branch must be up to date), each
