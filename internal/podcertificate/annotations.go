@@ -65,9 +65,10 @@ func annotationKey(signerName string, suffix AnnotationSuffix) string {
 // it exactly as it denies an empty request annotation.
 //
 // Deprecated: pod-annotation configuration is removed in 4.0.0; configure the
-// signer through spec.unverifiedUserAnnotations. The legacy path has two
-// touchpoints, both gated by Options.AllowPodAnnotations, and both go together:
-// this read and the fallback branch in annotationResolver.rawValue.
+// signer through spec.unverifiedUserAnnotations. The legacy path has three
+// touchpoints, all gated by AllowPodAnnotations (the option, or the parameter
+// of SuppliedAnnotations), and all go together: this read, the fallback branch
+// in annotationResolver.rawValue and the pod branch in SuppliedAnnotations.
 func podAnnotation(pod *corev1.Pod, key string) (string, bool) {
 	value, ok := pod.Annotations[key]
 	return value, ok
@@ -125,6 +126,8 @@ type annotationResolver struct {
 	// verified is the identity allowlist, or nil when identity constraints
 	// are off.
 	verified map[string]struct{}
+	// sources records where each resolved field took its value from.
+	sources FieldSources
 }
 
 // rawValue resolves a configuration value before interpolation: the request
@@ -132,40 +135,44 @@ type annotationResolver struct {
 // is set - the pod's own annotations. A key that is present with an empty value
 // is an error rather than a fallback, from either source: an explicitly empty
 // value is a misconfiguration, and treating it as absent would silently route
-// it onto the deprecated pod path or the default.
+// it onto the deprecated pod path or the default. When ok is true, source is
+// the origin the value was read from, SourcePCR or SourcePod.
 //
 // The pod-annotation fallback is deprecated and removed in 4.0.0. Every value
 // still taken from it is logged so remaining users can be found before then.
-func (r *annotationResolver) rawValue(suffix AnnotationSuffix) (string, bool, error) {
+func (r *annotationResolver) rawValue(suffix AnnotationSuffix) (value string, source Source, ok bool, err error) {
 	key := annotationKey(r.signerName, suffix)
-	value, ok := r.pcr.Spec.UnverifiedUserAnnotations[key]
+	value, ok = r.pcr.Spec.UnverifiedUserAnnotations[key]
+	source = SourcePCR
 	if !ok && r.opts.AllowPodAnnotations {
 		if value, ok = podAnnotation(r.pod, key); ok {
+			source = SourcePod
 			r.logger.Info("certificate configuration read from a pod annotation, which is deprecated and will be removed in 4.0.0; "+
 				"move it to spec.unverifiedUserAnnotations", "annotation", key)
 		}
 	}
 	if !ok {
-		return "", false, nil
+		return "", "", false, nil
 	}
 	if value == "" {
-		return "", true, r.annotationError(suffix, errors.New("must not be empty"))
+		return "", source, true, r.annotationError(suffix, errors.New("must not be empty"))
 	}
-	return value, true, nil
+	return value, source, true, nil
 }
 
 // value resolves a configuration value and expands ${...} placeholders in it
-// from the apiserver-verified fields of the request.
-func (r *annotationResolver) value(suffix AnnotationSuffix) (string, bool, error) {
-	raw, ok, err := r.rawValue(suffix)
+// from the apiserver-verified fields of the request. It reports the source as
+// rawValue does.
+func (r *annotationResolver) value(suffix AnnotationSuffix) (string, Source, bool, error) {
+	raw, source, ok, err := r.rawValue(suffix)
 	if err != nil || !ok {
-		return "", ok, err
+		return "", source, ok, err
 	}
 	expanded, err := interpolate(raw, r.vars, r.opts.EnableInterpolation)
 	if err != nil {
-		return "", true, r.annotationError(suffix, err)
+		return "", source, true, r.annotationError(suffix, err)
 	}
-	return expanded, true, nil
+	return expanded, source, true, nil
 }
 
 // annotationError names the annotation an error came from.
@@ -176,10 +183,12 @@ func (r *annotationResolver) annotationError(suffix AnnotationSuffix, err error)
 // commonName resolves the cn annotation, falling back to def, and checks it
 // against the verified identities.
 func (r *annotationResolver) commonName(def string) (string, error) {
-	cn, ok, err := r.value(AnnotationSuffixCN)
+	cn, source, ok, err := r.value(AnnotationSuffixCN)
 	if err != nil || !ok {
+		r.sources.CommonName = SourceDefault
 		return def, err
 	}
+	r.sources.CommonName = source
 	if err := validateVerifiedIdentities("common name", []string{cn}, r.verified); err != nil {
 		return "", r.annotationError(AnnotationSuffixCN, err)
 	}
@@ -190,7 +199,7 @@ func (r *annotationResolver) commonName(def string) (string, error) {
 // DNS SANs, validates the selected names, and, when identity constraints are
 // enforced, verifies each name against the pod's identity.
 func (r *annotationResolver) dnsNames(defaults []string) ([]string, error) {
-	san, fromAnnotation, err := r.value(AnnotationSuffixSAN)
+	san, source, fromAnnotation, err := r.value(AnnotationSuffixSAN)
 	if err != nil {
 		return nil, err
 	}
@@ -201,6 +210,7 @@ func (r *annotationResolver) dnsNames(defaults []string) ([]string, error) {
 	var attribute func(error) error
 	switch {
 	case fromAnnotation:
+		r.sources.DNSNames = source
 		names = splitAndTrim(san)
 		attribute = func(err error) error { return r.annotationError(AnnotationSuffixSAN, err) }
 		if len(names) == 0 {
@@ -209,11 +219,13 @@ func (r *annotationResolver) dnsNames(defaults []string) ([]string, error) {
 	case r.opts.HonorCSRSANs && len(r.csr.DNSNames) > 0:
 		// CSR-requested SANs are attacker-influenced just like annotation
 		// values, so they clear the same verified-identity allowlist.
+		r.sources.DNSNames = SourceCSR
 		names = r.csr.DNSNames
 		attribute = func(err error) error { return fmt.Errorf("CSR DNS names: %w", err) }
 	default:
 		// The defaults are the signer's own verified forms, so they always
 		// clear the allowlist; the syntax check still applies.
+		r.sources.DNSNames = SourceDefault
 		names = defaults
 		attribute = func(err error) error { return err }
 	}
@@ -235,7 +247,7 @@ var errUnverifiedIPSAN = errors.New("IP SANs are not derived from a verified pod
 // ipAddresses applies the ip-san-annotation > CSR-requested > none precedence
 // for IP SANs, then the one IP SAN policy, errUnverifiedIPSAN.
 func (r *annotationResolver) ipAddresses() ([]net.IP, error) {
-	ipSAN, fromAnnotation, err := r.value(AnnotationSuffixIPSAN)
+	ipSAN, source, fromAnnotation, err := r.value(AnnotationSuffixIPSAN)
 	if err != nil {
 		return nil, err
 	}
@@ -244,6 +256,7 @@ func (r *annotationResolver) ipAddresses() ([]net.IP, error) {
 	// before an annotation value is even parsed.
 	switch {
 	case fromAnnotation:
+		r.sources.IPAddresses = source
 		if !r.opts.AllowUnverifiedIdentities {
 			return nil, r.annotationError(AnnotationSuffixIPSAN, errUnverifiedIPSAN)
 		}
@@ -253,11 +266,13 @@ func (r *annotationResolver) ipAddresses() ([]net.IP, error) {
 		}
 		return ips, nil
 	case r.opts.HonorCSRSANs && len(r.csr.IPAddresses) > 0:
+		r.sources.IPAddresses = SourceCSR
 		if !r.opts.AllowUnverifiedIdentities {
 			return nil, fmt.Errorf("CSR IP addresses: %w", errUnverifiedIPSAN)
 		}
 		return r.csr.IPAddresses, nil
 	default:
+		r.sources.IPAddresses = SourceDefault
 		return nil, nil
 	}
 }
@@ -265,10 +280,12 @@ func (r *annotationResolver) ipAddresses() ([]net.IP, error) {
 // extKeyUsage resolves the eku annotation, if present, into ExtKeyUsage
 // values, falling back to current when the annotation is absent.
 func (r *annotationResolver) extKeyUsage(current []x509.ExtKeyUsage) ([]x509.ExtKeyUsage, error) {
-	eku, ok, err := r.value(AnnotationSuffixEKU)
+	eku, source, ok, err := r.value(AnnotationSuffixEKU)
 	if err != nil || !ok {
+		r.sources.ExtKeyUsage = SourceDefault
 		return current, err
 	}
+	r.sources.ExtKeyUsage = source
 	usages, err := parseEKU(eku)
 	if err != nil {
 		return nil, r.annotationError(AnnotationSuffixEKU, err)
@@ -279,10 +296,12 @@ func (r *annotationResolver) extKeyUsage(current []x509.ExtKeyUsage) ([]x509.Ext
 // uris resolves the uris annotation, if present, and checks each URI against
 // the verified identities.
 func (r *annotationResolver) uris() ([]*url.URL, error) {
-	value, ok, err := r.value(AnnotationSuffixURIs)
+	value, source, ok, err := r.value(AnnotationSuffixURIs)
 	if err != nil || !ok {
+		r.sources.URIs = SourceDefault
 		return nil, err
 	}
+	r.sources.URIs = source
 	parsed, err := parseURIs(value)
 	if err != nil {
 		return nil, r.annotationError(AnnotationSuffixURIs, err)
@@ -298,12 +317,14 @@ func (r *annotationResolver) uris() ([]*url.URL, error) {
 }
 
 // duration resolves a duration-valued annotation (duration, refresh), falling
-// back to def when it is absent.
-func (r *annotationResolver) duration(suffix AnnotationSuffix, def time.Duration) (time.Duration, error) {
-	value, ok, err := r.value(suffix)
+// back to def when it is absent, and records the origin in *field.
+func (r *annotationResolver) duration(suffix AnnotationSuffix, def time.Duration, field *Source) (time.Duration, error) {
+	value, source, ok, err := r.value(suffix)
 	if err != nil || !ok {
+		*field = SourceDefault
 		return def, err
 	}
+	*field = source
 	d, err := time.ParseDuration(value)
 	if err != nil {
 		return 0, r.annotationError(suffix, fmt.Errorf("invalid duration %q: %w", value, err))
