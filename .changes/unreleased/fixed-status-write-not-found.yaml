@@ -1,0 +1,2 @@
+kind: Fixed
+body: 'A status write that returns 404 because the PodCertificateRequest was deleted no longer requeues the request or counts a `Transient` requeue. The reconcile discards the outcome and logs the UID.'

@@ -1,0 +1,2 @@
+kind: Added
+body: 'The signer writes a best-effort issuance audit record to stdout, one JSON line for each signing attempt and each terminal outcome. It is on by default (`audit.enabled`). See `docs/auditing.md`.'

@@ -1,0 +1,2 @@
+kind: Fixed
+body: 'An Issued status write that finds its own certificate after a conflict is now reported as issued, with its event, metric and log line. Before, the reconcile reported a lost race.'

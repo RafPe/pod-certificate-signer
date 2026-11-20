@@ -1,3 +1,5 @@
+// ADR-0007: the best-effort stdout sink of the issuance audit record.
+
 package audit
 
 import (

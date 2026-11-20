@@ -124,6 +124,7 @@ For rollout and scope details, see [configuration](./docs/configuration.md#preve
 | Annotation contract, CLI flags, Helm values, identity model, production posture | [docs/configuration.md](./docs/configuration.md) |
 | CA rotation, leader election, readiness, upgrades, troubleshooting | [docs/operations.md](./docs/operations.md) |
 | C4 diagrams, component overview, security posture | [docs/architecture.md](./docs/architecture.md) |
+| Issuance audit record: configuration, collection, queries by serial or fingerprint | [docs/auditing.md](./docs/auditing.md) |
 | Writing tests that depend on time | [docs/testing/deterministic-time.md](./docs/testing/deterministic-time.md) |
 | Threat model, reporting policy, supported versions | [SECURITY.md](./SECURITY.md) |
 | All chart values | [charts/pod-certificate-signer/README.md](./charts/pod-certificate-signer/README.md) |

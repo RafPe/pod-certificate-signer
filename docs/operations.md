@@ -462,3 +462,8 @@ kubectl logs -n pcs-system deployment/pod-certificate-signer
 
 To change the log detail, set `log.level` (`info`, `error`, `debug`, `panic`)
 and `log.encoder` (`console` or `json`) in the chart values.
+
+The operational log is on stderr. The issuance audit record is on stdout, one
+JSON line for each signing attempt and each terminal outcome. `kubectl logs`
+shows both streams. [Auditing](./auditing.md) tells how to collect and query
+the records, and lists the operational log messages for dropped records.
