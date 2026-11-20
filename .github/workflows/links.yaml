@@ -1,0 +1,43 @@
+name: links
+
+# Relative links and heading anchors across the markdown files. Sections move
+# between pages, and this fails the PR that moves one without updating the
+# links to it. Offline: external URLs are not fetched, so the check is
+# deterministic. articles/ is excluded because its images are generated and
+# not tracked.
+on:
+  push:
+    branches:
+      - 'main'
+    paths:
+      - '**/*.md'
+      - '.github/workflows/links.yaml'
+  pull_request:
+    paths:
+      - '**/*.md'
+      - '.github/workflows/links.yaml'
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel superseded pull request runs. Never cancel a run on main.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  markdown-links:
+    name: "docs:links"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check relative links and anchors
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: --offline --include-fragments --no-progress --root-dir ${{ github.workspace }} --exclude-path articles '**/*.md'
+          fail: true
+          failIfEmpty: true

@@ -1,0 +1,2 @@
+[data-docs-version] { font: inherit; font-size: .82rem; color: var(--pcs-ink); background: var(--pcs-bg-2); border: 1px solid var(--pcs-line-2); border-radius: 6px; min-height: 36px; max-width: 150px; padding: .3rem .6rem; }
+[data-docs-version]:focus-visible { outline: 2px solid var(--pcs-blue); outline-offset: 2px; }

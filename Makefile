@@ -230,6 +230,16 @@ kind-stop:  ## Tear down the local development Kind cluster.
 		$(GO_TOOL) kind delete cluster --name $(KIND_CLUSTER_DEV); \
 	fi
 
+##@ Documentation
+
+.PHONY: site-dev
+site-dev: ## Preview the documentation website. Restages docs/ on every change.
+	cd website && npm ci --no-audit --no-fund && npm run dev
+
+.PHONY: site-check
+site-check: ## Run the website unit tests, build the site and check the built HTML, as the Documentation workflow does.
+	cd website && npm ci --no-audit --no-fund && npm test && npm run build && npm run archive && npm run check
+
 ##@ Build
 
 .PHONY: build

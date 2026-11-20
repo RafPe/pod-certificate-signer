@@ -56,3 +56,5 @@ website/dist/
 website/.astro/
 website/src/content/docs/**/*.md
 website/src/assets/img/
+website/.site-root/
+.lighthouseci/

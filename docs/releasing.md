@@ -340,7 +340,82 @@ public. Then follow [Artifact Hub](artifact-hub.md).
 To verify the setup, run `gh label list --search release` and
 `gh label list --search autorelease`, and make sure that all five labels show.
 
+## Website
+
+The **Documentation** workflow builds the site at
+<https://rafpe.github.io/pod-certificate-signer/> from `website/` (Astro
+Starlight). `website/site.manifest.json` stages the markdown under `docs/`
+into the site. The manifest is the only place that adds a page to the
+navigation. Pull requests build the site, run the checks and upload it as a
+`site` workflow artifact. Pushes to `main` deploy it. A completed **Release**
+run also rebuilds the site, so the version picker shows the new tag.
+
+The build job runs these checks:
+
+- The unit tests of the staging, sidebar, version and archive scripts.
+- `scripts/check-dist.mjs`: no third-party font or script hosts, every
+  root-absolute link under the base path, and a reduced-motion rule.
+- An offline link and anchor check of the built HTML with lychee.
+- Lighthouse: accessibility, best practices and SEO, each at 0.9 or higher.
+
+The **links** workflow checks relative links and anchors in all markdown files
+except `articles/`, whose images are generated and not tracked.
+
+To preview the site, run `make site-dev`. To run the checks of the build job,
+run `make site-check`.
+
+### Documentation versions
+
+The header version picker lists development documentation and the three
+newest stable releases with documentation. Select **All versions** to show the
+full archive. Older versions keep their direct URLs. A tagged site builds from
+its own checkout and package lock, under `/pod-certificate-signer/<tag>/`.
+Only tags that contain `website/package.json`, `website/package-lock.json`
+and `website/site.manifest.json` enter the archive. No tag up to `v3.1.0`
+contains them, so the archive starts with the first release after the website
+merges.
+
+Switching versions keeps the current page when that version has it.
+Otherwise the picker opens the Getting started page of that version. A failed
+archive build fails the deployment.
+
+To preview the complete archive, run these commands from `website/`. The
+archive command needs local release tags and network access for the locked
+npm dependencies.
+
+```sh
+npm run build
+npm run archive
+npm run preview -- --host 127.0.0.1 --port 4321
+```
+
+### Repository settings for the website
+
+Two repository settings are not in this repository. Set them before the first
+pull request that touches the site merges. Without Pages,
+`actions/configure-pages` fails the build job on every such pull request.
+
+```sh
+# Publish from the workflow rather than from a branch.
+gh api --method POST "repos/${OWNER}/${REPO}/pages" -f build_type=workflow
+
+# Only main may deploy through the github-pages environment.
+gh api --method PUT "repos/${OWNER}/${REPO}/environments/github-pages" \
+  --input - <<'JSON'
+{ "deployment_branch_policy": { "protected_branches": false, "custom_branch_policies": true } }
+JSON
+gh api --method POST "repos/${OWNER}/${REPO}/environments/github-pages/deployment-branch-policies" \
+  -f name=main -f type=branch
+```
+
+Configure a custom domain in **Settings > Pages** only. The build takes its
+base path from `actions/configure-pages`, so the code does not change when
+the domain changes. Do not make **site:build** a required check. The workflow
+is path-filtered, so a pull request that does not touch the site would wait
+for it forever.
+
 ## Maintainer checks
+
 
 - Keep action SHAs and tool versions pinned.
 - Keep the Kind version (`KIND_VERSION`) pinned in `test-e2e.yml`. A release
