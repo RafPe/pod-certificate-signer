@@ -3,6 +3,8 @@ package controller
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -17,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/recorder"
 
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/audit"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/outcome"
@@ -122,7 +125,37 @@ func assertEvents(t *testing.T, records []audit.Record, want ...[2]string) {
 var (
 	signedPair    = [2]string{string(audit.EventSigned), string(outcome.CertificateIssued)}
 	publishedPair = [2]string{string(audit.EventPublished), audit.ReasonStatusWritten}
+	deniedPair    = [2]string{string(audit.EventDenied), string(outcome.UnsupportedKeyType)}
 )
+
+// eventReasons drains rec and returns each event it holds as its type and
+// reason, for example "Normal CertificateIssued".
+func eventReasons(rec *events.FakeRecorder) []string {
+	var got []string
+	for {
+		select {
+		case e := <-rec.Events:
+			fields := strings.Fields(e)
+			got = append(got, strings.Join(fields[:min(2, len(fields))], " "))
+		default:
+			return got
+		}
+	}
+}
+
+// assertAnnounced fails unless h emitted exactly the events want, as type and
+// reason, and the outcome counter of kind and reason is delta above before.
+// Audit is on in h, so this checks that audit changes no event and no metric.
+func assertAnnounced(t *testing.T, h *auditHarness, kind outcome.Kind, reason outcome.ConditionReason,
+	before, delta float64, want ...string) {
+	t.Helper()
+	if got := eventReasons(h.events); !slices.Equal(got, want) {
+		t.Errorf("events = %q, want %q", got, want)
+	}
+	if got := outcomeCount(kind, reason) - before; got != delta {
+		t.Errorf("outcome counter {%s,%s} moved by %v, want %v", kind, reason, got, delta)
+	}
+}
 
 // denyByCSR makes signRequest deny the request after it read the pod: the
 // stub CSR does not parse.
@@ -142,10 +175,12 @@ func TestAuditIssuedEmitsSignedThenPublished(t *testing.T) {
 			return c.Status().Update(ctx, obj, opts...)
 		},
 	}, nil)
+	before := outcomeCount(outcome.Issued, outcome.CertificateIssued)
 
 	if err := h.reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
+	assertAnnounced(t, h, outcome.Issued, outcome.CertificateIssued, before, 1, "Normal CertificateIssued")
 	if atWrite != 1 {
 		t.Errorf("records at the status write = %d, want 1: the signed record comes first", atWrite)
 	}
@@ -190,12 +225,19 @@ func TestAuditFollowUpByWriteResult(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newAuditHarness(t, tc.funcs, nil)
+			before := outcomeCount(outcome.Issued, outcome.CertificateIssued)
 
 			err := h.reconcile(context.Background())
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("Reconcile() error = %v, want error %t", err, tc.wantErr)
 			}
 			assertEvents(t, h.rec.snapshot(), signedPair, tc.want)
+			// Only a persisted write is announced and counted.
+			if tc.want == publishedPair {
+				assertAnnounced(t, h, outcome.Issued, outcome.CertificateIssued, before, 1, "Normal CertificateIssued")
+			} else {
+				assertAnnounced(t, h, outcome.Issued, outcome.CertificateIssued, before, 0)
+			}
 		})
 	}
 }
@@ -215,6 +257,10 @@ func TestAuditCommitThenTimeoutIsUnknown(t *testing.T) {
 // A conflict re-read that finds a replacement request must not move the
 // follow-up onto the replacement: the certificate was signed for the original
 // request UID.
+//
+// This is a regression guard. Today the follow-up comes from the signed
+// record, and the re-read never reaches pcr. The test fails if a future change
+// copies the conflict re-read into pcr and the follow-up takes it from there.
 func TestAuditFollowUpKeepsOriginalRequestUID(t *testing.T) {
 	replacement := &certificatesv1.PodCertificateRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns", UID: "new-request-uid"},
@@ -240,13 +286,16 @@ func TestAuditFollowUpKeepsOriginalRequestUID(t *testing.T) {
 // certificate.
 func TestAuditDeniedAndFailed(t *testing.T) {
 	cases := []struct {
-		name    string
-		edit    func(*certificatesv1.PodCertificateRequest, *corev1.Pod)
-		signErr error
-		want    [2]string
+		name      string
+		edit      func(*certificatesv1.PodCertificateRequest, *corev1.Pod)
+		signErr   error
+		want      [2]string
+		kind      outcome.Kind
+		wantEvent string
 	}{
-		{"denied", denyByCSR, nil, [2]string{string(audit.EventDenied), string(outcome.UnsupportedKeyType)}},
-		{"failed", nil, errors.New("sign broke"), [2]string{string(audit.EventFailed), string(outcome.SigningFailed)}},
+		{"denied", denyByCSR, nil, deniedPair, outcome.Denied, "Warning UnsupportedKeyType"},
+		{"failed", nil, errors.New("sign broke"), [2]string{string(audit.EventFailed), string(outcome.SigningFailed)},
+			outcome.Failed, "Warning SigningFailed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -261,10 +310,13 @@ func TestAuditDeniedAndFailed(t *testing.T) {
 			if tc.signErr != nil {
 				h.stub.cert, h.stub.err = nil, tc.signErr
 			}
+			reason := outcome.ConditionReason(tc.want[1])
+			before := outcomeCount(tc.kind, reason)
 
 			if err := h.reconcile(context.Background()); err != nil {
 				t.Fatalf("Reconcile() error = %v", err)
 			}
+			assertAnnounced(t, h, tc.kind, reason, before, 1, tc.wantEvent)
 			if atWrite != 0 {
 				t.Errorf("records at the status write = %d, want 0: the record follows the write", atWrite)
 			}
@@ -308,19 +360,24 @@ func TestAuditDeniedAndFailed(t *testing.T) {
 func TestAuditTerminalLostRaceEmitsNothing(t *testing.T) {
 	var writes, supersededWrites int
 	cases := []struct {
-		name  string
-		funcs interceptor.Funcs
+		name    string
+		funcs   interceptor.Funcs
+		wantErr bool
 	}{
-		{"superseded", concurrentTerminal(terminalStatus(certificatesv1.PodCertificateRequestConditionTypeFailed, ""), &supersededWrites)},
-		{"gone", replacePCR(nil, &writes)},
-		{"rejected", failWrite(apierrors.NewBadRequest("bad"))},
-		{"unknown", failWrite(context.DeadlineExceeded)},
+		{"superseded", concurrentTerminal(terminalStatus(certificatesv1.PodCertificateRequestConditionTypeFailed, ""), &supersededWrites), false},
+		{"gone", replacePCR(nil, &writes), false},
+		{"rejected", failWrite(apierrors.NewBadRequest("bad")), true},
+		{"unknown", failWrite(context.DeadlineExceeded), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newAuditHarness(t, tc.funcs, denyByCSR)
+			before := outcomeCount(outcome.Denied, outcome.UnsupportedKeyType)
 
-			_ = h.reconcile(context.Background())
+			if err := h.reconcile(context.Background()); (err != nil) != tc.wantErr {
+				t.Fatalf("Reconcile() error = %v, want error %t", err, tc.wantErr)
+			}
+			assertAnnounced(t, h, outcome.Denied, outcome.UnsupportedKeyType, before, 0)
 			if records := h.rec.snapshot(); len(records) != 0 {
 				t.Errorf("records = %+v, want none", records)
 			}
@@ -421,20 +478,37 @@ func TestAuditFollowUpAfterCancelledContext(t *testing.T) {
 // request and is not being deleted, so a denial or failure record can carry
 // it. A dropped request returns no pod.
 func TestSignRequestReturnsPod(t *testing.T) {
+	now := metav1.Now()
+	failPodRead := interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.Pod); ok {
+				return errors.New("pod read broke")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}
 	cases := []struct {
 		name    string
+		funcs   interceptor.Funcs
 		edit    func(*certificatesv1.PodCertificateRequest, *corev1.Pod)
 		signErr error
 		wantPod bool
 	}{
-		{"signed", nil, nil, true},
-		{"denied", denyByCSR, nil, true},
-		{"failed", nil, errors.New("sign broke"), true},
-		{"pod replaced", func(_ *certificatesv1.PodCertificateRequest, pod *corev1.Pod) { pod.UID = "other" }, nil, false},
+		{"signed", interceptor.Funcs{}, nil, nil, true},
+		{"denied", interceptor.Funcs{}, denyByCSR, nil, true},
+		{"failed", interceptor.Funcs{}, nil, errors.New("sign broke"), true},
+		{"CA unusable", interceptor.Funcs{}, nil, caUnusableErr(), true},
+		{"pod replaced", interceptor.Funcs{}, func(_ *certificatesv1.PodCertificateRequest, pod *corev1.Pod) { pod.UID = "other" }, nil, false},
+		{"pod not found", interceptor.Funcs{}, func(_ *certificatesv1.PodCertificateRequest, pod *corev1.Pod) { pod.Name = "another-pod" }, nil, false},
+		{"pod being deleted", interceptor.Funcs{}, func(_ *certificatesv1.PodCertificateRequest, pod *corev1.Pod) {
+			pod.DeletionTimestamp = &now
+			pod.Finalizers = []string{"keep"}
+		}, nil, false},
+		{"pod read error", failPodRead, nil, nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newAuditHarness(t, interceptor.Funcs{}, tc.edit)
+			h := newAuditHarness(t, tc.funcs, tc.edit)
 			if tc.signErr != nil {
 				h.stub.cert, h.stub.err = nil, tc.signErr
 			}
@@ -475,6 +549,110 @@ func TestNewReconcilerRejectsHalfAnAuditPair(t *testing.T) {
 				podcertificate.Options{}, tc.recorder, tc.builder)
 			if err == nil {
 				t.Fatal("NewPodCertificateRequestReconciler() error = nil, want an error for half an audit pair")
+			}
+		})
+	}
+}
+
+// A shutdown that cancels the reconcile context must not lose the signed
+// record or a denied record: each is recorded with a context that is not done.
+// The signed row cancels after the pod read, before the signing. The denied
+// row cancels after the status write, before its record.
+func TestAuditRecordsOutliveCancelledContext(t *testing.T) {
+	cancelAfterPodRead := func(cancel context.CancelFunc) interceptor.Funcs {
+		return interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				err := c.Get(ctx, key, obj, opts...)
+				if _, ok := obj.(*corev1.Pod); ok {
+					cancel()
+				}
+				return err
+			},
+		}
+	}
+	cancelAfterStatusWrite := func(cancel context.CancelFunc) interceptor.Funcs {
+		return interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, _ string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				err := c.Status().Update(ctx, obj, opts...)
+				cancel()
+				return err
+			},
+		}
+	}
+	cases := []struct {
+		name  string
+		funcs func(context.CancelFunc) interceptor.Funcs
+		edit  func(*certificatesv1.PodCertificateRequest, *corev1.Pod)
+		// want lists the records. The first is the one the row checks.
+		want [][2]string
+	}{
+		{"signed", cancelAfterPodRead, nil, [][2]string{signedPair, publishedPair}},
+		{"denied", cancelAfterStatusWrite, denyByCSR, [][2]string{deniedPair}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			h := newAuditHarness(t, tc.funcs(cancel), tc.edit)
+
+			if err := h.reconcile(ctx); err != nil {
+				t.Fatalf("Reconcile() error = %v", err)
+			}
+			if ctx.Err() == nil {
+				t.Fatal("the reconcile context is not done: the row did not cancel it")
+			}
+			assertEvents(t, h.rec.snapshot(), tc.want...)
+			h.rec.mu.Lock()
+			defer h.rec.mu.Unlock()
+			if err := h.rec.ctxErrs[0]; err != nil {
+				t.Errorf("%s record context error = %v, want nil: the record must outlive the reconcile context", tc.want[0][0], err)
+			}
+		})
+	}
+}
+
+// fakeManager is the part of ctrl.Manager that the reconciler constructor
+// reads. Any other method panics.
+type fakeManager struct {
+	ctrl.Manager
+	cl client.Client
+}
+
+func (m fakeManager) GetClient() client.Client    { return m.cl }
+func (m fakeManager) GetAPIReader() client.Reader { return m.cl }
+func (m fakeManager) GetEventRecorder(string) recorder.EventRecorder {
+	return events.NewFakeRecorder(1)
+}
+
+// The constructor accepts both audit values together, and both nil. It hands
+// them to the reconciler as given, so audit is on exactly when both are set.
+func TestNewReconcilerTakesTheAuditPair(t *testing.T) {
+	builder, err := audit.NewBuilder(auditSignerName, audit.DefaultOptions())
+	if err != nil {
+		t.Fatalf("NewBuilder() error = %v", err)
+	}
+	mgr := fakeManager{cl: fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()}
+	cases := []struct {
+		name        string
+		recorder    audit.Recorder
+		builder     *audit.Builder
+		wantAuditOn bool
+	}{
+		{"both set", &fakeAuditRecorder{}, builder, true},
+		{"both nil", nil, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := NewPodCertificateRequestReconciler(mgr, "c", auditSignerName, &stubSigner{},
+				podcertificate.Options{}, tc.recorder, tc.builder)
+			if err != nil {
+				t.Fatalf("NewPodCertificateRequestReconciler() error = %v", err)
+			}
+			if r.Audit != tc.recorder || r.AuditRecords != tc.builder {
+				t.Errorf("reconciler audit = (%v, %v), want (%v, %v)", r.Audit, r.AuditRecords, tc.recorder, tc.builder)
+			}
+			if r.auditOn() != tc.wantAuditOn {
+				t.Errorf("auditOn() = %t, want %t", r.auditOn(), tc.wantAuditOn)
 			}
 		})
 	}

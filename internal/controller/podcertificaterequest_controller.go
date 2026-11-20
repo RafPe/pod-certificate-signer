@@ -92,6 +92,9 @@ var (
 // Signer is the consumer-side view of the signing dependency the reconciler
 // needs. Keeping it an interface (rather than the concrete certificate
 // authority) lets the reconcile path be unit-tested with a stub.
+//
+// A certificate that Sign returns without an error has a non-nil Leaf, Issuer
+// and Config. The audit record builder reads all three.
 type Signer interface {
 	Sign(*podcertificate.Config) (*podcertificate.Certificate, error)
 }

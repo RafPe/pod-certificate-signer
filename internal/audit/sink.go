@@ -135,8 +135,9 @@ func (s *WriterSink) Close() {
 // Record encodes rec and hands the line to the writer goroutine. It returns
 // when the line is written, when the write timeout passes, or when ctx is
 // done. A line that was handed over is written even when Record returned
-// first. After Close, Record drops rec at once. Errors are logged, not
-// returned.
+// first, unless Close runs before the write starts. Then the writer drops the
+// line and logs it. After Close, Record drops rec at once. Errors are logged,
+// not returned.
 func (s *WriterSink) Record(ctx context.Context, rec Record) {
 	s.mu.Lock()
 	closed := s.closed
