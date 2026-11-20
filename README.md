@@ -74,7 +74,7 @@ For CA options, a workload that requests a certificate, and the verification ste
 At the same time, the controller keeps the `ClusterTrustBundle` of the signer up to date.
 Workloads use this bundle to verify their peers.
 
-See [docs/architecture.md](./docs/architecture.md) for the full C4 model (system context, containers, components) and the request-flow sequence.
+See [docs/architecture.md](./docs/architecture.md) for the full C4 model (system context, containers, components) and the certificate issuance sequence.
 
 ## Features
 

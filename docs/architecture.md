@@ -63,6 +63,11 @@ sequenceDiagram
     Kubelet->>Kubelet: Write credential bundle and ca.crt into the pod
 ```
 
+The signer resolves the configuration from the request
+`spec.unverifiedUserAnnotations`. While `--allow-pod-annotations` is `true`,
+the default, it also falls back to the deprecated pod annotations. See
+[Configuration via pod annotations](configuration.md#configuration-via-pod-annotations-deprecated).
+
 ## C4 model
 
 The [C4 model](https://c4model.com/) views below zoom in from the signer in its

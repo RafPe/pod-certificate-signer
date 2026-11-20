@@ -348,7 +348,8 @@ Starlight). `website/site.manifest.json` stages the markdown under `docs/`
 into the site. The manifest is the only place that adds a page to the
 navigation. Pull requests build the site, run the checks and upload it as a
 `site` workflow artifact. Pushes to `main` deploy it. A completed **Release**
-run also rebuilds the site, so the version picker shows the new tag.
+run, from a merged release PR or a manual recovery run, also rebuilds the
+site, so the version picker shows the new tag.
 
 The build job runs these checks:
 
@@ -415,7 +416,6 @@ is path-filtered, so a pull request that does not touch the site would wait
 for it forever.
 
 ## Maintainer checks
-
 
 - Keep action SHAs and tool versions pinned.
 - Keep the Kind version (`KIND_VERSION`) pinned in `test-e2e.yml`. A release

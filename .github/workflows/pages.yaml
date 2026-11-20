@@ -23,10 +23,12 @@ on:
       - 'CONTRIBUTING.md'
       - '.github/workflows/pages.yaml'
   # Rebuild after a release so the version picker picks up the new tag.
+  # The filter matches the head branch of the Release run: release/next for a
+  # merged release PR, main for a manual recovery run.
   workflow_run:
     workflows: ['Release']
     types: [completed]
-    branches: ['main']
+    branches: ['release/next', 'main']
   workflow_dispatch:
 
 permissions: {}
