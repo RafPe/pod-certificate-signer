@@ -1,0 +1,103 @@
+---
+import './audit.css';
+const guide = import.meta.env.BASE_URL.replace(/\/$/, '') + '/auditing/#volume-estimate';
+---
+<section class="pcs-audit not-content" id="audit-volume" aria-labelledby="audit-volume-title">
+  <header>
+    <p class="eyebrow">Volume estimate</p>
+    <h3 class="title" id="audit-volume-title">How much will the records cost to keep?</h3>
+    <p class="hint">Uses the defaults: <code>duration</code> 24h, <code>refresh</code> 15m and the 1-minute backdate, so one refresh about every 23h44m. Assumes that kubelet starts the refresh at <code>beginRefreshAt</code>. Kubelet behaviour was not checked.</p>
+  </header>
+
+  <form class="calc" onsubmit="return false">
+    <label>
+      <span>Running projections</span>
+      <input type="number" name="projections" min="0" step="100" value="1000" inputmode="numeric" />
+      <small>Each projected podCertificate volume</small>
+    </label>
+    <label>
+      <span>New projections per day</span>
+      <input type="number" name="starts" min="0" step="100" value="0" inputmode="numeric" />
+      <small>From pod starts</small>
+    </label>
+    <label>
+      <span>Denials and failures per day</span>
+      <input type="number" name="denials" min="0" step="10" value="0" inputmode="numeric" />
+      <small>One record each</small>
+    </label>
+  </form>
+
+  <dl class="result" aria-live="polite">
+    <div><dt>Issuances a day</dt><dd data-out="issuances">1,011</dd></div>
+    <div><dt>Lines a day</dt><dd data-out="lines">2,022</dd></div>
+    <div class="hero"><dt>Storage a day</dt><dd data-out="bytes">2.1 MB</dd></div>
+    <div><dt>Over 30 days</dt><dd data-out="month">64 MB</dd></div>
+  </dl>
+  <p class="foot">Record sizes from a test build: <code>signed</code> 1,620 bytes with two labels and one annotation, a follow-up 481 bytes, <code>denied</code> 1,113 bytes with a 227-byte message. Your sizes depend on the copied keys and SANs. Not counted: a new signing after a <code>WriteRejected</code> or <code>unknown</code> record adds 2 lines. <a href={guide}>The formula →</a></p>
+</section>
+
+<script>
+  const SIGNED = 1620, FOLLOW_UP = 481, DENIED = 1113;
+  const REFRESH_MINUTES = 23 * 60 + 44;
+  const fmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+  const size = (b: number) => {
+    const units = ['B', 'kB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    while (b >= 1000 && i < units.length - 1) { b /= 1000; i++; }
+    return `${b < 10 && i > 0 ? b.toFixed(1) : Math.round(b)} ${units[i]}`;
+  };
+  for (const root of document.querySelectorAll<HTMLElement>('#audit-volume')) {
+    const form = root.querySelector('form')!;
+    const out = (k: string, v: string) => { root.querySelector(`[data-out="${k}"]`)!.textContent = v; };
+    const read = (n: string) => Math.max(0, Number((form.elements.namedItem(n) as HTMLInputElement).value) || 0);
+    const update = () => {
+      const issuances = read('projections') * (24 * 60 / REFRESH_MINUTES) + read('starts');
+      const denials = read('denials');
+      const bytes = issuances * (SIGNED + FOLLOW_UP) + denials * DENIED;
+      out('issuances', fmt.format(issuances));
+      out('lines', fmt.format(issuances * 2 + denials));
+      out('bytes', size(bytes));
+      out('month', size(bytes * 30));
+    };
+    form.addEventListener('input', update);
+    update();
+  }
+</script>
+
+<style>
+  .calc {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem;
+    padding: 1.25rem 1.5rem 0;
+  }
+  .calc label { display: grid; gap: 0.3rem; margin: 0; }
+  .calc span { font-size: 0.875rem; font-weight: 600; color: var(--pcs-ink); }
+  .calc small { font-size: 0.8rem; color: var(--pcs-muted); }
+  .calc input {
+    font: inherit; font-family: var(--pcs-font-mono); font-size: 1rem;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--pcs-line-2); border-radius: 6px;
+    background: var(--pcs-bg); color: var(--pcs-ink);
+    width: 100%;
+  }
+  .calc input:focus-visible { outline: 2px solid var(--pcs-blue); outline-offset: 1px; border-color: var(--pcs-blue); }
+  .result {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin: 1.25rem 1.5rem 0; border: 1px solid var(--pcs-line); border-radius: var(--pcs-radius);
+    overflow: hidden;
+  }
+  .result div { padding: 0.85rem 1rem; border-left: 1px solid var(--pcs-line); margin: 0; }
+  .result div:first-child { border-left: 0; }
+  .result dt { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--pcs-muted); }
+  .result dd { margin: 0.2rem 0 0; font-size: 1.4rem; font-weight: 650; color: var(--pcs-ink); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .result .hero { background: var(--pcs-blue-soft); }
+  .result .hero dd { color: var(--pcs-blue-ink); }
+  .foot { margin: 0.9rem 1.5rem 1.5rem; font-size: 0.875rem; color: var(--pcs-muted); line-height: 1.6; max-width: 80ch; }
+  .foot a { font-weight: 600; }
+  @media (max-width: 48rem) {
+    .calc { grid-template-columns: 1fr; padding-inline: 1rem; }
+    .result { grid-template-columns: 1fr 1fr; margin-inline: 1rem; }
+    .result div:nth-child(3) { border-left: 0; }
+    .result div:nth-child(n+3) { border-top: 1px solid var(--pcs-line); }
+    .foot { margin-inline: 1rem; }
+  }
+</style>

@@ -1,9 +1,11 @@
 .issuance-map {
   margin: 0;
-  padding: clamp(1rem, 3vw, 2rem);
-  border-block: 1px solid var(--pcs-line-2);
+  padding: clamp(1.25rem, 3vw, 2.25rem);
+  border: 1px solid var(--pcs-line);
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--pcs-bg-2), var(--pcs-bg));
 }
-.issuance-map figcaption { font-size: 1.2rem; font-weight: 600; }
+.issuance-map figcaption { font-size: 1.25rem; font-weight: 650; color: var(--pcs-ink); letter-spacing: -.015em; }
 .issuance-rail {
   display: grid;
   grid-template-columns: auto 1fr auto 1fr auto 1fr auto;
@@ -12,11 +14,11 @@
   max-width: 58rem;
   margin-block: 2rem;
 }
-.issuance-actor { display: grid; justify-items: center; gap: .4rem; font-size: .9rem; }
+.issuance-actor { display: grid; justify-items: center; gap: .4rem; font-size: .95rem; color: var(--pcs-ink); }
 .issuance-actor img { display: block; }
 .issuance-links { display: grid; gap: .75rem; }
 .issuance-edge { display: grid; gap: .3rem; color: var(--pcs-muted); }
-.issuance-edge span { display: flex; justify-content: center; align-items: center; gap: .4rem; font-size: .75rem; white-space: nowrap; }
+.issuance-edge span { display: flex; justify-content: center; align-items: center; gap: .4rem; font-size: .82rem; white-space: nowrap; }
 .issuance-edge i { position: relative; border-top: 1px solid; }
 .issuance-edge i::after {
   content: ''; position: absolute; right: 0; top: -3.5px;
@@ -25,7 +27,7 @@
 }
 .issuance-edge.incoming i { transform: rotate(180deg); }
 .issuance-edge.outgoing { color: var(--pcs-blue-ink); }
-.issuance-map p { max-width: 68ch; font-size: .9rem; }
+.issuance-map p { max-width: 68ch; font-size: 1rem; line-height: 1.65; }
 .issuance-map p + p { margin-top: .65rem; }
 @media (max-width: 800px) {
   .issuance-rail { grid-template-columns: 1fr; gap: .35rem; margin-block: 1.3rem; }

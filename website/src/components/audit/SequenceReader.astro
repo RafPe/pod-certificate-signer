@@ -1,0 +1,72 @@
+---
+import './audit.css';
+import { sequences } from './audit-data';
+
+const guide = import.meta.env.BASE_URL.replace(/\/$/, '') + '/auditing/#read-a-sequence';
+const rules = sequences.map(({ id }) =>
+  `#audit-sequences:has(input[value="${id}"]:checked) .panel[data-id="${id}"]{display:block}`).join('\n');
+---
+<section class="pcs-audit not-content" id="audit-sequences" aria-labelledby="audit-sequences-title">
+  <header>
+    <p class="eyebrow">Read a sequence</p>
+    <h3 class="title" id="audit-sequences-title">What did happen to this certificate?</h3>
+    <p class="hint">Group records by <code>request.uid</code>, then match follow-ups to their <code>signed</code> record by <code>certificate.fingerprint</code>. Pick the pattern you see.</p>
+  </header>
+
+  <fieldset class="chips">
+    <legend class="sr-only">Record pattern</legend>
+    {sequences.map((s, i) => (
+      <label class="chip" data-tone={s.tone}>
+        <input class="sr-only" type="radio" name="audit-sequence" value={s.id} checked={i === 0} />
+        <span>{s.label}</span>
+      </label>
+    ))}
+  </fieldset>
+
+  <div class="panels" aria-live="polite">
+    {sequences.map((s) => (
+      <article class="panel seq" data-id={s.id} data-tone={s.tone}>
+        <ol class="stream" aria-label="Records in order">
+          {s.steps.map((step) => (
+            <li data-tone={step.tone}>
+              <code>{step.text}</code>
+              {step.note && <small>{step.note}</small>}
+            </li>
+          ))}
+        </ol>
+        <h4><span class="verdict">{s.verdict}</span></h4>
+        <p>{s.detail}</p>
+      </article>
+    ))}
+    <p class="more"><a href={guide}>Every case, with the reasoning, in the Auditing guide →</a></p>
+  </div>
+  <style set:html={rules}></style>
+</section>
+
+<style>
+  .stream {
+    display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.5rem 1.75rem;
+    list-style: none; margin: 0 0 0.9rem; padding: 0;
+  }
+  .stream li {
+    position: relative;
+    display: grid; gap: 0.1rem; align-content: center;
+    min-width: 7.5rem;
+    margin: 0;
+    padding: 0.5rem 0.8rem;
+    border: 1px solid var(--tone);
+    border-radius: 6px;
+    background: var(--tone-soft);
+  }
+  .stream li + li::before {
+    content: '→';
+    position: absolute; left: -1.35rem; top: 50%; transform: translateY(-50%);
+    color: var(--pcs-muted); font-size: 0.95rem;
+  }
+  .stream code { font-family: var(--pcs-font-mono); font-size: 0.875rem; font-weight: 600; color: var(--pcs-ink); background: none; border: 0; padding: 0; }
+  .stream small { font-family: var(--pcs-font-mono); font-size: 0.72rem; color: var(--pcs-muted); }
+  .seq h4 { margin-bottom: 0.1rem; }
+  .seq p { font-size: 1rem !important; line-height: 1.65; color: var(--pcs-ink-2); max-width: 68ch; }
+  .more { margin: 1rem 0 0; font-size: 0.95rem; }
+  .more a { font-weight: 600; }
+</style>

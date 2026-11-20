@@ -1,7 +1,7 @@
 {
   "groups": [
     "Guides",
-    "Diagrams",
+    "Interactive",
     "Project"
   ],
   "pages": [
@@ -34,6 +34,13 @@
       "order": 4
     },
     {
+      "source": "docs/auditing.md",
+      "route": "auditing",
+      "group": "Guides",
+      "label": "Auditing",
+      "order": 5
+    },
+    {
       "source": "CONTRIBUTING.md",
       "route": "project/contributing",
       "group": "Project",
@@ -57,8 +64,14 @@
     {
       "route": "interactive/ca-rotation",
       "label": "CA rotation",
-      "group": "Diagrams",
+      "group": "Interactive",
       "order": 2
+    },
+    {
+      "route": "interactive/audit-trail",
+      "label": "Audit trail",
+      "group": "Interactive",
+      "order": 1
     }
   ]
 }

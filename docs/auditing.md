@@ -363,6 +363,27 @@ kubectl logs -n pcs-system -l app.kubernetes.io/name=pod-certificate-signer --ta
   | jq -R -c 'fromjson? | select(.kind? == "CertificateAuditRecord")'
 ```
 
+## Join keys
+
+The signer writes the same keys in each place that records an issuance. Use
+them to connect the records after the pod is gone.
+
+| Key | Audit record | Operational log | Condition and Kubernetes Event | API server audit event |
+| --- | --- | --- | --- | --- |
+| Serial | `certificate.serialHex` | `serial` | In the message | In the message |
+| Fingerprint | `certificate.fingerprint` | `fingerprint` | In the message | In the message, and as the SHA-256 of the first chain certificate |
+| Request UID | `request.uid` | No | Object `metadata.uid` | `responseObject.metadata.uid` |
+| Pod UID | `workload.pod.uid` | No | `spec.podUID` | `responseObject.spec.podUID` |
+| Owner | `workload.owner` | No | No | No |
+
+- The operational log is the `issued certificate` line on stderr. It has the
+  keys `serial` and `fingerprint` only after the Issued status write
+  persisted. It is not the audit record.
+- The Issued condition message and the Kubernetes Event do not last.
+  [The second trail](#the-second-trail) gives their lifetimes.
+- The certificate subject and the pod name are not join keys. A later pod can
+  have the same subject and the same pod name.
+
 ## Find a workload from a serial or fingerprint
 
 These queries read records as one JSON object per line, in a file

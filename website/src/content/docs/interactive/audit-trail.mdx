@@ -1,0 +1,55 @@
+---
+title: Audit trail
+description: Follow a certificate from signing to its audit records, read a record sequence, and join it to the API server audit log.
+---
+
+import AuditLifecycle from '../../../components/audit/AuditLifecycle.astro';
+import RecordExplorer from '../../../components/audit/RecordExplorer.astro';
+import SequenceReader from '../../../components/audit/SequenceReader.astro';
+import JoinKeys from '../../../components/audit/JoinKeys.astro';
+import SecondTrail from '../../../components/audit/SecondTrail.astro';
+import VolumeEstimate from '../../../components/audit/VolumeEstimate.astro';
+
+export const guide = import.meta.env.BASE_URL.replace(/\/$/, '') + '/auditing/';
+
+The signer writes an issuance audit record for each signing attempt and each terminal outcome. A record joins a certificate serial or fingerprint to the PodCertificateRequest and the pod that requested it.
+
+This page explains the records visually. <a href={guide}>The Auditing guide</a> has the configuration, the limits and the full rules.
+
+:::note[Best-effort, by design]
+The signer gets no acknowledgement that a collector stored a line. A delivered certificate can have no stored record, or only its `signed` record. Use the API server audit log as the second trail.
+:::
+
+## One request, several records
+
+Only the leader replica signs. It writes `signed` before the status write, then one follow-up record after the write. A denied or failed request has no certificate, so it has no `signed` record.
+
+<AuditLifecycle />
+
+## What a record holds
+
+The `signed` record carries every group. Follow-up records carry the request identity, the serials and the fingerprint only. A serial is unique only within one issuer, so scope a serial query by `issuer.fingerprint`.
+
+<RecordExplorer />
+
+## Read a sequence
+
+<SequenceReader />
+
+## Find the workload behind a serial
+
+The signer writes the same join keys in each place that records an issuance. Only the audit record also names the owner. The request, its condition and the Kubernetes Event do not last.
+
+<JoinKeys />
+
+## Check the write in the API server audit log
+
+The second trail confirms what the record cannot: whether the Issued status write committed.
+
+<SecondTrail />
+
+## Plan the storage
+
+Each issued certificate writes two lines, `signed` and `published`.
+
+<VolumeEstimate />

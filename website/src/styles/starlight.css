@@ -1,5 +1,5 @@
 /* Map Starlight's theme variables onto the shared tokens so the docs and the
-   landing page read as one site. Overrides stay minimal on purpose. */
+   landing page read as one site. */
 :root {
   --sl-font: var(--pcs-font-body);
   --sl-font-mono: var(--pcs-font-mono);
@@ -16,7 +16,7 @@
   --sl-color-gray-7: var(--pcs-bg-2);
   --sl-color-black: var(--pcs-bg);
   --sl-color-bg: var(--pcs-bg);
-  --sl-color-bg-nav: var(--pcs-bg-2);
+  --sl-color-bg-nav: color-mix(in srgb, var(--pcs-bg) 88%, transparent);
   --sl-color-bg-sidebar: var(--pcs-bg);
   --sl-color-hairline: var(--pcs-line);
   --sl-color-hairline-light: var(--pcs-line);
@@ -29,17 +29,69 @@
   --sl-color-black: var(--pcs-bg);
 }
 
-.sl-markdown-content :is(h1,h2,h3), h1#_top { font-family: var(--pcs-font-display); }
-header.header { border-bottom: 2px solid var(--pcs-blue); }
-.site-title { font-weight: 700; letter-spacing: -.035em; }
+/* Reading rhythm: a slightly larger body size, a calm line height and clear
+   space above each section. */
 html {
-  --sl-text-h1: 1.75rem;
-  --sl-text-h2: 1.375rem;
-  --sl-text-h3: 1.125rem;
+  --sl-text-body: 1.0625rem;
+  --sl-line-height: 1.72;
+  --sl-line-height-headings: 1.25;
+  --sl-text-code: 0.875rem;
+  --sl-text-h1: 2.25rem;
+  --sl-text-h2: 1.5rem;
+  --sl-text-h3: 1.1875rem;
+  --sl-text-h4: 1.0625rem;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "ss01", "cv11";
 }
+body { font-optical-sizing: auto; }
+
+.sl-markdown-content :is(h1, h2, h3, h4), h1#_top {
+  font-family: var(--pcs-font-display);
+  color: var(--pcs-ink);
+  letter-spacing: -0.018em;
+  text-wrap: balance;
+}
+h1#_top { font-weight: 650; letter-spacing: -0.03em; }
+.sl-markdown-content h2 { font-weight: 640; }
+.sl-markdown-content h3, .sl-markdown-content h4 { font-weight: 620; }
+.sl-markdown-content :is(h2, .sl-heading-wrapper.level-h2) { margin-top: 3rem; }
+.sl-markdown-content :is(h3, .sl-heading-wrapper.level-h3) { margin-top: 2.25rem; }
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
+  padding-top: 1.75rem;
+  border-top: 1px solid var(--pcs-line);
+}
+.sl-markdown-content > :first-child.sl-heading-wrapper.level-h2 { border-top: 0; padding-top: 0; }
+.sl-markdown-content :is(p, li) { text-wrap: pretty; }
+.sl-markdown-content li + li { margin-top: 0.4rem; }
+.sl-markdown-content strong { color: var(--pcs-ink); font-weight: 620; }
+.sl-markdown-content a { text-underline-offset: 0.2em; text-decoration-thickness: 1px; }
+.sl-markdown-content a:hover { text-decoration-thickness: 2px; }
+/* Page lead: the first paragraph introduces the page. */
+.sl-markdown-content > p:first-child { font-size: 1.15rem; color: var(--pcs-ink-2); line-height: 1.65; }
+
+/* Header: a translucent bar that keeps the page visible beneath it. */
+header.header {
+  border-bottom: 1px solid var(--pcs-line);
+  backdrop-filter: saturate(1.4) blur(10px);
+  -webkit-backdrop-filter: saturate(1.4) blur(10px);
+}
+.site-title { font-weight: 680; letter-spacing: -0.035em; }
+
+/* Sidebar */
+.sidebar-content { --sl-sidebar-item-padding-inline: 0.75rem; }
+.sidebar-content a { border-radius: 6px; font-size: 0.9375rem; }
+.sidebar-content a[aria-current="page"] {
+  background: var(--pcs-blue-soft);
+  color: var(--pcs-blue-ink);
+  font-weight: 600;
+}
+.sidebar-content .group-label .large { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--pcs-muted); font-weight: 600; }
+
 /* Keep prose short enough to scan while giving figures and tables a wider column. */
 [data-has-sidebar] .sl-markdown-content > :is(p, ul, ol, dl, blockquote, details) {
-  max-inline-size: 68ch;
+  max-inline-size: 70ch;
 }
 @media (min-width: 72rem) {
   html[data-has-sidebar] {
@@ -62,4 +114,65 @@ html {
   [data-has-sidebar] .right-sidebar { width: 16rem; }
   [data-has-sidebar] .sl-container { max-inline-size: var(--sl-content-width); }
 }
-.sl-markdown-content :not(pre) > code { border-radius: 3px; }
+
+/* Inline code */
+.sl-markdown-content :not(pre) > code:not(.not-content code) {
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.86em;
+  background: var(--pcs-bg-2);
+  border: 1px solid var(--pcs-line);
+  color: var(--pcs-ink);
+  overflow-wrap: anywhere;
+}
+
+/* Code blocks */
+.sl-markdown-content .expressive-code { margin-block: 1.25rem; }
+.expressive-code .frame { border-radius: var(--pcs-radius) !important; }
+.expressive-code pre { border-radius: var(--pcs-radius) !important; }
+
+/* Tables: dense reference tables stay readable. Starlight already scrolls
+   them horizontally on narrow screens. */
+.sl-markdown-content table:not(.not-content table) {
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--pcs-line);
+  border-radius: var(--pcs-radius);
+}
+.sl-markdown-content :is(th, td):not(.not-content *) {
+  padding: 0.6rem 0.85rem;
+  vertical-align: top;
+  border: 0;
+  border-bottom: 1px solid var(--pcs-line);
+}
+.sl-markdown-content tr:last-child td:not(.not-content *) { border-bottom: 0; }
+.sl-markdown-content th:not(.not-content *) {
+  background: var(--pcs-bg-2);
+  color: var(--pcs-ink);
+  font-weight: 620;
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.sl-markdown-content th:first-child:not(.not-content *) { border-top-left-radius: var(--pcs-radius); }
+.sl-markdown-content th:last-child:not(.not-content *) { border-top-right-radius: var(--pcs-radius); }
+.sl-markdown-content td code:not(.not-content code) { white-space: nowrap; overflow-wrap: normal; }
+.sl-markdown-content tbody tr:hover td:not(.not-content *) { background: color-mix(in srgb, var(--pcs-blue-soft) 45%, transparent); }
+
+/* Callouts */
+.sl-markdown-content .starlight-aside { border-radius: var(--pcs-radius); }
+
+/* Right-hand table of contents */
+starlight-toc a { font-size: 0.875rem; line-height: 1.45; }
+starlight-toc a[aria-current="true"] { font-weight: 600; }
+
+::selection { background: color-mix(in srgb, var(--pcs-blue) 25%, transparent); }
+
+/* Notes use the site blue rather than Starlight's default purple. */
+.starlight-aside--note {
+  --sl-color-asides-text-accent: var(--pcs-blue-ink);
+  --sl-color-asides-border: var(--pcs-blue);
+  background-color: var(--pcs-blue-soft);
+}

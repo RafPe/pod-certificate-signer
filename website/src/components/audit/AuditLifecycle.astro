@@ -1,0 +1,143 @@
+---
+import './audit.css';
+import { states } from './audit-data';
+
+const guide = import.meta.env.BASE_URL.replace(/\/$/, '') + '/auditing/';
+const byId = Object.fromEntries(states.map((s) => [s.id, s]));
+
+// Geometry sits on a 4px grid. viewBox 920 × 448.
+const W = 920, H = 448;
+const boxes = [
+  { id: 'reconcile', x: 24, y: 168, w: 160, h: 48, name: 'Reconcile', sub: 'PodCertificateRequest' },
+  { id: 'denied', x: 24, y: 32, w: 96, h: 48, name: 'denied', sub: 'condition' },
+  { id: 'failed', x: 136, y: 32, w: 112, h: 48, name: 'failed', sub: 'SigningFailed' },
+  { id: 'signed', x: 264, y: 132, w: 160, h: 120, name: 'signed', sub: 'CertificateIssued', groups: ['request · workload', 'certificate · issuer'] },
+  { id: 'published', x: 560, y: 32, w: 280, h: 48, name: 'published', sub: 'StatusWritten', tag: 'PUBLISHED' },
+  { id: 'other-writer-won', x: 560, y: 100, w: 280, h: 48, name: 'superseded', sub: 'OtherWriterWon', tag: 'NOT PUBLISHED' },
+  { id: 'request-gone', x: 560, y: 168, w: 280, h: 48, name: 'superseded', sub: 'RequestGone', tag: 'VERIFY' },
+  { id: 'write-rejected', x: 560, y: 236, w: 280, h: 48, name: 'superseded', sub: 'WriteRejected', tag: 'NOT PUBLISHED' },
+  { id: 'unknown', x: 560, y: 304, w: 280, h: 48, name: 'unknown', sub: 'WriteAmbiguous', tag: 'VERIFY' },
+];
+
+// Orthogonal connectors with r=8 corners. Arrows end 2px short of the box.
+const edges = [
+  { from: 'reconcile', to: 'signed', d: 'M184 192 H262' },
+  { from: 'reconcile', to: 'denied', d: 'M72 168 V82' },
+  { from: 'reconcile', to: 'failed', d: 'M144 168 V82' },
+  { from: 'signed', to: 'published', d: 'M424 152 H448 Q456 152 456 144 V64 Q456 56 464 56 H558' },
+  { from: 'signed', to: 'other-writer-won', d: 'M424 172 H480 Q488 172 488 164 V132 Q488 124 496 124 H558' },
+  { from: 'signed', to: 'request-gone', d: 'M424 192 H558' },
+  { from: 'signed', to: 'write-rejected', d: 'M424 212 H480 Q488 212 488 220 V252 Q488 260 496 260 H558' },
+  { from: 'signed', to: 'unknown', d: 'M424 232 H448 Q456 232 456 240 V320 Q456 328 464 328 H558' },
+  { from: 'write-rejected', to: 'reconcile', d: 'M840 260 H880 Q888 260 888 268 V404 Q888 412 880 412 H96 Q88 412 88 404 V218', dashed: true },
+  { from: 'unknown', to: 'reconcile', d: 'M840 328 H864 Q872 328 872 336 V392 Q872 400 864 400 H128 Q120 400 120 392 V218', dashed: true },
+];
+
+const tagWidth = (t: string) => Math.round(t.length * 6.4 + 16);
+
+// One rule set per state: show its panel, outline its node, colour its edges.
+const rules = states.map(({ id }) => {
+  const sel = `#audit-lifecycle:has(input[value="${id}"]:checked)`;
+  return `${sel} .panel[data-id="${id}"]{display:block}` +
+    `${sel} .node[data-id="${id}"] .box{stroke:var(--pcs-blue);stroke-width:2.5}` +
+    `${sel} .edge[data-from="${id}"],${sel} .edge[data-to="${id}"]{stroke:var(--pcs-blue);stroke-width:1.8}`;
+}).join('\n');
+---
+<section class="pcs-audit not-content" id="audit-lifecycle" aria-labelledby="audit-lifecycle-title">
+  <header>
+    <p class="eyebrow">Event lifecycle</p>
+    <h3 class="title" id="audit-lifecycle-title">From one request to its records</h3>
+    <p class="hint">Select a state in the diagram or in the list to see when the signer writes it and how to read it.</p>
+  </header>
+
+  <fieldset class="chips">
+    <legend class="sr-only">State</legend>
+    {states.map((s) => (
+      <label class="chip" data-tone={s.tone}>
+        <input class="sr-only" type="radio" name="audit-state" value={s.id} checked={s.id === 'signed'} />
+        <code>{s.event}</code>{s.event === 'superseded' && <span>{s.reason}</span>}
+      </label>
+    ))}
+  </fieldset>
+
+  <div class="diagram">
+    <svg viewBox={`0 0 ${W} ${H}`} style="min-width:720px" role="img" aria-labelledby="audit-lifecycle-svg-title audit-lifecycle-svg-desc">
+      <title id="audit-lifecycle-svg-title">Issuance audit record lifecycle</title>
+      <desc id="audit-lifecycle-svg-desc">The leader reconciles a request. It ends as denied or failed with no certificate, or signs and writes a signed record. After the status write the signer writes published, superseded with OtherWriterWon, RequestGone or WriteRejected, or unknown. WriteRejected and unknown requeue the request.</desc>
+      <defs>
+        <marker id="audit-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="context-stroke" />
+        </marker>
+      </defs>
+
+      <text class="eyebrow-t mono" x="24" y="20">NO CERTIFICATE</text>
+      <text class="eyebrow-t mono" x="264" y="120">FIRST RECORD</text>
+      <text class="eyebrow-t mono" x="560" y="20">AFTER THE STATUS WRITE</text>
+
+      {edges.map((e) => (
+        <path class:list={['edge', { dashed: e.dashed }]} data-from={e.from} data-to={e.to} d={e.d} marker-end="url(#audit-arrow)" />
+      ))}
+
+      <rect class="mask" x="204" y="166" width="40" height="14" />
+      <text class="label-t mono" x="224" y="177" text-anchor="middle">SIGN</text>
+      <rect class="mask" x="444" y="420" width="64" height="16" />
+      <text class="label-t mono" x="476" y="432" text-anchor="middle">REQUEUE</text>
+      <text class="sub" x="516" y="432" font-style="italic">the next reconcile can sign again with a new serial</text>
+
+      {boxes.map((b) => {
+        const s = byId[b.id];
+        return (
+          <g class="node" data-id={b.id} data-tone={s.tone} tabindex="0" role="button" aria-label={`Show ${s.event}${s.reason && s.event === 'superseded' ? ' ' + s.reason : ''}`}>
+            <rect class="mask" x={b.x} y={b.y} width={b.w} height={b.h} rx="6" />
+            <rect class="box" x={b.x} y={b.y} width={b.w} height={b.h} rx="6" />
+            <rect class="bar" x={b.x} y={b.y + 8} width="3" height={b.h - 16} rx="1.5" />
+            <text class="name mono" x={b.x + 14} y={b.y + 21}>{b.name}</text>
+            <text class="sub mono" x={b.x + 14} y={b.y + 37}>{b.sub}</text>
+            {b.groups && b.groups.map((g, i) => (
+              <text class="group-t mono" x={b.x + 14} y={b.y + 68 + i * 18}>{g}</text>
+            ))}
+            {b.tag && <>
+              <rect class="tag" x={b.x + b.w - 12 - tagWidth(b.tag)} y={b.y + 14} width={tagWidth(b.tag)} height="20" rx="3" />
+              <text class="tag-t mono" x={b.x + b.w - 12 - tagWidth(b.tag) / 2} y={b.y + 28} text-anchor="middle">{b.tag}</text>
+            </>}
+          </g>
+        );
+      })}
+    </svg>
+  </div>
+
+  <div class="panels" aria-live="polite">
+    {states.map((s) => (
+      <article class="panel" data-id={s.id} data-tone={s.tone}>
+        <h4>
+          <code>{s.event}</code>
+          {s.reason && <span class="sub-reason"><code>{s.reason}</code></span>}
+          {s.verdict && <span class="verdict">{s.verdict}</span>}
+        </h4>
+        <dl>
+          <dt>When</dt><dd>{s.when}</dd>
+          {s.groups && <><dt>Fields</dt><dd>{s.groups}</dd></>}
+          <dt>Read it</dt><dd>{s.read}</dd>
+        </dl>
+        <p><a href={`${guide}#${s.anchor}`}>Full rules in the Auditing guide →</a></p>
+      </article>
+    ))}
+  </div>
+  <style set:html={rules}></style>
+</section>
+
+<script>
+  // Clicking or pressing Enter on a diagram node selects the matching radio.
+  for (const root of document.querySelectorAll<HTMLElement>('#audit-lifecycle')) {
+    const pick = (id: string | undefined) => {
+      const input = root.querySelector<HTMLInputElement>(`input[value="${id}"]`);
+      if (input) { input.checked = true; input.dispatchEvent(new Event('change', { bubbles: true })); }
+    };
+    for (const node of root.querySelectorAll<SVGGElement>('.node')) {
+      node.addEventListener('click', () => pick(node.dataset.id));
+      node.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(node.dataset.id); }
+      });
+    }
+  }
+</script>

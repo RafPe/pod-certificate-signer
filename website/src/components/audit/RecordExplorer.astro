@@ -1,0 +1,131 @@
+---
+import './audit.css';
+import { trustLevels, type Trust } from './audit-data';
+
+const guide = import.meta.env.BASE_URL.replace(/\/$/, '') + '/auditing/#trust-of-each-field';
+
+// The signed record example from docs/auditing.md, one entry per line:
+// [indent, text, trust]. Lines without a trust value are structure.
+type Line = [number, string, Trust?];
+const lines: Line[] = [
+  [0, '{'],
+  [1, '"kind": "CertificateAuditRecord",'],
+  [1, '"schemaVersion": "v1",'],
+  [1, '"ts": "2026-11-20T09:15:02.118Z",'],
+  [1, '"event": "signed",'],
+  [1, '"reason": "CertificateIssued",'],
+  [1, '"signerName": "example.com/pod-signer",'],
+  [1, '"request": {'],
+  [2, '"namespace": "payments",', 'api'],
+  [2, '"name": "pcr-7xk2q",', 'api'],
+  [2, '"uid": "0b6f3c1e-5d2a-4f7b-9c1e-2a3b4c5d6e7f",', 'api'],
+  [2, '"suppliedKeys": ["example.com/pod-signer-san"]', 'requester'],
+  [1, '},'],
+  [1, '"workload": {'],
+  [2, '"pod": { "name": "api-6c9f7d5b8-x2lqp", "uid": "d4b0…" },', 'observed'],
+  [2, '"serviceAccount": { "name": "api", "uid": "5e2a…" },', 'observed'],
+  [2, '"node": { "name": "ip-10-0-3-17", "uid": "a81c…" },', 'observed'],
+  [2, '"owner": { "kind": "ReplicaSet", "name": "api-6c9f7d5b8" },', 'observed'],
+  [2, '"labels": { "app.kubernetes.io/name": "api", … },', 'requester'],
+  [2, '"annotations": { "example.com/owner": "team-payments" },', 'requester'],
+  [2, '"omitted": { "labels": 0, "annotations": 0 }'],
+  [1, '},'],
+  [1, '"certificate": {'],
+  [2, '"serialHex": "3fa91c0e77b2d4a8056e1f9c2b7d6a40",', 'signer'],
+  [2, '"serialDecimal": "846194309572501725144…",', 'signer'],
+  [2, '"fingerprint": "X509SHA256=6b6b5940…3246c4",', 'signer'],
+  [2, '"commonName": "api-6c9f7d5b8-x2lqp",', 'signer'],
+  [2, '"dnsNames": ["api.payments"],', 'signer'],
+  [2, '"notBefore": "2026-11-20T09:14:02Z",', 'signer'],
+  [2, '"notAfter": "2026-11-21T09:14:02Z",', 'signer'],
+  [2, '"sources": { "dnsNames": "pcr", "commonName": "default" }', 'signer'],
+  [1, '},'],
+  [1, '"issuer": {'],
+  [2, '"subject": "CN=pod-signer-ca",', 'signer'],
+  [2, '"serialHex": "ed2962977e51130e1960139ba14da262",', 'signer'],
+  [2, '"fingerprint": "X509SHA256=20a75327…5399977"', 'signer'],
+  [1, '}'],
+  [0, '}'],
+];
+
+const tones: Record<Trust, string> = { api: 'focus', observed: 'neutral', requester: 'warn', signer: 'ok' };
+const rules = trustLevels.map(({ id }) => {
+  const sel = `#audit-record:has(input[value="${id}"]:checked)`;
+  return `${sel} .json .ln:not([data-trust="${id}"]){opacity:.32}` +
+    `${sel} .json .ln[data-trust="${id}"]{background:var(--tone-soft);box-shadow:inset 3px 0 0 var(--tone)}` +
+    `${sel} .panel[data-id="${id}"]{display:block}`;
+}).join('\n');
+---
+<section class="pcs-audit not-content" id="audit-record" aria-labelledby="audit-record-title">
+  <header>
+    <p class="eyebrow">Anatomy of a <code>signed</code> record</p>
+    <h3 class="title" id="audit-record-title">Which fields can you trust?</h3>
+    <p class="hint">One JSON line on the stdout of the signer container, shown here on several lines and shortened with <code>…</code>. Pick a source to see its fields.</p>
+  </header>
+
+  <fieldset class="chips">
+    <legend class="sr-only">Field source</legend>
+    <label class="chip" data-tone="neutral">
+      <input class="sr-only" type="radio" name="audit-trust" value="all" checked />
+      <span>All fields</span>
+    </label>
+    {trustLevels.map((t) => (
+      <label class="chip" data-tone={tones[t.id]}>
+        <input class="sr-only" type="radio" name="audit-trust" value={t.id} />
+        <span>{t.label}</span>
+      </label>
+    ))}
+  </fieldset>
+
+  <div class="record-grid">
+    <pre class="json" tabindex="0" aria-label="Example signed record">{lines.map(([indent, text, trust]) => (
+      <span class="ln" data-trust={trust} data-tone={trust ? tones[trust] : undefined}>{'  '.repeat(indent)}{text}{'\n'}</span>
+    ))}</pre>
+    <div class="panels" aria-live="polite">
+      {trustLevels.map((t) => (
+        <article class="panel" data-id={t.id} data-tone={tones[t.id]}>
+          <h4><span class="verdict">{t.label}</span></h4>
+          <p>{t.detail}</p>
+        </article>
+      ))}
+      <article class="panel all" data-tone="neutral">
+        <h4>Not tamper-evident</h4>
+        <p>Any container can print a line with the same <code>kind</code>. Filter records on the fields that the collector adds: the cluster, the namespace of the release and the container name.</p>
+        <p>The record does not prove that a pod received or used a certificate, and <code>workload.owner</code> is the direct controller owner only.</p>
+      </article>
+      <p class="more"><a href={guide}>Trust of each field →</a></p>
+    </div>
+  </div>
+  <style set:html={rules + '\n#audit-record:has(input[value="all"]:checked) .panel.all{display:block}'}></style>
+</section>
+
+<style>
+  .record-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) minmax(16rem, 1fr);
+    gap: 0;
+    align-items: start;
+    padding-top: 1rem;
+  }
+  .json {
+    margin: 0 0 1.5rem 1.5rem;
+    padding: 1rem 0;
+    overflow-x: auto;
+    font-family: var(--pcs-font-mono);
+    font-size: 0.78rem;
+    line-height: 1.7;
+    color: var(--pcs-ink);
+    background: var(--pcs-bg-2);
+    border: 1px solid var(--pcs-line);
+    border-radius: var(--pcs-radius);
+  }
+  .json:focus-visible { outline: 2px solid var(--pcs-blue); outline-offset: 2px; }
+  .ln { display: block; padding-inline: 1rem; white-space: pre; transition: opacity .2s, background-color .2s; }
+  .record-grid .panels { padding-top: 0; }
+  .more { margin: 0.9rem 0 0; font-size: 0.95rem; }
+  .more a { font-weight: 600; }
+  @media (max-width: 56rem) {
+    .record-grid { grid-template-columns: 1fr; }
+    .json { margin-inline: 1rem; margin-bottom: 0.5rem; }
+  }
+</style>

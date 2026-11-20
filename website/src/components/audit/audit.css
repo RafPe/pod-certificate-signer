@@ -1,0 +1,160 @@
+/* Shared look for the interactive audit page. Colours come from tokens.css so
+   the page follows the Starlight light and dark theme. */
+.pcs-audit { --tone: var(--pcs-muted); --tone-soft: var(--pcs-quiet-soft); }
+.pcs-audit [data-tone="ok"] { --tone: var(--pcs-ok); --tone-soft: var(--pcs-ok-soft); }
+.pcs-audit [data-tone="quiet"] { --tone: var(--pcs-quiet); --tone-soft: var(--pcs-quiet-soft); }
+.pcs-audit [data-tone="warn"] { --tone: var(--pcs-warn); --tone-soft: var(--pcs-warn-soft); }
+.pcs-audit [data-tone="stop"] { --tone: var(--pcs-stop); --tone-soft: var(--pcs-stop-soft); }
+.pcs-audit [data-tone="focus"] { --tone: var(--pcs-blue-ink); --tone-soft: var(--pcs-blue-soft); }
+.pcs-audit [data-tone="neutral"] { --tone: var(--pcs-ink-2); --tone-soft: var(--pcs-bg-2); }
+
+.pcs-audit {
+  margin-block: 2rem 2.5rem;
+  border: 1px solid var(--pcs-line);
+  border-radius: 12px;
+  background: var(--pcs-bg);
+  overflow: hidden;
+}
+.pcs-audit > header {
+  padding: 1.25rem 1.5rem 0;
+}
+.pcs-audit .eyebrow {
+  font-family: var(--pcs-font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--pcs-muted);
+  margin: 0;
+}
+.pcs-audit h3.title {
+  margin: 0.25rem 0 0;
+  font-size: 1.15rem;
+  font-weight: 640;
+  color: var(--pcs-ink);
+  letter-spacing: -0.015em;
+}
+.pcs-audit .hint { margin: 0.35rem 0 0; color: var(--pcs-muted); font-size: 0.95rem; max-width: 64ch; }
+
+/* Visually hidden but still reachable by keyboard and screen readers. */
+.pcs-audit .sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* Chip row: radio buttons styled as chips. Works without JavaScript. */
+.pcs-audit .chips {
+  display: flex; flex-wrap: wrap; gap: 0.45rem;
+  margin: 0; padding: 1rem 1.5rem 0; border: 0;
+}
+.pcs-audit .chips legend { padding: 0; }
+.pcs-audit .chip {
+  position: relative;
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  padding: 0.32rem 0.7rem;
+  border: 1px solid var(--pcs-line);
+  border-radius: 999px;
+  background: var(--pcs-bg);
+  color: var(--pcs-ink-2);
+  font-size: 0.875rem;
+  line-height: 1.3;
+  cursor: pointer;
+  transition: border-color .15s, background-color .15s, color .15s;
+  margin: 0;
+}
+.pcs-audit .chip::before {
+  content: ''; width: 0.5rem; height: 0.5rem; border-radius: 50%;
+  background: var(--tone); flex: none;
+}
+.pcs-audit .chip code { font-family: var(--pcs-font-mono); font-size: 0.8rem; background: none; border: 0; padding: 0; color: inherit; }
+.pcs-audit .chip:hover { border-color: var(--pcs-line-2); }
+.pcs-audit .chip:has(input:checked) {
+  border-color: var(--tone);
+  background: var(--tone-soft);
+  color: var(--pcs-ink);
+  font-weight: 600;
+}
+.pcs-audit .chip:has(input:focus-visible) { outline: 2px solid var(--pcs-blue); outline-offset: 2px; }
+
+/* Diagram frame */
+.pcs-audit .diagram {
+  overflow-x: auto;
+  padding: 1rem 1.5rem 0.5rem;
+  -webkit-overflow-scrolling: touch;
+}
+.pcs-audit .diagram svg { display: block; width: 100%; height: auto; }
+.pcs-audit svg text { font-family: var(--pcs-font-body); }
+.pcs-audit svg .mono { font-family: var(--pcs-font-mono); }
+.pcs-audit svg .name { fill: var(--pcs-ink); font-size: 14px; font-weight: 620; }
+.pcs-audit svg .sub { fill: var(--pcs-muted); font-size: 11px; }
+.pcs-audit svg .eyebrow-t { fill: var(--pcs-muted); font-size: 10px; letter-spacing: 0.1em; }
+.pcs-audit svg .label-t { fill: var(--pcs-muted); font-size: 10px; letter-spacing: 0.08em; }
+.pcs-audit svg .mask { fill: var(--pcs-bg); }
+.pcs-audit svg .edge { fill: none; stroke: var(--pcs-line-2); stroke-width: 1.4; transition: stroke .2s; }
+.pcs-audit svg .edge.dashed { stroke-dasharray: 5 4; }
+.pcs-audit svg .edge.hot { stroke: var(--pcs-blue); stroke-width: 1.8; }
+.pcs-audit svg .arrowhead { fill: var(--pcs-line-2); }
+.pcs-audit svg .arrowhead-hot { fill: var(--pcs-blue); }
+.pcs-audit svg .node { cursor: pointer; outline: none; }
+.pcs-audit svg .node .box {
+  fill: var(--tone-soft); stroke: var(--pcs-line-2); stroke-width: 1;
+  transition: stroke .15s, stroke-width .15s;
+}
+.pcs-audit svg .node .bar { fill: var(--tone); }
+.pcs-audit svg .node:hover .box { stroke: var(--tone); }
+.pcs-audit svg .node:focus-visible .box { stroke: var(--pcs-blue); stroke-width: 2.5; }
+.pcs-audit svg .node .tag { fill: var(--pcs-bg); stroke: var(--tone); stroke-width: 1; }
+.pcs-audit svg .node .tag-t { fill: var(--tone); font-size: 9.5px; font-weight: 600; letter-spacing: 0.08em; }
+.pcs-audit svg .node .group-t { fill: var(--pcs-ink-2); font-size: 11px; }
+
+/* Detail panel */
+.pcs-audit .panels { padding: 0.5rem 1.5rem 1.5rem; }
+.pcs-audit .panel {
+  border: 1px solid var(--pcs-line);
+  border-left: 3px solid var(--tone);
+  border-radius: var(--pcs-radius);
+  background: var(--pcs-bg-2);
+  padding: 1rem 1.25rem;
+}
+.pcs-audit .panel + .panel { margin-top: 0.75rem; }
+.pcs-audit .panel h4 {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 0.75rem;
+  margin: 0; font-size: 1.05rem; color: var(--pcs-ink); font-weight: 640;
+}
+.pcs-audit .panel h4 code { font-family: var(--pcs-font-mono); font-size: 0.95rem; background: none; border: 0; padding: 0; }
+.pcs-audit .verdict {
+  display: inline-block;
+  font-family: var(--pcs-font-mono);
+  font-size: 0.7rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--tone);
+  border: 1px solid var(--tone);
+  border-radius: 4px;
+  padding: 0.1rem 0.45rem;
+  background: var(--pcs-bg);
+}
+.pcs-audit .panel dl {
+  display: grid; grid-template-columns: minmax(7rem, max-content) 1fr;
+  gap: 0.5rem 1.25rem; margin: 0.85rem 0 0; font-size: 0.95rem; line-height: 1.6;
+}
+.pcs-audit .panel dt { color: var(--pcs-muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; padding-top: 0.2rem; }
+.pcs-audit .panel dd { margin: 0; color: var(--pcs-ink-2); }
+.pcs-audit .panel p { margin: 0.6rem 0 0; font-size: 0.95rem; }
+.pcs-audit .panel a { font-weight: 600; }
+@media (max-width: 40rem) {
+  .pcs-audit > header, .pcs-audit .chips, .pcs-audit .diagram, .pcs-audit .panels { padding-inline: 1rem; }
+  .pcs-audit .panel dl { grid-template-columns: 1fr; gap: 0.15rem; }
+  .pcs-audit .panel dd + dt { margin-top: 0.5rem; }
+}
+
+/* With a selection, show only the chosen panel. Without :has support every
+   panel stays visible, which is a readable list. */
+.pcs-audit:has(.chips input:checked) .panel { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .pcs-audit *, .pcs-audit svg * { transition: none !important; }
+}
+
+.pcs-audit a { color: var(--pcs-blue-ink); text-underline-offset: 0.2em; }
+.pcs-audit code { font-family: var(--pcs-font-mono); }
+.pcs-audit .hint code, .pcs-audit .panel p code {
+  font-size: 0.85em; padding: 0.05em 0.3em; border-radius: 4px;
+  background: var(--pcs-bg-2); border: 1px solid var(--pcs-line); color: var(--pcs-ink);
+}

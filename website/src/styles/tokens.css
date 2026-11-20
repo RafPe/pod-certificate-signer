@@ -1,30 +1,51 @@
 :root {
-  --pcs-bg: #fff;
-  --pcs-bg-2: #f0f5f9;
-  --pcs-panel: #fff;
-  --pcs-ink: #112e45;
-  --pcs-ink-2: #294457;
-  --pcs-muted: #526879;
-  --pcs-line: #dae3ea;
-  --pcs-line-2: #a9bccb;
+  --pcs-bg: #ffffff;
+  --pcs-bg-2: #f4f7fa;
+  --pcs-panel: #ffffff;
+  --pcs-ink: #0f2436;
+  --pcs-ink-2: #2a3f50;
+  --pcs-muted: #546a7b;
+  --pcs-line: #e1e8ee;
+  --pcs-line-2: #b4c4d1;
   --pcs-blue: #1168bd;
-  --pcs-blue-ink: #08427b;
-  --pcs-blue-soft: #e6f2ff;
+  --pcs-blue-ink: #0a4a8a;
+  --pcs-blue-soft: #eaf3fd;
   --pcs-seal: #e8ad2e;
-  --pcs-font-body: "Source Sans 3 Variable", system-ui, sans-serif;
+
+  /* Outcome colours. Text always names the outcome; colour only repeats it. */
+  --pcs-ok: #17794a;
+  --pcs-ok-soft: #e8f6ee;
+  --pcs-warn: #8f5300;
+  --pcs-warn-soft: #fdf3e0;
+  --pcs-stop: #b42318;
+  --pcs-stop-soft: #fdeeec;
+  --pcs-quiet: #546a7b;
+  --pcs-quiet-soft: #eef2f5;
+
+  --pcs-radius: 8px;
+  --pcs-font-body: "Geist Variable", "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
   --pcs-font-display: var(--pcs-font-body);
-  --pcs-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  --pcs-font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 :root[data-theme="dark"] {
-  --pcs-bg: #122534;
-  --pcs-bg-2: #192f40;
-  --pcs-panel: #213e52;
-  --pcs-ink: #f3f8fc;
-  --pcs-ink-2: #d6e6f0;
-  --pcs-muted: #b1c6d4;
-  --pcs-line: #324d60;
-  --pcs-line-2: #607e93;
+  --pcs-bg: #0f1e2b;
+  --pcs-bg-2: #152838;
+  --pcs-panel: #1a3044;
+  --pcs-ink: #f2f7fb;
+  --pcs-ink-2: #d3e1eb;
+  --pcs-muted: #a9bfce;
+  --pcs-line: #283f52;
+  --pcs-line-2: #4f6c82;
   --pcs-blue: #85bbf0;
   --pcs-blue-ink: #b6dbff;
-  --pcs-blue-soft: #223f58;
+  --pcs-blue-soft: #1c3a55;
+
+  --pcs-ok: #74d6a4;
+  --pcs-ok-soft: #173a2c;
+  --pcs-warn: #f3c46e;
+  --pcs-warn-soft: #3b2f17;
+  --pcs-stop: #ff9d91;
+  --pcs-stop-soft: #43211f;
+  --pcs-quiet: #a9bfce;
+  --pcs-quiet-soft: #20364a;
 }
