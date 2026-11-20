@@ -1,0 +1,2 @@
+kind: Security
+body: 'The manager binary now builds with google.golang.org/grpc v1.83.2 (GHSA-2v4p-qf9q-27wj) and go.opentelemetry.io/otel/sdk and go.opentelemetry.io/otel/trace v1.47.0 (GHSA-q7gw-24fr-5p69), and the build tools module uses oras.land/oras-go/v2 v2.6.2 (GHSA-m37j-52j7-pjw7, GHSA-fxhp-mv3v-67qp, GHSA-jxpm-75mh-9fp7, GHSA-h7vf-4x9w-h99v, GHSA-vh4v-2xq2-g5cg, GHSA-8xwf-rjm4-xvhv, GHSA-xf85-363p-868w) and go.opentelemetry.io/otel/sdk v1.47.0 (GHSA-q7gw-24fr-5p69, GHSA-8wmf-6v46-5gfg).'
