@@ -126,6 +126,17 @@ func defineAuditRecordTests() {
 			By("verifying the published record names the same request and certificate")
 			Expect(auditString(published, "request", "uid")).To(Equal(string(request.UID)))
 			Expect(auditString(published, "certificate", "serialDecimal")).To(Equal(leaf.SerialNumber.String()))
+
+			By("verifying the Issued condition message carries the serial and the fingerprint of the record")
+			wantSerialHex := leaf.SerialNumber.Text(16)
+			Expect(auditString(signed, "certificate", "serialHex")).To(Equal(wantSerialHex),
+				"certificate.serialHex must be the serial of the served certificate in lowercase hex")
+			Expect(auditString(signed, "certificate", "fingerprint")).To(Equal(wantFingerprint),
+				"certificate.fingerprint must be the fingerprint of the served certificate")
+			issued := terminalCondition(Default, request)
+			Expect(issued.Message).To(Equal(
+				"certificate issued: serial="+wantSerialHex+" fingerprint="+wantFingerprint),
+				"the Issued condition message must carry the serial and the fingerprint of the signed record")
 		})
 
 		It("records a denial without a certificate", func() {
