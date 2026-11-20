@@ -136,8 +136,34 @@ own `permissions:` block. The same flag also lets Actions approve pull
 requests. Thus the branch protection review below is what stops automation from
 approving a release PR.
 
-Make **PR Release Metadata** a required status check. Protect `main` so that the
-generated release PR gets a review like any other PR. New GHCR packages are
+Create the CI label that gates e2e:
+
+```sh
+gh label create ci/e2e --color 0e8a16 \
+  --description 'Run the per-PR e2e suite (sets gate:e2e)' --force
+```
+
+Protect `main` with one ruleset. It blocks deletion and force pushes, requires
+a pull request, requires linear history, and allows squash and rebase merges.
+It requires these status checks, strict (the branch must be up to date), each
+pinned to the GitHub Actions app:
+
+| Check | Source |
+| --- | --- |
+| `lint:go` | `lint.yml` |
+| `test:unit` | `test.yml` |
+| `test:chart` | `test-chart.yml` |
+| `gate:e2e` | commit status from `test-e2e.yml` |
+| `scan:secrets` | `secret-scan.yml` |
+| `scan:vuln` | `security.yaml` |
+| `scan:codeql` | `codeql.yml` |
+| `meta:release-label` | `pr-release-metadata.yml` |
+
+Do not require `test:e2e` itself: GitHub counts a skipped job as passed. Do not
+require a workflow with a path filter: its check never appears on a PR that
+does not touch those paths. The repository admin role is a bypass actor. It
+merges fork PRs, which cannot post `gate:e2e`. Generated release PRs get a
+review like any other PR. New GHCR packages are
 private by default. Make the image and chart packages public. Then follow
 [Artifact Hub](artifact-hub.md).
 

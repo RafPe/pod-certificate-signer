@@ -3,12 +3,7 @@ name: Prepare Release
 on:
   workflow_dispatch:
 
-permissions:
-  contents: write
-  # Labels are an issues-scoped resource; read-only, so this job still cannot
-  # create the label it checks for - only report that it is missing.
-  issues: read
-  pull-requests: write
+permissions: {}
 
 concurrency:
   group: prepare-release
@@ -19,6 +14,12 @@ jobs:
     name: "release:prepare"
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: write
+      # Labels are an issues-scoped resource; read-only, so this job still
+      # cannot create the label it checks for - only report that it is missing.
+      issues: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

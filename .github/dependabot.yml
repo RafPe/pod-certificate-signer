@@ -4,6 +4,9 @@
 # .github/workflows/pr-release-metadata.yml fails any PR to main without one:
 #   release/patch -> the update ships in the released binary/image
 #   release/skip  -> build tooling / CI only, nothing shipped
+# Entries that change what ships (gomod "/", docker) also set ci/e2e, so e2e
+# runs at once and the required gate:e2e status can pass. Other entries wait
+# at gate:e2e pending until a maintainer adds the label.
 version: 2
 updates:
   # Runtime dependencies of the signer binary.
@@ -16,6 +19,7 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - "release/patch"
+      - "ci/e2e"
     commit-message:
       prefix: "build"
       include: "scope"
@@ -77,6 +81,7 @@ updates:
     open-pull-requests-limit: 2
     labels:
       - "release/patch"
+      - "ci/e2e"
     commit-message:
       prefix: "build"
       include: "scope"
