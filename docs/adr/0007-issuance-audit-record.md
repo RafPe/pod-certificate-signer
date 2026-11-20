@@ -57,7 +57,7 @@ each field and the limits.
 | --- | --- | --- |
 | `signed` | After `Sign` returns, before the Issued status write | The signer created this certificate. Nothing is published yet. |
 | `published` | After the Issued status write persisted | The API server accepted this certificate for this request UID. |
-| `superseded` | After the Issued status write ended without this certificate in place | This certificate was not published. The reason tells why. |
+| `superseded` | After the Issued status write ended without this certificate in place | This certificate was not published. The reason tells why. `RequestGone` has one narrow exception, described below. |
 | `unknown` | After the Issued status write returned an error that does not prove failure | The write may be committed. The API server audit log decides. |
 | `denied` | After the Denied status write persisted | The request was denied. The record has no certificate or issuer. |
 | `failed` | After the Failed status write persisted | The request failed. Same shape as `denied`. |
@@ -69,9 +69,18 @@ Rules:
 - `published`, `superseded` and `unknown` are follow-up records. They carry
   the request identity, the serials and the fingerprint of a `signed` record.
 - `superseded` has three reasons. `OtherWriterWon` means another terminal
-  outcome is on the same request UID. `RequestGone` means the request was
-  deleted or replaced. `WriteRejected` means the API server refused the write
-  with 400, 401, 403 or 422.
+  outcome is on the same request UID. `WriteRejected` means the API server
+  refused the write with 400, 401, 403 or 422. The next item describes
+  `RequestGone`.
+- `RequestGone` means the request no longer exists: it was deleted or
+  replaced. The certificate is not published to any request that still
+  exists. In one narrow case, a write can have committed before the request
+  was deleted. The client library retries a write after a lost response. The
+  retry then gets a 404, or a 409 and a re-read that finds no request. This
+  case was reasoned from the behaviour of the client library and was not
+  reproduced. A reader treats `RequestGone` for a pod that existed at that
+  time as possibly published. The reader checks the API server audit log, as
+  for `unknown`.
 - `unknown` has the reason `WriteAmbiguous`. The write returned a timeout, a
   cancelled context, a 5xx error or a 429 error. Or it returned a 4xx error
   that is not 400, 401, 403, 404, 409 or 422. Or the re-read failed, or the

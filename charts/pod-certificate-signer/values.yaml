@@ -165,8 +165,8 @@ audit:
   # defaultAuditEnabled in cmd/podcertificate-signer/main.go.
   enabled: true
   # Pod label keys to copy into each record. Each entry is an exact key or a
-  # prefix that ends in "*", e.g. [team, "app.kubernetes.io/*"]. A bare "*"
-  # copies all labels. The number of different exact keys must not be greater
+  # prefix that ends in "*", e.g. [team, "app.kubernetes.io/*"]. An entry
+  # must not contain spaces. A bare "*" copies all labels. The number of different exact keys must not be greater
   # than max_copied_keys, or the signer does not start. Empty by default,
   # so a record copies no labels.
   pod_labels: []

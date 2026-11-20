@@ -283,7 +283,7 @@ Field details:
 | `signed` | `CertificateIssued` | After signing, before the Issued status write. Nothing is published yet. | `request`, `workload`, `certificate`, `issuer` |
 | `published` | `StatusWritten` | The Issued status write persisted. The signer also writes `published` when a conflict re-read finds this certificate already in place. | `request` identity, serials, fingerprint |
 | `superseded` | `OtherWriterWon` | Another terminal outcome is on the same request UID | Same as `published` |
-| `superseded` | `RequestGone` | The request was deleted or replaced before the write | Same as `published` |
+| `superseded` | `RequestGone` | The request no longer exists. It was deleted or replaced before the write. The certificate is not published to any request that still exists. In one narrow case, a retried write can have committed before the deletion. See [Read a sequence](#read-a-sequence). | Same as `published` |
 | `superseded` | `WriteRejected` | The API server refused the write with 400, 401, 403 or 422. The request requeues. | Same as `published` |
 | `unknown` | `WriteAmbiguous` | A timeout, a cancelled context, a 5xx error or a 429 error. Or a 4xx error that is not 400, 401, 403, 404, 409 or 422. Or a failed re-read, or conflicts that outlast the retries. The write may be committed. The request requeues. | Same as `published` |
 | `denied` | The condition reason, `UnsupportedKeyType` or `InvalidUnverifiedUserAnnotations` | The Denied status write persisted | `request`, `workload`, `message`. No `certificate` or `issuer`. |
@@ -298,7 +298,19 @@ Group records by `request.uid`. Then match each follow-up record to its
 `signed` record by `certificate.fingerprint`.
 
 - `signed`, then `published`: the API server accepted this certificate.
-- `signed`, then `superseded`: this certificate was not published.
+- `signed`, then `superseded` (`OtherWriterWon` or `WriteRejected`): this
+  certificate was not published.
+- `signed`, then `superseded` (`RequestGone`): the request no longer exists.
+  The certificate is not published to any request that still exists. In one
+  narrow case, a write can have committed before the request was deleted. The
+  API server commits the Issued write, but the response is lost, for example
+  as a 5xx or 429 error with a Retry-After header. The client library retries
+  the write. The request is deleted between the two attempts. The retry then
+  gets a 404, or a 409 and a re-read that finds no request. Kubelet may
+  already have read the committed certificate. This case was reasoned from the
+  behaviour of the client library and was not reproduced. Treat `RequestGone`
+  for a pod that existed at that time as possibly published. Check the API
+  server audit log, as for `unknown`.
 - `signed`, then `unknown`: the write may be committed. Check the API server
   audit log.
 - `signed` with no follow-up: the state is unknown. Treat it as `unknown`. The

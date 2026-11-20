@@ -349,6 +349,13 @@ func TestAuditValuesSchemaRejectsInvalidValues(t *testing.T) {
 		{"audit.pod_labels={a*b}", "pod_labels"},
 		{"audit.pod_labels={a\\,b}", "pod_labels"},
 		{"audit.pod_annotations={*}", "pod_annotations"},
+		// The flag parser trims spaces, so " *" would become the bare "*"
+		// that the signer rejects at startup.
+		{"audit.pod_annotations={ *}", "pod_annotations"},
+		{"audit.pod_annotations={* }", "pod_annotations"},
+		// The flag parser ignores an entry that is only spaces without a message.
+		{"audit.pod_labels={  }", "pod_labels"},
+		{"audit.pod_labels={ team}", "pod_labels"},
 		{"audit.maxCopiedKeys=8", "maxCopiedKeys"},
 	}
 	for _, tc := range cases {
@@ -360,6 +367,20 @@ func TestAuditValuesSchemaRejectsInvalidValues(t *testing.T) {
 			if !strings.Contains(out, "schema") || !strings.Contains(out, tc.key) {
 				t.Errorf("helm template --set %s failed with %q, want a schema error that names %s", tc.value, out, tc.key)
 			}
+		})
+	}
+}
+
+// The schema accepts every entry format that the signer accepts: an exact
+// key, a prefix that ends in "*" and, for labels only, the bare "*".
+func TestAuditValuesSchemaAcceptsValidKeyLists(t *testing.T) {
+	for _, value := range []string{
+		"audit.pod_labels={*}",
+		"audit.pod_labels={team,app.kubernetes.io/*}",
+		"audit.pod_annotations={example.com/owner-*}",
+	} {
+		t.Run(value, func(t *testing.T) {
+			renderChart(t, value)
 		})
 	}
 }
