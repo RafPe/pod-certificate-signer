@@ -156,6 +156,35 @@ signer:
   # defaultAllowPodAnnotations in cmd/podcertificate-signer/main.go.
   allow_pod_annotations: true
 
+# Issuance audit record settings. When enabled, the controller writes one JSON
+# line to stdout for each signing attempt and each terminal outcome. The
+# operational log stays on stderr. See docs/auditing.md.
+audit:
+  # Write the audit records. Enabled by default. Keep this value equal to
+  # defaultAuditEnabled in cmd/podcertificate-signer/main.go.
+  enabled: true
+  # Pod label keys to copy into each record. Each entry is an exact key or a
+  # prefix that ends in "*", e.g. [team, "app.kubernetes.io/*"]. A bare "*"
+  # copies all labels. Empty by default, so a record copies no labels.
+  pod_labels: []
+  # Pod annotation keys to copy into each record. The entries have the same
+  # format as pod_labels, but a bare "*" is not allowed. Empty by default.
+  pod_annotations: []
+  # Maximum number of labels that a record copies, and separately of
+  # annotations. 1 to 256.
+  max_copied_keys: 32
+  # Maximum length in bytes of each copied value. The controller cuts a longer
+  # value and marks it as truncated. 1 to 4096.
+  max_value_length: 256
+  # Maximum size in bytes of one record line. The controller removes the copied
+  # annotations, then the labels, then the supplied values from a longer
+  # record. 4096 to 262144.
+  max_record_bytes: 16384
+  # Add the raw values of the supplied certificate configuration annotations to
+  # each record. When false, a record has only their names. The values come
+  # from the requester, so enable this only when your audit log may hold them.
+  record_supplied_values: false
+
 # Optional ValidatingAdmissionPolicies. You can select each policy
 # independently. These cluster-scoped policies give feedback when the API server
 # admits Pods. Signer-side validation stays authoritative, also when all
