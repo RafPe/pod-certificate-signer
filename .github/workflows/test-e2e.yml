@@ -1,26 +1,114 @@
 name: E2E Tests
 
 on:
+  # A pull request runs e2e only with the label ci/e2e (see the gate job
+  # below). `labeled` starts e2e when a collaborator adds the label. Setting
+  # `types` replaces the default list, so the list names all four.
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   workflow_call:
     inputs:
       target_ref:
         description: Commit to test; defaults to the triggering commit.
         required: false
         type: string
+      # Under workflow_call, github.event_name is the caller's event
+      # (release.yml: pull_request). This input tells the gate that a caller
+      # runs e2e on purpose, so the label rule does not apply.
+      called:
+        description: Set by a calling workflow. Always runs e2e.
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # A label other than ci/e2e gets its own group, so adding it (a release/*
+  # label, run-nightly) does not cancel a running e2e. Its run skips e2e.
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci/e2e' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Decides whether e2e runs, and publishes the commit status gate:e2e that
+  # the main ruleset requires. A skipped job counts as passed for a required
+  # check, so the requirement is this status and not the job name. Without
+  # the label the status stays pending ("waiting for label ci/e2e"), so the
+  # PR cannot merge, and no check turns red.
+  #   run=true:  a calling workflow, a release PR (autorelease label), or a
+  #              PR with the label ci/e2e.
+  #   post=true: a direct pull_request event that is not an unrelated label.
+  # A PR from a fork has a read-only token and cannot post the status; a
+  # maintainer merges it with the ruleset bypass after running e2e.
+  gate:
+    name: "test:e2e:gate"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+      statuses: write
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: Decide and publish gate:e2e
+        id: decide
+        env:
+          CALLED: ${{ inputs.called == true }}
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          ADDED: ${{ github.event.label.name }}
+          PR: ${{ github.event.pull_request.number }}
+          FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          run=false
+          post=false
+          if [ "${CALLED}" = "true" ] || [ "${EVENT}" != "pull_request" ]; then
+            run=true
+          elif [ "${ACTION}" = "labeled" ] && [ "${ADDED}" != "ci/e2e" ]; then
+            run=false
+          else
+            post=true
+            # Read the labels the PR has now, not the ones in the event
+            # payload. A push and a label added seconds apart start two runs
+            # in one concurrency group. The later run cancels the earlier one,
+            # and if the survivor is the push, its payload predates the label:
+            # gate:e2e then stuck at "waiting for label ci/e2e" (PR #199).
+            labels=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq '.labels[].name')
+            has_label=false
+            release_pr=false
+            if printf '%s\n' "${labels}" | grep -qx 'ci/e2e'; then has_label=true; fi
+            if printf '%s\n' "${labels}" | grep -q 'autorelease'; then release_pr=true; fi
+            if [ "${has_label}" = "true" ] || [ "${release_pr}" = "true" ]; then
+              run=true
+            fi
+          fi
+          echo "run=${run}" >> "${GITHUB_OUTPUT}"
+          echo "run=${run} post=${post}"
+          if [ "${post}" != "true" ] || [ "${FORK}" = "true" ]; then
+            exit 0
+          fi
+          if [ "${run}" = "true" ]; then
+            description="e2e is running"
+          else
+            description="waiting for label ci/e2e"
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" --silent \
+            -f state=pending -f context=gate:e2e -f description="${description}" -f target_url="${RUN_URL}"
+
   test-e2e:
     name: "test:e2e"
+    needs: [gate]
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      statuses: write
     steps:
       - name: Clone the code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -28,7 +116,7 @@ jobs:
           ref: ${{ inputs.target_ref || github.sha }}
 
       - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
 
@@ -60,3 +148,24 @@ jobs:
       - name: Tear down the kind cluster
         if: always()
         run: kind delete cluster --name pcs-e2e || true
+
+      # Not always(): a run that a newer push cancels must not report a
+      # result, so gate:e2e stays pending until the newer run finishes.
+      - name: Publish gate:e2e
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && inputs.called != true && github.event.pull_request.head.repo.full_name == github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "${RESULT}" = "success" ]; then
+            state=success
+            description="e2e passed"
+          else
+            state=failure
+            description="e2e failed"
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" --silent \
+            -f state="${state}" -f context=gate:e2e -f description="${description}" -f target_url="${RUN_URL}"
