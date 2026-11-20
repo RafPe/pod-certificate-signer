@@ -318,6 +318,8 @@ func TestAuditListFlagsParse(t *testing.T) {
 		{"lists", []string{"--audit-pod-labels=team,app.kubernetes.io/*", "--audit-pod-annotations=a/b"},
 			[]string{"team", "app.kubernetes.io/*"}, []string{"a/b"}},
 		{"last use wins", []string{"--audit-pod-labels=a", "--audit-pod-labels=b,c"}, []string{"b", "c"}, nil},
+		{"spaces and empty entries", []string{"--audit-pod-labels= team, app ,,", "--audit-pod-annotations= , "},
+			[]string{"team", "app"}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -97,9 +97,9 @@ const (
 	// chart value signer.allow_pod_annotations.
 	defaultAllowPodAnnotations = true
 
-	// defaultAuditEnabled turns the issuance audit record on: one JSON line on
-	// stdout for each signing attempt and each terminal outcome. Mirrored by
-	// the chart value audit.enabled.
+	// defaultAuditEnabled turns the issuance audit record on: a best-effort
+	// JSON line on stdout for each signing attempt and each terminal outcome.
+	// Mirrored by the chart value audit.enabled.
 	defaultAuditEnabled = true
 )
 
@@ -123,17 +123,20 @@ type flags struct {
 }
 
 // commaList is a flag.Value for a comma-separated list. Each use replaces the
-// list, and an empty value is an empty list.
+// list. Spaces around an entry are removed and empty entries are dropped, so
+// an empty value, or one with only commas and spaces, is an empty list.
 type commaList []string
 
 func (l *commaList) String() string { return strings.Join(*l, ",") }
 
 func (l *commaList) Set(value string) error {
-	if value == "" {
-		*l = nil
-		return nil
+	var entries []string
+	for entry := range strings.SplitSeq(value, ",") {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			entries = append(entries, entry)
+		}
 	}
-	*l = strings.Split(value, ",")
+	*l = entries
 	return nil
 }
 
@@ -185,8 +188,9 @@ func registerFlags(fs *flag.FlagSet) *flags {
 			"spec.unverifiedUserAnnotations. Deprecated and removed in 4.0.0; on by default until then. Set to false once "+
 			"every workload has moved to spec.unverifiedUserAnnotations, so pod annotations stop influencing issuance.")
 	fs.BoolVar(&f.auditEnabled, "audit-enabled", defaultAuditEnabled,
-		"Write an issuance audit record, one JSON line on stdout, for each signing attempt and each terminal outcome. "+
-			"On by default. The operational log stays on stderr.")
+		"Write a best-effort issuance audit record, one JSON line on stdout, for each signing attempt and each "+
+			"terminal outcome. The signer reports a dropped record on the operational log. On by default. The "+
+			"operational log stays on stderr.")
 	fs.Var((*commaList)(&f.audit.PodLabels), "audit-pod-labels",
 		"Comma-separated pod label keys to copy into each audit record. Each entry is an exact key or a prefix that "+
 			"ends in \"*\". A bare \"*\" copies every label. Empty by default.")
@@ -196,11 +200,12 @@ func registerFlags(fs *flag.FlagSet) *flags {
 	fs.IntVar(&f.audit.MaxCopiedKeys, "audit-max-copied-keys", f.audit.MaxCopiedKeys,
 		"Maximum number of pod labels, and separately of pod annotations, that one audit record copies (1 to 256).")
 	fs.IntVar(&f.audit.MaxValueLength, "audit-max-value-length", f.audit.MaxValueLength,
-		"Maximum length in bytes of each copied value in an audit record (1 to 4096). A longer value is cut.")
+		"Maximum length in bytes of each label value, annotation value, supplied value and denial or failure "+
+			"message in an audit record (1 to 4096). The signer cuts a longer value and appends \"...[truncated]\".")
 	fs.IntVar(&f.audit.MaxRecordBytes, "audit-max-record-bytes", f.audit.MaxRecordBytes,
 		"Maximum size in bytes of one audit record line (4096 to 262144). A longer record drops its copied pod "+
 			"annotations, then its labels, then its supplied values.")
-	fs.BoolVar(&f.audit.RecordSuppliedValues, "audit-record-supplied-values", false,
+	fs.BoolVar(&f.audit.RecordSuppliedValues, "audit-record-supplied-values", f.audit.RecordSuppliedValues,
 		"Add the raw values of the supplied certificate configuration annotations to the audit record. Off by "+
 			"default: the record has only their names.")
 	return f

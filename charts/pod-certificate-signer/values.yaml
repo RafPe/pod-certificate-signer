@@ -156,25 +156,30 @@ signer:
   # defaultAllowPodAnnotations in cmd/podcertificate-signer/main.go.
   allow_pod_annotations: true
 
-# Issuance audit record settings. When enabled, the controller writes one JSON
-# line to stdout for each signing attempt and each terminal outcome. The
-# operational log stays on stderr. See docs/auditing.md.
+# Issuance audit record settings. When enabled, the controller writes a JSON
+# line to stdout for each signing attempt and each terminal outcome. The record
+# is best-effort: the controller reports a dropped record on the operational
+# log, which stays on stderr. See docs/auditing.md.
 audit:
   # Write the audit records. Enabled by default. Keep this value equal to
   # defaultAuditEnabled in cmd/podcertificate-signer/main.go.
   enabled: true
   # Pod label keys to copy into each record. Each entry is an exact key or a
   # prefix that ends in "*", e.g. [team, "app.kubernetes.io/*"]. A bare "*"
-  # copies all labels. Empty by default, so a record copies no labels.
+  # copies all labels. The number of different exact keys must not be greater
+  # than max_copied_keys, or the controller does not start. Empty by default,
+  # so a record copies no labels.
   pod_labels: []
   # Pod annotation keys to copy into each record. The entries have the same
-  # format as pod_labels, but a bare "*" is not allowed. Empty by default.
+  # format and the same max_copied_keys rule as pod_labels, but a bare "*" is
+  # not allowed. Empty by default.
   pod_annotations: []
   # Maximum number of labels that a record copies, and separately of
   # annotations. 1 to 256.
   max_copied_keys: 32
-  # Maximum length in bytes of each copied value. The controller cuts a longer
-  # value and marks it as truncated. 1 to 4096.
+  # Maximum length in bytes of each label value, annotation value, supplied
+  # value and denial or failure message in a record. The controller cuts a
+  # longer value and appends "...[truncated]". 1 to 4096.
   max_value_length: 256
   # Maximum size in bytes of one record line. The controller removes the copied
   # annotations, then the labels, then the supplied values from a longer

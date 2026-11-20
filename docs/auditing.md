@@ -101,7 +101,9 @@ The signer applies these rules:
 - `*` is allowed only as the last character of an entry.
 - A bare `*` copies every label. A bare `*` is not allowed in
   `pod_annotations`.
-- An empty entry is not allowed.
+- An empty entry is not allowed. The `--audit-pod-labels` and
+  `--audit-pod-annotations` flags remove spaces around each entry and drop
+  empty entries.
 - Duplicate and overlapping entries are allowed. A key that matches more than
   one entry is copied one time.
 - `max_copied_keys` applies to labels and to annotations separately.

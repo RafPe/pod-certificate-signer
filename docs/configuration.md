@@ -360,14 +360,22 @@ directly.
         Allow cn/san/ip-san/uris values that do not resolve to the pod's verified
         identity. Off by default.
   -audit-enabled
-        Write an issuance audit record, one JSON line on stdout, for each
-        signing attempt and each terminal outcome. On by default.
-  -audit-max-copied-keys int  Pod labels, and separately annotations, one record copies (default 32).
-  -audit-max-record-bytes int Maximum size of one record line in bytes (default 16384).
-  -audit-max-value-length int Maximum length of each copied value in bytes (default 256).
+        Write a best-effort issuance audit record, one JSON line on stdout,
+        for each signing attempt and each terminal outcome. The signer reports
+        a dropped record on the operational log. On by default.
+  -audit-max-copied-keys int
+        Maximum number of pod labels that one record copies, and separately
+        of pod annotations. 1 to 256 (default 32).
+  -audit-max-record-bytes int
+        Maximum size of one record line in bytes. 4096 to 262144 (default 16384).
+  -audit-max-value-length int
+        Maximum length in bytes of each label value, annotation value,
+        supplied value and denial or failure message. The signer cuts a
+        longer value and appends "...[truncated]". 1 to 4096 (default 256).
   -audit-pod-annotations value
         Comma-separated pod annotation keys to copy into each record. Exact
-        keys or prefixes that end in "*". Empty by default.
+        keys or prefixes that end in "*". A bare "*" is not allowed. Empty by
+        default.
   -audit-pod-labels value
         Comma-separated pod label keys to copy into each record. Exact keys or
         prefixes that end in "*". A bare "*" copies all labels. Empty by default.
