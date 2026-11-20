@@ -35,7 +35,7 @@ func (r *PodCertificateRequestReconciler) requeueOrRecordTerminal(ctx context.Co
 	} else {
 		logger.Error(te.err, "request failed", "reason", te.reason)
 	}
-	if werr := r.recordTerminal(ctx, pcr, te); werr != nil {
+	if _, werr := r.recordTerminal(ctx, pcr, te); werr != nil {
 		return r.requeue(pcr, werr)
 	}
 	return ctrl.Result{}, nil

@@ -228,11 +228,11 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		return r.requeueOrRecordTerminal(ctx, &pcr, err)
 	}
 
-	persisted, err := r.recordIssued(ctx, &pcr, cert)
+	result, err := r.recordIssued(ctx, &pcr, cert)
 	if err != nil {
 		return r.requeue(&pcr, err)
 	}
-	if persisted {
+	if result == writePersisted {
 		logger.Info("issued certificate",
 			"commonName", cert.Config.CommonName,
 			"dnsNames", cert.Config.DNSNames,

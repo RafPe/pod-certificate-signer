@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -245,7 +246,7 @@ func TestRecordTerminal(t *testing.T) {
 			if !errors.As(tc.err, &te) {
 				t.Fatalf("test error is not terminal: %v", tc.err)
 			}
-			if err := r.recordTerminal(context.Background(), pcr, te); err != nil {
+			if _, err := r.recordTerminal(context.Background(), pcr, te); err != nil {
 				t.Fatalf("recordTerminal: %v", err)
 			}
 
@@ -340,7 +341,7 @@ func TestRecordTerminalEventMessageIsNotAFormat(t *testing.T) {
 	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: rec}
 
 	const message = `annotation "example.org/signer-cn": value "100%d of %s" is not a verified identity`
-	if err := r.recordTerminal(context.Background(), pcr, denied(outcome.InvalidUserConfig, errors.New(message)).(*terminalError)); err != nil {
+	if _, err := r.recordTerminal(context.Background(), pcr, denied(outcome.InvalidUserConfig, errors.New(message)).(*terminalError)); err != nil {
 		t.Fatalf("recordTerminal: %v", err)
 	}
 
@@ -454,13 +455,13 @@ func TestRecordOutcomeConflictOnReplacedRequest(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns", UID: newUID},
 		Spec:       certificatesv1.PodCertificateRequestSpec{PodName: "other-pod", PodUID: "other-pod-uid"},
 	}
-	type recordFunc func(context.Context, *PodCertificateRequestReconciler, *certificatesv1.PodCertificateRequest) (bool, error)
-	var issue recordFunc = func(ctx context.Context, r *PodCertificateRequestReconciler, pcr *certificatesv1.PodCertificateRequest) (bool, error) {
+	type recordFunc func(context.Context, *PodCertificateRequestReconciler, *certificatesv1.PodCertificateRequest) (writeResult, error)
+	var issue recordFunc = func(ctx context.Context, r *PodCertificateRequestReconciler, pcr *certificatesv1.PodCertificateRequest) (writeResult, error) {
 		return r.recordIssued(ctx, pcr, stubCert())
 	}
-	var deny recordFunc = func(ctx context.Context, r *PodCertificateRequestReconciler, pcr *certificatesv1.PodCertificateRequest) (bool, error) {
+	var deny recordFunc = func(ctx context.Context, r *PodCertificateRequestReconciler, pcr *certificatesv1.PodCertificateRequest) (writeResult, error) {
 		te := denied(outcome.InvalidUserConfig, errors.New("not a verified identity")).(*terminalError)
-		return false, r.recordTerminal(ctx, pcr, te)
+		return r.recordTerminal(ctx, pcr, te)
 	}
 
 	cases := []struct {
@@ -498,12 +499,12 @@ func TestRecordOutcomeConflictOnReplacedRequest(t *testing.T) {
 			ctx := logr.NewContext(context.Background(), captureLogger(&lines))
 			before := outcomeCount(tc.kind, tc.reason)
 
-			persisted, err := tc.record(ctx, r, pcr)
+			res, err := tc.record(ctx, r, pcr)
 			if err != nil {
 				t.Fatalf("record error = %v, want nil: a request that is gone needs no requeue", err)
 			}
-			if persisted {
-				t.Error("persisted = true, want false: the outcome was not written")
+			if res != writeGone {
+				t.Errorf("result = %v, want writeGone: the outcome belongs to no live request", res)
 			}
 			if writes != 1 {
 				t.Errorf("status writes = %d, want 1: no write may follow the conflict", writes)
@@ -534,6 +535,250 @@ func TestRecordOutcomeConflictOnReplacedRequest(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// conflictErr is the 409 kube-apiserver returns for a status write against a
+// stale resourceVersion.
+func conflictErr(name string) error {
+	return apierrors.NewConflict(
+		schema.GroupResource{Group: "certificates.k8s.io", Resource: "podcertificaterequests"},
+		name, errors.New("resourceVersion mismatch"))
+}
+
+// writeThen is a SubResourceUpdate interceptor that applies the write to the
+// fake store and then returns err, as a client does when the API server
+// commits the write but the response is lost or reported as a failure.
+func writeThen(err error, writes *int) interceptor.Funcs {
+	return interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, c client.Client, _ string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			*writes++
+			if uerr := c.Status().Update(ctx, obj, opts...); uerr != nil {
+				return uerr
+			}
+			return err
+		},
+	}
+}
+
+// failWrite is a SubResourceUpdate interceptor that writes nothing and
+// returns err.
+func failWrite(err error) interceptor.Funcs {
+	return interceptor.Funcs{
+		SubResourceUpdate: func(context.Context, client.Client, string, client.Object, ...client.SubResourceUpdateOption) error {
+			return err
+		},
+	}
+}
+
+// concurrentTerminal is a SubResourceUpdate interceptor whose first write
+// loses to another writer: it stores the terminal status that writer
+// recorded, then returns a conflict. Any later write goes through.
+func concurrentTerminal(winner certificatesv1.PodCertificateRequestStatus) interceptor.Funcs {
+	var writes int
+	return interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, c client.Client, _ string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			writes++
+			if writes > 1 {
+				return c.Status().Update(ctx, obj, opts...)
+			}
+			concurrent := &certificatesv1.PodCertificateRequest{}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(obj), concurrent); err != nil {
+				return err
+			}
+			winner.DeepCopyInto(&concurrent.Status)
+			if err := c.Status().Update(ctx, concurrent); err != nil {
+				return err
+			}
+			return conflictErr(obj.GetName())
+		},
+	}
+}
+
+// terminalStatus returns a request status carrying one terminal condition of
+// conditionType and the certificate chain chain.
+func terminalStatus(conditionType, chain string) certificatesv1.PodCertificateRequestStatus {
+	return certificatesv1.PodCertificateRequestStatus{
+		CertificateChain: chain,
+		Conditions: []metav1.Condition{{
+			Type:               conditionType,
+			Status:             metav1.ConditionTrue,
+			LastTransitionTime: metav1.Now(),
+			Reason:             "ConcurrentWriter",
+			Message:            "recorded by a concurrent writer",
+		}},
+	}
+}
+
+// drainEvents returns the number of events rec holds, without blocking.
+func drainEvents(rec *events.FakeRecorder) int {
+	n := 0
+	for {
+		select {
+		case <-rec.Events:
+			n++
+		default:
+			return n
+		}
+	}
+}
+
+// statusWriteFixture builds a reconciler over a stored request with a UID. The
+// status writes go through funcs, and the conflict re-read goes through a
+// separate reader with readFuncs, so a test can fail the re-read without
+// failing its own setup read.
+func statusWriteFixture(t *testing.T, funcs, readFuncs interceptor.Funcs) (*PodCertificateRequestReconciler, *events.FakeRecorder, client.Client, *certificatesv1.PodCertificateRequest) {
+	t.Helper()
+	pcr := &certificatesv1.PodCertificateRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns", UID: "request-uid"},
+		Spec:       certificatesv1.PodCertificateRequestSpec{PodName: "mypod", PodUID: "mypod-uid"},
+	}
+	store := fake.NewClientBuilder().
+		WithScheme(newTestScheme(t)).
+		WithObjects(pcr).
+		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
+		Build()
+	cl := interceptor.NewClient(store, funcs)
+	reader := interceptor.NewClient(store, readFuncs)
+	if err := store.Get(context.Background(), client.ObjectKeyFromObject(pcr), pcr); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	rec := events.NewFakeRecorder(10)
+	r := &PodCertificateRequestReconciler{Client: cl, APIReader: reader, Log: logr.Discard(), EventRecorder: rec}
+	return r, rec, store, pcr
+}
+
+// Each way a status write can end maps to one writeResult, and only a
+// persisted write is announced with an event and counted in the outcome
+// metric. The next step decides from the result whether this reconcile's
+// outcome is in place, lost to another writer, belongs to no live request,
+// was refused, or may or may not be committed.
+func TestStatusWriteResult(t *testing.T) {
+	replacement := &certificatesv1.PodCertificateRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns", UID: "new-request-uid"},
+		Spec:       certificatesv1.PodCertificateRequestSpec{PodName: "other-pod", PodUID: "other-pod-uid"},
+	}
+	gr := schema.GroupResource{Group: "certificates.k8s.io", Resource: "podcertificaterequests"}
+	issued := certificatesv1.PodCertificateRequestConditionTypeIssued
+	denied := certificatesv1.PodCertificateRequestConditionTypeDenied
+	var deletedWrites, replacedWrites int
+
+	cases := []struct {
+		name       string
+		funcs      interceptor.Funcs
+		readFuncs  interceptor.Funcs
+		want       writeResult
+		wantErr    error
+		wantEvents int
+	}{
+		{"update succeeds", interceptor.Funcs{}, interceptor.Funcs{}, writePersisted, nil, 1},
+		{"conflict, own Issued chain in place", concurrentTerminal(terminalStatus(issued, "pem-chain")), interceptor.Funcs{}, writePersisted, nil, 1},
+		{"conflict, another Issued chain in place", concurrentTerminal(terminalStatus(issued, "other-chain")), interceptor.Funcs{}, writeSuperseded, nil, 0},
+		{"conflict, Denied in place", concurrentTerminal(terminalStatus(denied, "")), interceptor.Funcs{}, writeSuperseded, nil, 0},
+		{"conflict, request deleted", replacePCR(nil, &deletedWrites), interceptor.Funcs{}, writeGone, nil, 0},
+		{"conflict, request replaced", replacePCR(replacement, &replacedWrites), interceptor.Funcs{}, writeGone, nil, 0},
+		{"update not found", failWrite(apierrors.NewNotFound(gr, "pcr")), interceptor.Funcs{}, writeGone, nil, 0},
+		{"update invalid", failWrite(apierrors.NewInvalid(schema.GroupKind{Group: "certificates.k8s.io", Kind: "PodCertificateRequest"}, "pcr", field.ErrorList{field.Required(field.NewPath("status", "certificateChain"), "")})), interceptor.Funcs{}, writeRejected, errAny, 0},
+		{"update forbidden", failWrite(apierrors.NewForbidden(gr, "pcr", errors.New("no"))), interceptor.Funcs{}, writeRejected, errAny, 0},
+		{"update bad request", failWrite(apierrors.NewBadRequest("bad")), interceptor.Funcs{}, writeRejected, errAny, 0},
+		{"update unauthorized", failWrite(apierrors.NewUnauthorized("who")), interceptor.Funcs{}, writeRejected, errAny, 0},
+		{"update timeout", failWrite(context.DeadlineExceeded), interceptor.Funcs{}, writeUnknown, context.DeadlineExceeded, 0},
+		{"update cancelled", failWrite(context.Canceled), interceptor.Funcs{}, writeUnknown, context.Canceled, 0},
+		{"update server timeout", failWrite(apierrors.NewServerTimeout(gr, "update", 1)), interceptor.Funcs{}, writeUnknown, errAny, 0},
+		{"update internal error", failWrite(apierrors.NewInternalError(errors.New("etcd"))), interceptor.Funcs{}, writeUnknown, errAny, 0},
+		{"update too many requests", failWrite(apierrors.NewTooManyRequests("slow down", 1)), interceptor.Funcs{}, writeUnknown, errAny, 0},
+		{
+			"conflict, re-read fails", failWrite(conflictErr("pcr")),
+			interceptor.Funcs{Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+				return apierrors.NewForbidden(gr, "pcr", errors.New("no"))
+			}},
+			writeUnknown, errAny, 0,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, rec, _, pcr := statusWriteFixture(t, tc.funcs, tc.readFuncs)
+			before := outcomeCount(outcome.Issued, outcome.CertificateIssued)
+
+			got, err := r.recordIssued(context.Background(), pcr, stubCert())
+			if got != tc.want {
+				t.Errorf("result = %v, want %v", got, tc.want)
+			}
+			switch {
+			case tc.wantErr == nil && err != nil:
+				t.Errorf("error = %v, want nil", err)
+			case tc.wantErr == errAny && err == nil:
+				t.Error("error = nil, want the write error")
+			case tc.wantErr != nil && tc.wantErr != errAny && !errors.Is(err, tc.wantErr):
+				t.Errorf("error = %v, want %v", err, tc.wantErr)
+			}
+			if n := drainEvents(rec); n != tc.wantEvents {
+				t.Errorf("events = %d, want %d", n, tc.wantEvents)
+			}
+			if delta := outcomeCount(outcome.Issued, outcome.CertificateIssued) - before; delta != float64(tc.wantEvents) {
+				t.Errorf("outcome metric moved by %v, want %d", delta, tc.wantEvents)
+			}
+		})
+	}
+}
+
+// errAny marks a case that expects some error without naming it.
+var errAny = errors.New("any error")
+
+// A write the API server committed but whose response reports a timeout may
+// or may not be in place as far as this reconcile can tell, so it is neither
+// announced nor counted, even though the store holds it.
+func TestStatusWriteCommitThenTimeout(t *testing.T) {
+	var writes int
+	r, rec, store, pcr := statusWriteFixture(t, writeThen(context.DeadlineExceeded, &writes), interceptor.Funcs{})
+	before := outcomeCount(outcome.Issued, outcome.CertificateIssued)
+
+	got, err := r.recordIssued(context.Background(), pcr, stubCert())
+	if got != writeUnknown {
+		t.Errorf("result = %v, want writeUnknown", got)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error = %v, want context.DeadlineExceeded", err)
+	}
+	if n := drainEvents(rec); n != 0 {
+		t.Errorf("events = %d, want 0", n)
+	}
+	if delta := outcomeCount(outcome.Issued, outcome.CertificateIssued) - before; delta != 0 {
+		t.Errorf("outcome metric moved by %v, want 0", delta)
+	}
+	stored := &certificatesv1.PodCertificateRequest{}
+	if err := store.Get(context.Background(), client.ObjectKeyFromObject(pcr), stored); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if terminalConditionType(&stored.Status) != certificatesv1.PodCertificateRequestConditionTypeIssued {
+		t.Errorf("stored conditions = %+v, want the committed Issued condition", stored.Status.Conditions)
+	}
+}
+
+// A client retry after a lost response can meet a 409 from this reconcile's
+// own committed write. The re-read then shows this reconcile's Issued chain,
+// so the write counts as persisted and is announced once, with no second
+// write.
+func TestStatusWriteOwnCommitSeenAsConflict(t *testing.T) {
+	var writes int
+	r, rec, _, pcr := statusWriteFixture(t, writeThen(conflictErr("pcr"), &writes), interceptor.Funcs{})
+	before := outcomeCount(outcome.Issued, outcome.CertificateIssued)
+
+	got, err := r.recordIssued(context.Background(), pcr, stubCert())
+	if err != nil {
+		t.Fatalf("error = %v, want nil", err)
+	}
+	if got != writePersisted {
+		t.Errorf("result = %v, want writePersisted", got)
+	}
+	if writes != 1 {
+		t.Errorf("status writes = %d, want 1", writes)
+	}
+	if n := drainEvents(rec); n != 1 {
+		t.Errorf("events = %d, want 1", n)
+	}
+	if delta := outcomeCount(outcome.Issued, outcome.CertificateIssued) - before; delta != 1 {
+		t.Errorf("outcome metric moved by %v, want 1", delta)
 	}
 }
 
