@@ -46,6 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      pull-requests: read
       statuses: write
     outputs:
       run: ${{ steps.decide.outputs.run }}
@@ -57,8 +58,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           ACTION: ${{ github.event.action }}
           ADDED: ${{ github.event.label.name }}
-          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'ci/e2e') }}
-          RELEASE_PR: ${{ contains(join(github.event.pull_request.labels.*.name, ','), 'autorelease') }}
+          PR: ${{ github.event.pull_request.number }}
           FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
           SHA: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ github.token }}
@@ -73,7 +73,17 @@ jobs:
             run=false
           else
             post=true
-            if [ "${HAS_LABEL}" = "true" ] || [ "${RELEASE_PR}" = "true" ]; then
+            # Read the labels the PR has now, not the ones in the event
+            # payload. A push and a label added seconds apart start two runs
+            # in one concurrency group. The later run cancels the earlier one,
+            # and if the survivor is the push, its payload predates the label:
+            # gate:e2e then stuck at "waiting for label ci/e2e" (PR #199).
+            labels=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq '.labels[].name')
+            has_label=false
+            release_pr=false
+            if printf '%s\n' "${labels}" | grep -qx 'ci/e2e'; then has_label=true; fi
+            if printf '%s\n' "${labels}" | grep -q 'autorelease'; then release_pr=true; fi
+            if [ "${has_label}" = "true" ] || [ "${release_pr}" = "true" ]; then
               run=true
             fi
           fi
