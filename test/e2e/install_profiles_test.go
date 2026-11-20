@@ -371,6 +371,10 @@ func defineChartDefaultsProfileTests() {
 		// identity, so running them here keeps them about the key and the clock
 		// and costs no further Helm upgrade.
 		defineKeyTypeAndLifetimeTests()
+
+		// The audit record is on in the shipped configuration, and its denial
+		// spec needs the identity allowlist enforced. See audit_record_test.go.
+		defineAuditRecordTests()
 	})
 }
 

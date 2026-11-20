@@ -282,6 +282,45 @@ func defineHighAvailabilityTests() {
 				expectHAReplicasReady()
 			})
 
+			// Declared directly after the handoff spec and before the CA reload
+			// spec: the promoted-standby spec needs a standby that observed the
+			// rotation, and a leader deletion between the two could replace it.
+			It("keeps recording after a leader handover", Label(auditLabel), func() {
+				leader := currentLeaderPod()
+
+				By("deleting the leader replica")
+				deleteControllerPod(leader)
+
+				By("waiting for another replica to take the Lease")
+				var newLeader string
+				Eventually(func(g Gomega) {
+					holder := haLeaseHolder(g)
+					g.Expect(holder).NotTo(Equal(leader), "the Lease must move off the deleted replica")
+					g.Expect(haControllerPods()).To(ContainElement(holder),
+						"the new Lease holder must be a live replica")
+					newLeader = holder
+				}, haLeaderHandoffTimeout).Should(Succeed())
+				focusControllerOnLeader()
+
+				By("issuing a certificate under the new leader")
+				pod := applyCertTestPod("pcs-ha-audit-handover", nil)
+				leaf := expectIssued(pod)[0]
+				wantFingerprint := auditFingerprintPrefix + fingerprint(leaf)
+
+				By("finding its signed and published records in the new leader's log")
+				readNewLeader := func(g Gomega) []map[string]any {
+					return podAuditRecords(g, newLeader)
+				}
+				signed, _ := expectIssuanceAuditRecords(readNewLeader, wantFingerprint)
+				Expect(auditString(signed, "workload", "pod", "uid")).To(Equal(string(pod.uid)),
+					"workload.pod.uid must be the UID of the pod this spec created")
+				Expect(auditString(signed, "request", "uid")).To(Equal(string(getPodCertificateRequest(pod).UID)),
+					"request.uid must be the UID of the pod's PodCertificateRequest")
+
+				By("waiting for the deployment to return to full strength")
+				expectHAReplicasReady()
+			})
+
 			It("reloads a CA change on every replica, leader or not", func() {
 				// The CA watcher reports NeedLeaderElection() == false
 				// (cmd/podcertificate-signer/main.go) precisely so a standby

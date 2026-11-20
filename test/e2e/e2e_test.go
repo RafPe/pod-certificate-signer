@@ -445,6 +445,9 @@ var _ = Describe("Manager", Ordered, Serial, func() {
 	// identity_boundary_test.go for why it is worth its own rollout.
 	defineCustomClusterFQDNProfileTests()
 	defineChartDefaultsProfileTests()
+	// The chart defaults with the audit record off. The interpolation-disabled
+	// install that follows sets it back on. See audit_record_test.go.
+	defineAuditDisabledProfileTests()
 	// Last of the profiles, and the only one that overrides a signer default:
 	// it closes the interpolation gate the other four rely on being open. See
 	// install_profiles_test.go.
