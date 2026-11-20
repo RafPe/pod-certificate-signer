@@ -184,9 +184,12 @@ func (r *annotationResolver) annotationError(suffix AnnotationSuffix, err error)
 // against the verified identities.
 func (r *annotationResolver) commonName(def string) (string, error) {
 	cn, source, ok, err := r.value(AnnotationSuffixCN)
-	if err != nil || !ok {
-		r.sources.CommonName = SourceDefault
+	if err != nil {
 		return def, err
+	}
+	if !ok {
+		r.sources.CommonName = SourceDefault
+		return def, nil
 	}
 	r.sources.CommonName = source
 	if err := validateVerifiedIdentities("common name", []string{cn}, r.verified); err != nil {
@@ -281,9 +284,12 @@ func (r *annotationResolver) ipAddresses() ([]net.IP, error) {
 // values, falling back to current when the annotation is absent.
 func (r *annotationResolver) extKeyUsage(current []x509.ExtKeyUsage) ([]x509.ExtKeyUsage, error) {
 	eku, source, ok, err := r.value(AnnotationSuffixEKU)
-	if err != nil || !ok {
-		r.sources.ExtKeyUsage = SourceDefault
+	if err != nil {
 		return current, err
+	}
+	if !ok {
+		r.sources.ExtKeyUsage = SourceDefault
+		return current, nil
 	}
 	r.sources.ExtKeyUsage = source
 	usages, err := parseEKU(eku)
@@ -297,9 +303,12 @@ func (r *annotationResolver) extKeyUsage(current []x509.ExtKeyUsage) ([]x509.Ext
 // the verified identities.
 func (r *annotationResolver) uris() ([]*url.URL, error) {
 	value, source, ok, err := r.value(AnnotationSuffixURIs)
-	if err != nil || !ok {
-		r.sources.URIs = SourceDefault
+	if err != nil {
 		return nil, err
+	}
+	if !ok {
+		r.sources.URIs = SourceDefault
+		return nil, nil
 	}
 	r.sources.URIs = source
 	parsed, err := parseURIs(value)
@@ -320,9 +329,12 @@ func (r *annotationResolver) uris() ([]*url.URL, error) {
 // back to def when it is absent, and records the origin in *field.
 func (r *annotationResolver) duration(suffix AnnotationSuffix, def time.Duration, field *Source) (time.Duration, error) {
 	value, source, ok, err := r.value(suffix)
-	if err != nil || !ok {
-		*field = SourceDefault
+	if err != nil {
 		return def, err
+	}
+	if !ok {
+		*field = SourceDefault
+		return def, nil
 	}
 	*field = source
 	d, err := time.ParseDuration(value)

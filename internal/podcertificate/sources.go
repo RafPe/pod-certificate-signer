@@ -30,7 +30,8 @@ type FieldSources struct {
 // SuppliedAnnotations returns the signer configuration annotations the
 // requester supplied: every key annotationKey(signerName, suffix) present in
 // pcr.Spec.UnverifiedUserAnnotations, plus, when allowPodAnnotations is true,
-// those present only on the pod. Values are raw, before interpolation.
+// those present only on the pod. Values are raw, before interpolation. pcr
+// must not be nil.
 func SuppliedAnnotations(pcr *certificatesv1.PodCertificateRequest, pod *corev1.Pod, allowPodAnnotations bool) map[string]string {
 	supplied := make(map[string]string)
 	for _, suffix := range annotationSuffixes {

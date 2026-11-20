@@ -3,6 +3,7 @@ package podcertificate
 import (
 	"context"
 	"maps"
+	"net"
 	"testing"
 
 	certificatesv1 "k8s.io/api/certificates/v1"
@@ -82,6 +83,41 @@ func TestConfigSourcesPerOrigin(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:  "cn in the request",
+			pcr:   map[string]string{testSignerName + "-cn": "custom-cn"},
+			opts:  Options{AllowUnverifiedIdentities: true},
+			check: sourceIs("CommonName", func(s FieldSources) Source { return s.CommonName }, SourcePCR),
+		},
+		{
+			name:  "eku in the request",
+			pcr:   map[string]string{testSignerName + "-eku": "client"},
+			check: sourceIs("ExtKeyUsage", func(s FieldSources) Source { return s.ExtKeyUsage }, SourcePCR),
+		},
+		{
+			name:  "uris in the request",
+			pcr:   map[string]string{testSignerName + "-uris": "spiffe://cluster/ns/myns/pod/mypod"},
+			opts:  Options{AllowUnverifiedIdentities: true},
+			check: sourceIs("URIs", func(s FieldSources) Source { return s.URIs }, SourcePCR),
+		},
+		{
+			name:  "ip-san in the request",
+			pcr:   map[string]string{testSignerName + "-ip-san": "10.0.0.1"},
+			opts:  Options{AllowUnverifiedIdentities: true},
+			check: sourceIs("IPAddresses", func(s FieldSources) Source { return s.IPAddresses }, SourcePCR),
+		},
+		{
+			name:  "CSR IP addresses without an annotation",
+			csr:   &CSR{IPAddresses: []net.IP{net.ParseIP("10.1.2.3")}},
+			opts:  Options{HonorCSRSANs: true, AllowUnverifiedIdentities: true},
+			check: sourceIs("IPAddresses", func(s FieldSources) Source { return s.IPAddresses }, SourceCSR),
+		},
+		{
+			name:  "duration only on the pod",
+			pod:   map[string]string{testSignerName + "-duration": "2h"},
+			opts:  Options{AllowPodAnnotations: true},
+			check: sourceIs("Duration", func(s FieldSources) Source { return s.Duration }, SourcePod),
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -91,6 +127,17 @@ func TestConfigSourcesPerOrigin(t *testing.T) {
 			}
 			tc.check(t, config.Sources)
 		})
+	}
+}
+
+// sourceIs returns a check that the field of FieldSources named name, read by
+// field, is want.
+func sourceIs(name string, field func(FieldSources) Source, want Source) func(*testing.T, FieldSources) {
+	return func(t *testing.T, got FieldSources) {
+		t.Helper()
+		if field(got) != want {
+			t.Errorf("%s source = %q, want %q", name, field(got), want)
+		}
 	}
 }
 
