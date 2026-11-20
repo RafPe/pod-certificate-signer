@@ -1,6 +1,7 @@
 package authority
 
 import (
+	"bytes"
 	"crypto/x509"
 	"encoding/pem"
 	"strings"
@@ -279,5 +280,71 @@ func TestWithMaxPreviousCAsRejectsNegative(t *testing.T) {
 
 	if _, err := New(dir+"/tls.crt", dir+"/tls.key", WithMaxPreviousCAs(-1)); err == nil {
 		t.Fatal("want error for negative max previous certificates")
+	}
+}
+
+// Sign must return the parsed leaf it issued and the CA certificate that
+// signed it, so callers can read the leaf's identity without re-parsing the
+// PEM chain.
+func TestSignReturnsLeafAndIssuer(t *testing.T) {
+	dir := t.TempDir()
+	caCert := writeCA(t, dir, "ca.example.org", 24*time.Hour).Cert
+	ca, err := New(dir+"/tls.crt", dir+"/tls.key")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	cert, err := ca.Sign(testConfig(t))
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	block, _ := pem.Decode([]byte(cert.CertificateChain))
+	if block == nil {
+		t.Fatal("certificate chain holds no PEM block")
+	}
+	if !bytes.Equal(cert.Leaf.Raw, block.Bytes) {
+		t.Fatal("Leaf is not the first certificate of the chain")
+	}
+	if cert.Leaf.SerialNumber.Sign() <= 0 {
+		t.Fatal("Leaf has no serial")
+	}
+	if !cert.Issuer.Equal(caCert) {
+		t.Fatal("Issuer is not the signing CA")
+	}
+	if err := cert.Leaf.CheckSignatureFrom(cert.Issuer); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The Issuer of a returned certificate is the CA that signed it, not whatever
+// CA the authority holds when the caller reads the field.
+func TestSignIssuerIsTheSnapshotThatSigned(t *testing.T) {
+	dir := t.TempDir()
+	first := writeCA(t, dir, "ca-1.example.org", 24*time.Hour).Cert
+	ca, err := New(dir+"/tls.crt", dir+"/tls.key")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	cert, err := ca.Sign(testConfig(t))
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	second := writeCA(t, dir, "ca-2.example.org", 24*time.Hour).Cert
+	changed, err := ca.load()
+	if err != nil {
+		t.Fatalf("reload after rotation: %v", err)
+	}
+	if !changed {
+		t.Fatal("reload did not pick up the second CA")
+	}
+
+	if !cert.Issuer.Equal(first) {
+		t.Fatal("Issuer is not the CA that signed the certificate")
+	}
+	if cert.Issuer.Equal(second) {
+		t.Fatal("Issuer follows the reloaded CA")
 	}
 }
