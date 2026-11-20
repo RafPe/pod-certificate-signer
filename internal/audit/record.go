@@ -104,11 +104,19 @@ type Owner struct {
 	UID        string `json:"uid"`
 }
 
-// Omitted counts the pod keys that matched the options but are not in the
-// record.
+// Omitted reports what the limits left out of the record. Labels and
+// Annotations count the pod keys that matched the options but are not in the
+// record, because of [Options.MaxCopiedKeys] or [Options.MaxRecordBytes].
 type Omitted struct {
 	Labels      int `json:"labels"`
 	Annotations int `json:"annotations"`
+	// SuppliedValues counts the supplied values that [Options.MaxRecordBytes]
+	// removed from request.suppliedValues. The keys stay in
+	// request.suppliedKeys.
+	SuppliedValues int `json:"suppliedValues,omitzero"`
+	// OverBudget is true when the line is longer than [Options.MaxRecordBytes]
+	// after every removable group was removed. The line is written whole.
+	OverBudget bool `json:"overBudget,omitzero"`
 }
 
 // Certificate describes the issued certificate, as parsed from its DER. A
