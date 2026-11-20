@@ -19,9 +19,15 @@ type Certificate struct {
 	// CertificateChain is the PEM-encoded chain: the issued certificate
 	// followed by the CA certificate that signed it.
 	CertificateChain string
-	Config           *Config
-	NotBefore        time.Time
-	NotAfter         time.Time
+	// Leaf is the issued certificate, parsed from the DER that heads
+	// CertificateChain.
+	Leaf *x509.Certificate
+	// Issuer is the CA certificate that signed Leaf. The pointer is shared
+	// with the authority, so it must not be modified.
+	Issuer    *x509.Certificate
+	Config    *Config
+	NotBefore time.Time
+	NotAfter  time.Time
 }
 
 // Config describes the certificate to be issued for a pod.
@@ -48,6 +54,9 @@ type Config struct {
 	// certificate still issues; the reconciler surfaces each as a Warning event
 	// under its reason, so the operator can see why a default was dropped.
 	Notices []Notice
+	// Sources records where each requester-configurable field took its value
+	// from.
+	Sources FieldSources
 }
 
 // Notice is one non-fatal fact about how a configuration was resolved, with

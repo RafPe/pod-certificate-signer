@@ -391,9 +391,16 @@ func (ca *CertificateAuthority) Sign(cfg *podcertificate.Config) (*podcertificat
 		return nil, fmt.Errorf("create certificate for public key type %T: %w", cfg.PublicKey, err)
 	}
 
+	leaf, err := x509.ParseCertificate(issuedCertificate)
+	if err != nil {
+		return nil, fmt.Errorf("parse certificate for public key type %T: %w", cfg.PublicKey, err)
+	}
+
 	return &podcertificate.Certificate{
 		// Issued certificate first, then the CA that signed it.
 		CertificateChain: string(certificatePEM(issuedCertificate)) + string(certificatePEM(caCert.Raw)),
+		Leaf:             leaf,
+		Issuer:           caCert,
 		Config:           cfg,
 		NotBefore:        notBefore,
 		NotAfter:         notAfter,

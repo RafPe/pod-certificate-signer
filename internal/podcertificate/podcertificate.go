@@ -171,12 +171,13 @@ func NewConfig(
 	if config.URIs, err = resolver.uris(); err != nil {
 		return nil, err
 	}
-	if config.Duration, err = resolver.duration(AnnotationSuffixDuration, config.Duration); err != nil {
+	if config.Duration, err = resolver.duration(AnnotationSuffixDuration, config.Duration, &resolver.sources.Duration); err != nil {
 		return nil, err
 	}
-	if config.RefreshBefore, err = resolver.duration(AnnotationSuffixRefreshBefore, config.RefreshBefore); err != nil {
+	if config.RefreshBefore, err = resolver.duration(AnnotationSuffixRefreshBefore, config.RefreshBefore, &resolver.sources.RefreshBefore); err != nil {
 		return nil, err
 	}
+	config.Sources = resolver.sources
 	if err := config.Validate(); err != nil {
 		// A denial is all the requester sees, so it carries any notice that
 		// explains it (e.g. why the default DNS SANs were dropped).
