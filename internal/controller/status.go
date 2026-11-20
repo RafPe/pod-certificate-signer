@@ -139,9 +139,16 @@ func (r *PodCertificateRequestReconciler) recordOutcome(
 // If the re-read shows a terminal condition another writer already recorded,
 // this reconcile lost the race: the request is now immutable, so its outcome is
 // left in place (persisted is false) rather than overwritten.
+//
+// If the re-read finds no request, or a request with another UID, the request
+// this reconcile computed the outcome for was deleted. Nothing is written,
+// persisted is false and pcr is left as it was: the outcome belongs to no live
+// request, and a replacement with the same name is reconciled through its own
+// create event.
 func (r *PodCertificateRequestReconciler) updateStatusWithRetry(ctx context.Context, pcr *certificatesv1.PodCertificateRequest) (bool, error) {
 	desired := pcr.Status.DeepCopy()
 	key := client.ObjectKeyFromObject(pcr)
+	uid := pcr.UID
 
 	persisted := false
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -154,9 +161,21 @@ func (r *PodCertificateRequestReconciler) updateStatusWithRetry(ctx context.Cont
 			return err
 		}
 		// Re-read live: the cache lags the write that caused the conflict.
-		if gerr := r.APIReader.Get(ctx, key, pcr); gerr != nil {
+		live := &certificatesv1.PodCertificateRequest{}
+		if gerr := r.APIReader.Get(ctx, key, live); gerr != nil {
+			if apierrors.IsNotFound(gerr) {
+				log.FromContext(ctx).Info("request was deleted before its status was written; discarding this reconcile's outcome",
+					"uid", uid)
+				return nil
+			}
 			return gerr
 		}
+		if live.UID != uid {
+			log.FromContext(ctx).Info("request was replaced before its status was written; discarding this reconcile's outcome",
+				"uid", uid, "replacementUID", live.UID)
+			return nil
+		}
+		live.DeepCopyInto(pcr)
 		if isTerminal(pcr) {
 			// A terminal outcome already won; leave it in place. Stop retrying
 			// (return nil) with persisted still false so the caller announces
