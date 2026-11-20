@@ -137,6 +137,7 @@ Select **GitHub Actions** as the publishing source in the repository’s Pages s
 | Annotation contract, CLI flags, Helm values, identity model, production posture | [docs/configuration.md](./docs/configuration.md) |
 | CA rotation, leader election, readiness, upgrades, troubleshooting | [docs/operations.md](./docs/operations.md) |
 | C4 diagrams, component overview, security posture | [docs/architecture.md](./docs/architecture.md) |
+| Issuance audit record: configuration, collection, queries by serial or fingerprint | [docs/auditing.md](./docs/auditing.md) |
 | Writing tests that depend on time | [docs/testing/deterministic-time.md](./docs/testing/deterministic-time.md) |
 | Threat model, reporting policy, supported versions | [SECURITY.md](./SECURITY.md) |
 | All chart values | [charts/pod-certificate-signer/README.md](./charts/pod-certificate-signer/README.md) |
@@ -148,8 +149,8 @@ Select **GitHub Actions** as the publishing source in the repository’s Pages s
 Releases need a review and use labels. Each ordinary PR has exactly one
 `release/*` label. Each non-skip PR adds a changelog fragment. Ordinary merges
 never publish a release. To release, a maintainer runs **Prepare Release** and
-reviews the `release/next` PR that the automation owns. The merge of that PR
-starts these steps:
+reviews the `release/next` PR that the automation owns. The maintainer merges
+that PR with the `main` ruleset bypass. The merge starts these steps:
 
 - full verification and E2E tests
 - an immutable `vX.Y.Z` tag

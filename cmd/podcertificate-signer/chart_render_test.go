@@ -1,11 +1,15 @@
 package main
 
 import (
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/audit"
 )
 
 // repoRoot returns the repository root, located relative to this source file
@@ -247,5 +251,136 @@ func TestDeploymentRendersInterpolationEnabledByDefault(t *testing.T) {
 	if !strings.Contains(got, "--enable-annotation-interpolation=false") {
 		t.Errorf("rendered Deployment does not carry --enable-annotation-interpolation=false when the "+
 			"value is set to false; the opt-out does not reach the controller:\n%s", got)
+	}
+}
+
+// renderedAuditArgs returns the --audit-* container arguments of a rendered
+// chart, in order, with any YAML double quotes removed.
+func renderedAuditArgs(t *testing.T, out string) []string {
+	t.Helper()
+	var args []string
+	for _, line := range strings.Split(out, "\n") {
+		arg, ok := strings.CutPrefix(strings.TrimSpace(line), "- ")
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(arg, `"`) {
+			unquoted, err := strconv.Unquote(arg)
+			if err != nil {
+				t.Fatalf("strconv.Unquote(%s) = %v", arg, err)
+			}
+			arg = unquoted
+		}
+		if strings.HasPrefix(arg, "--audit-") {
+			args = append(args, arg)
+		}
+	}
+	return args
+}
+
+// The audit values reach the controller as flags. Every flag is rendered on
+// every install, so a value set to its default still overrides a changed
+// binary default. The rendered arguments must parse and pass validateFlags,
+// which proves that the chart and the binary agree without a cluster.
+func TestDeploymentRendersAuditFlags(t *testing.T) {
+	defaults := audit.DefaultOptions()
+	cases := []struct {
+		name   string
+		values []string
+		want   []string
+	}{
+		{"defaults", nil, []string{
+			"--audit-enabled=true",
+			"--audit-pod-labels=",
+			"--audit-pod-annotations=",
+			fmt.Sprintf("--audit-max-copied-keys=%d", defaults.MaxCopiedKeys),
+			fmt.Sprintf("--audit-max-value-length=%d", defaults.MaxValueLength),
+			fmt.Sprintf("--audit-max-record-bytes=%d", defaults.MaxRecordBytes),
+			"--audit-record-supplied-values=false",
+		}},
+		{"non-default", []string{
+			"audit.enabled=false",
+			"audit.pod_labels={team,app.kubernetes.io/*}",
+			"audit.pod_annotations={example.org/owner}",
+			"audit.max_copied_keys=8",
+			"audit.max_value_length=64",
+			"audit.max_record_bytes=4096",
+			"audit.record_supplied_values=true",
+		}, []string{
+			"--audit-enabled=false",
+			"--audit-pod-labels=team,app.kubernetes.io/*",
+			"--audit-pod-annotations=example.org/owner",
+			"--audit-max-copied-keys=8",
+			"--audit-max-value-length=64",
+			"--audit-max-record-bytes=4096",
+			"--audit-record-supplied-values=true",
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := renderedAuditArgs(t, renderChart(t, tc.values...))
+			if strings.Join(got, " ") != strings.Join(tc.want, " ") {
+				t.Fatalf("rendered audit args = %q, want %q", got, tc.want)
+			}
+
+			f := parseFlags(t, got...)
+			// Audit on in both cases, so validateFlags checks every option.
+			f.auditEnabled = true
+			if err := validateFlags(f); err != nil {
+				t.Errorf("validateFlags(%q) = %v, want nil", got, err)
+			}
+		})
+	}
+}
+
+// The schema rejects an audit value the binary would reject, so helm fails
+// before the install instead of the controller failing at startup.
+func TestAuditValuesSchemaRejectsInvalidValues(t *testing.T) {
+	cases := []struct {
+		value string
+		key   string
+	}{
+		{"audit.max_copied_keys=0", "max_copied_keys"},
+		{"audit.max_copied_keys=257", "max_copied_keys"},
+		{"audit.max_value_length=0", "max_value_length"},
+		{"audit.max_value_length=4097", "max_value_length"},
+		{"audit.max_record_bytes=4095", "max_record_bytes"},
+		{"audit.max_record_bytes=262145", "max_record_bytes"},
+		{"audit.pod_labels={a*b}", "pod_labels"},
+		{"audit.pod_labels={a\\,b}", "pod_labels"},
+		{"audit.pod_annotations={*}", "pod_annotations"},
+		// The flag parser trims spaces, so " *" would become the bare "*"
+		// that the signer rejects at startup.
+		{"audit.pod_annotations={ *}", "pod_annotations"},
+		{"audit.pod_annotations={* }", "pod_annotations"},
+		// The flag parser ignores an entry that is only spaces without a message.
+		{"audit.pod_labels={  }", "pod_labels"},
+		{"audit.pod_labels={ team}", "pod_labels"},
+		{"audit.maxCopiedKeys=8", "maxCopiedKeys"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.value, func(t *testing.T) {
+			out, err := renderChartResult(t, tc.value)
+			if err == nil {
+				t.Fatalf("helm template --set %s succeeded, want a schema error:\n%s", tc.value, out)
+			}
+			if !strings.Contains(out, "schema") || !strings.Contains(out, tc.key) {
+				t.Errorf("helm template --set %s failed with %q, want a schema error that names %s", tc.value, out, tc.key)
+			}
+		})
+	}
+}
+
+// The schema accepts every entry format that the signer accepts: an exact
+// key, a prefix that ends in "*" and, for labels only, the bare "*".
+func TestAuditValuesSchemaAcceptsValidKeyLists(t *testing.T) {
+	for _, value := range []string{
+		"audit.pod_labels={*}",
+		"audit.pod_labels={team,app.kubernetes.io/*}",
+		"audit.pod_annotations={example.com/owner-*}",
+	} {
+		t.Run(value, func(t *testing.T) {
+			renderChart(t, value)
+		})
 	}
 }

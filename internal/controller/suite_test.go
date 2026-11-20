@@ -162,7 +162,7 @@ func startTestManager() {
 	Expect(err).NotTo(HaveOccurred())
 
 	reconciler, err := NewPodCertificateRequestReconciler(mgr, "envtest", testSignerName, certificateAuthority,
-		podcertificate.Options{ClusterFQDN: "cluster.local"})
+		podcertificate.Options{ClusterFQDN: "cluster.local"}, nil, nil)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(reconciler.SetupWithManager(mgr)).To(Succeed())
 

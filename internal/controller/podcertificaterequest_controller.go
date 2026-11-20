@@ -17,7 +17,8 @@ limitations under the License.
 // Package controller reconciles PodCertificateRequests addressed to this
 // signer: it verifies the request against the live pod, resolves the
 // certificate configuration, signs, and records the Issued, Denied or Failed
-// outcome on the request status together with the matching event.
+// outcome on the request status together with the matching event and, when
+// audit is on, the issuance audit record.
 package controller
 
 import (
@@ -28,6 +29,7 @@ import (
 
 	"github.com/go-logr/logr"
 
+	"github.com/rafpe/kubernetes-podcertificate-signer/internal/audit"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/authority"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/outcome"
 	"github.com/rafpe/kubernetes-podcertificate-signer/internal/podcertificate"
@@ -90,6 +92,9 @@ var (
 // Signer is the consumer-side view of the signing dependency the reconciler
 // needs. Keeping it an interface (rather than the concrete certificate
 // authority) lets the reconcile path be unit-tested with a stub.
+//
+// A certificate that Sign returns without an error has a non-nil Leaf, Issuer
+// and Config. The audit record builder reads all three.
 type Signer interface {
 	Sign(*podcertificate.Config) (*podcertificate.Certificate, error)
 }
@@ -129,6 +134,10 @@ type PodCertificateRequestReconciler struct {
 	// CertificateOptions is the process-wide policy the certificate
 	// configuration is built under: the cluster FQDN and the feature flags.
 	CertificateOptions podcertificate.Options
+	// Audit writes the issuance audit records and AuditRecords builds them.
+	// Both nil means audit is off. Set only one and audit stays off.
+	Audit        audit.Recorder
+	AuditRecords *audit.Builder
 
 	// caUnusableEvents rate-limits the CASignerUnusable warning per request.
 	// It carries a mutex, so the reconciler must always be used through a
@@ -139,12 +148,16 @@ type PodCertificateRequestReconciler struct {
 // NewPodCertificateRequestReconciler wires a reconciler to mgr: the cached
 // client, the cache-bypassing API reader, a named logger and event recorder.
 // name is the controller name used for the logger and as the event reporter;
-// signerName is the spec.signerName the controller answers for.
+// signerName is the spec.signerName the controller answers for. recorder and
+// records turn the issuance audit record on together: both nil means audit is
+// off, and exactly one nil is an error.
 func NewPodCertificateRequestReconciler(
 	mgr ctrl.Manager,
 	name, signerName string,
 	signer Signer,
 	certOpts podcertificate.Options,
+	recorder audit.Recorder,
+	records *audit.Builder,
 ) (*PodCertificateRequestReconciler, error) {
 	if name == "" {
 		return nil, errors.New("a controller name is required")
@@ -155,6 +168,9 @@ func NewPodCertificateRequestReconciler(
 	if signer == nil {
 		return nil, errors.New("a signer is required")
 	}
+	if (recorder == nil) != (records == nil) {
+		return nil, errors.New("an audit recorder and an audit record builder are required together")
+	}
 	return &PodCertificateRequestReconciler{
 		Client:             mgr.GetClient(),
 		APIReader:          mgr.GetAPIReader(),
@@ -163,6 +179,8 @@ func NewPodCertificateRequestReconciler(
 		SignerName:         signerName,
 		EventRecorder:      mgr.GetEventRecorder(name),
 		CertificateOptions: certOpts,
+		Audit:              recorder,
+		AuditRecords:       records,
 	}, nil
 }
 
@@ -187,6 +205,11 @@ func (r *PodCertificateRequestReconciler) SetupWithManager(mgr ctrl.Manager) err
 // deleted, foreign-signer and already-terminal requests, runs signRequest, and
 // records the Issued outcome; terminal failures are written to the request,
 // stale requests are dropped, and anything transient is requeued.
+//
+// When audit is on, a signed certificate gets its signed record before the
+// Issued status write and a follow-up record for every result of that write,
+// also when the write fails and the request is requeued. Audit records never
+// change what Reconcile returns, emits, counts or logs.
 func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var pcr certificatesv1.PodCertificateRequest
 	if err := r.Get(ctx, req.NamespacedName, &pcr); err != nil {
@@ -216,7 +239,7 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, nil
 	}
 
-	cert, err := r.signRequest(ctx, &pcr)
+	pod, cert, err := r.signRequest(ctx, &pcr)
 	if errors.Is(err, errDropRequest) {
 		logger.Info("dropping request", "reason", err.Error())
 		if errors.Is(err, errPodGone) {
@@ -225,22 +248,31 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, nil
 	}
 	if err != nil {
-		return r.requeueOrRecordTerminal(ctx, &pcr, err)
+		return r.requeueOrRecordTerminal(ctx, &pcr, pod, err)
 	}
 
-	persisted, err := r.recordIssued(ctx, &pcr, cert)
+	signed := r.auditSigned(ctx, &pcr, pod, cert)
+	result, err := r.recordIssued(ctx, &pcr, cert)
+	r.auditFollowUp(ctx, signed, result)
 	if err != nil {
 		return r.requeue(&pcr, err)
 	}
-	if persisted {
-		logger.Info("issued certificate",
+	if result == writePersisted {
+		keysAndValues := []any{
 			"commonName", cert.Config.CommonName,
 			"dnsNames", cert.Config.DNSNames,
 			"ipAddresses", cert.Config.IPAddresses,
 			"uris", cert.Config.URIs,
 			"extKeyUsage", cert.Config.ExtKeyUsage,
 			"notAfter", cert.NotAfter.Format(time.RFC3339),
-			"beginRefreshAt", beginRefreshAt(cert).Format(time.RFC3339))
+			"beginRefreshAt", beginRefreshAt(cert).Format(time.RFC3339),
+		}
+		if cert.Leaf != nil {
+			keysAndValues = append(keysAndValues,
+				"serial", audit.SerialHex(cert.Leaf),
+				"fingerprint", audit.Fingerprint(cert.Leaf))
+		}
+		logger.Info("issued certificate", keysAndValues...)
 	}
 	return ctrl.Result{}, nil
 }
@@ -248,31 +280,36 @@ func (r *PodCertificateRequestReconciler) Reconcile(ctx context.Context, req ctr
 // signRequest runs the signing pipeline for a PodCertificateRequest. The only
 // thing it reports itself is a Warning event for each notice the certificate
 // configuration carries; Reconcile routes what it returns:
-//   - (cert, nil) on success; cert is never nil when err is nil
-//   - (nil, err wrapping errDropRequest) when there is nothing to do: the
+//   - (pod, cert, nil) on success; cert is never nil when err is nil
+//   - (nil, nil, err wrapping errDropRequest) when there is nothing to do: the
 //     associated pod is being deleted, or a live read confirms it is gone
 //     (absent, or carrying a different UID than the request asked for). The
 //     gone case wraps errPodGone, with a note saying which.
-//   - (nil, *terminalError) for permanent failures (recorded on the PCR, no retry)
-//   - (nil, err) for transient failures (requeued with backoff)
-func (r *PodCertificateRequestReconciler) signRequest(ctx context.Context, pcr *certificatesv1.PodCertificateRequest) (*podcertificate.Certificate, error) {
+//   - (pod, nil, *terminalError) for permanent failures (recorded on the PCR, no retry)
+//   - (pod or nil, nil, err) for transient failures (requeued with backoff)
+//
+// The pod is the live pod, returned whenever it was read, matched the request
+// UID and is not being deleted, so the audit record of a denial or failure
+// can identify the workload. It is nil on every other return.
+func (r *PodCertificateRequestReconciler) signRequest(ctx context.Context, pcr *certificatesv1.PodCertificateRequest) (
+	*corev1.Pod, *podcertificate.Certificate, error) {
 	logger := log.FromContext(ctx)
 
 	// Live read, then gate on the UID the request names (see APIReader).
 	pod, err := getPod(ctx, r.APIReader, pcr.Spec.PodName, pcr.Namespace)
 	if apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("associated pod %s/%s (uid %s) not found; dropping request: %w",
+		return nil, nil, fmt.Errorf("associated pod %s/%s (uid %s) not found; dropping request: %w",
 			pcr.Namespace, pcr.Spec.PodName, pcr.Spec.PodUID, errPodGone)
 	}
 	if err != nil {
-		return nil, err // transient
+		return nil, nil, err // transient
 	}
 	if pod.UID != pcr.Spec.PodUID {
-		return nil, fmt.Errorf("associated pod %s/%s was replaced (request uid %s, live uid %s); dropping request: %w",
+		return nil, nil, fmt.Errorf("associated pod %s/%s was replaced (request uid %s, live uid %s); dropping request: %w",
 			pcr.Namespace, pcr.Spec.PodName, pcr.Spec.PodUID, pod.UID, errPodGone)
 	}
 	if !pod.DeletionTimestamp.IsZero() {
-		return nil, fmt.Errorf("associated pod is being deleted: %w", errDropRequest)
+		return nil, nil, fmt.Errorf("associated pod is being deleted: %w", errDropRequest)
 	}
 
 	// certificates.k8s.io/v1 dropped spec.pkixPublicKey: every kubelet that
@@ -280,12 +317,12 @@ func (r *PodCertificateRequestReconciler) signRequest(ctx context.Context, pcr *
 	// the subject public key.
 	csr, err := podcertificate.ParseCSR(pcr.Spec.StubPKCS10Request)
 	if err != nil {
-		return nil, denied(outcome.UnsupportedKeyType, err)
+		return pod, nil, denied(outcome.UnsupportedKeyType, err)
 	}
 
 	cfg, err := podcertificate.NewConfig(ctx, pcr, pod, csr, r.CertificateOptions)
 	if err != nil {
-		return nil, denied(outcome.InvalidUserConfig, err)
+		return pod, nil, denied(outcome.InvalidUserConfig, err)
 	}
 	// Non-fatal notices (e.g. default pod DNS SANs dropped for an over-long pod
 	// name): the certificate still issues, but the operator must see why a
@@ -297,12 +334,12 @@ func (r *PodCertificateRequestReconciler) signRequest(ctx context.Context, pcr *
 
 	cert, err := r.Signer.Sign(cfg)
 	if errors.Is(err, authority.ErrCASignerUnusable) {
-		return nil, err // transient: requeued until the CA can sign
+		return pod, nil, err // transient: requeued until the CA can sign
 	}
 	if err != nil {
-		return nil, failed(err)
+		return pod, nil, failed(err)
 	}
-	return cert, nil
+	return pod, cert, nil
 }
 
 // getPod reads the request's pod through reader and wraps a failure with the

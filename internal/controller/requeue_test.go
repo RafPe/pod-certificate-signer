@@ -28,7 +28,7 @@ func TestRequeueOrRecordTerminalWritesTerminalCondition(t *testing.T) {
 		Build()
 	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
 
-	res, err := r.requeueOrRecordTerminal(context.Background(), pcr, failed(errors.New("x")))
+	res, err := r.requeueOrRecordTerminal(context.Background(), pcr, nil, failed(errors.New("x")))
 	if err != nil {
 		t.Fatalf("requeueOrRecordTerminal returned err = %v, want nil", err)
 	}
@@ -55,7 +55,7 @@ func TestRequeueOrRecordTerminalRequeuesTransient(t *testing.T) {
 	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
 
 	sentinel := errors.New("apiserver blip")
-	if _, err := r.requeueOrRecordTerminal(context.Background(), pcr, sentinel); !errors.Is(err, sentinel) {
+	if _, err := r.requeueOrRecordTerminal(context.Background(), pcr, nil, sentinel); !errors.Is(err, sentinel) {
 		t.Fatalf("err = %v, want sentinel returned for requeue", err)
 	}
 	got := &certificatesv1.PodCertificateRequest{}
@@ -85,7 +85,7 @@ func TestRequeueOrRecordTerminalRequeuesOnWriteError(t *testing.T) {
 		Build()
 	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: events.NewFakeRecorder(10)}
 
-	if _, err := r.requeueOrRecordTerminal(context.Background(), pcr, failed(errors.New("boom"))); !errors.Is(err, writeErr) {
+	if _, err := r.requeueOrRecordTerminal(context.Background(), pcr, nil, failed(errors.New("boom"))); !errors.Is(err, writeErr) {
 		t.Fatalf("err = %v, want the status-write error returned for requeue", err)
 	}
 }
@@ -110,7 +110,7 @@ func TestRequeuesAreClassified(t *testing.T) {
 			ctx := logr.NewContext(context.Background(), logr.Discard())
 
 			before := requeueCount(tc.wantReason)
-			if _, err := r.requeueOrRecordTerminal(ctx, &certificatesv1.PodCertificateRequest{}, tc.err); err == nil {
+			if _, err := r.requeueOrRecordTerminal(ctx, &certificatesv1.PodCertificateRequest{}, nil, tc.err); err == nil {
 				t.Fatal("requeueOrRecordTerminal() error = nil, want the transient error returned for requeue")
 			}
 			if got := requeueCount(tc.wantReason) - before; got != 1 {

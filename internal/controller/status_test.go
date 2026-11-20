@@ -2,7 +2,11 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -245,7 +250,7 @@ func TestRecordTerminal(t *testing.T) {
 			if !errors.As(tc.err, &te) {
 				t.Fatalf("test error is not terminal: %v", tc.err)
 			}
-			if err := r.recordTerminal(context.Background(), pcr, te); err != nil {
+			if _, err := r.recordTerminal(context.Background(), pcr, te); err != nil {
 				t.Fatalf("recordTerminal: %v", err)
 			}
 
@@ -315,13 +320,126 @@ func TestRecordIssued(t *testing.T) {
 	if got.Status.NotBefore == nil || got.Status.NotAfter == nil || got.Status.BeginRefreshAt == nil {
 		t.Error("notBefore, notAfter and beginRefreshAt must all be set on issuance")
 	}
+	// The certificate has no parsed leaf, so the message has no serial and no
+	// fingerprint to carry.
+	if msg := got.Status.Conditions[0].Message; msg != "certificate issued" {
+		t.Errorf("condition message = %q, want %q", msg, "certificate issued")
+	}
 	select {
 	case e := <-rec.Events:
-		if !strings.Contains(e, corev1.EventTypeNormal) {
-			t.Errorf("event = %q, want a normal event", e)
+		if want := "Normal CertificateIssued certificate issued"; e != want {
+			t.Errorf("event = %q, want %q", e, want)
 		}
 	default:
 		t.Error("no event recorded")
+	}
+}
+
+// wantIssuedMessage returns the Issued condition message for leaf. It formats
+// the serial and the fingerprint here, not through the audit package, so a
+// change of format in the code under test fails the test.
+func wantIssuedMessage(leaf *x509.Certificate) string {
+	sum := sha256.Sum256(leaf.Raw)
+	return fmt.Sprintf("certificate issued: serial=%s fingerprint=X509SHA256=%s",
+		leaf.SerialNumber.Text(16), hex.EncodeToString(sum[:]))
+}
+
+// The Issued condition message carries the serial and the fingerprint of the
+// leaf as text, so the API server audit log and kubectl describe show them
+// without PEM parsing. The Kubernetes Event carries the same message.
+func TestRecordIssuedMessageCarriesSerialAndFingerprint(t *testing.T) {
+	r, rec, store, pcr := statusWriteFixture(t, interceptor.Funcs{}, interceptor.Funcs{})
+	cert := stubCert()
+	want := wantIssuedMessage(cert.Leaf)
+
+	if _, err := r.recordIssued(context.Background(), pcr, cert); err != nil {
+		t.Fatalf("recordIssued: %v", err)
+	}
+
+	stored := &certificatesv1.PodCertificateRequest{}
+	if err := store.Get(context.Background(), client.ObjectKeyFromObject(pcr), stored); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(stored.Status.Conditions) != 1 {
+		t.Fatalf("conditions = %+v, want a single Issued condition", stored.Status.Conditions)
+	}
+	if got := stored.Status.Conditions[0].Message; got != want {
+		t.Errorf("condition message = %q, want %q", got, want)
+	}
+	select {
+	case e := <-rec.Events:
+		if wantEvent := "Normal CertificateIssued " + stored.Status.Conditions[0].Message; e != wantEvent {
+			t.Errorf("event = %q, want %q: the Kubernetes Event carries the condition message", e, wantEvent)
+		}
+	default:
+		t.Error("no event recorded")
+	}
+}
+
+// Reconcile stores the Issued condition message and logs the serial and the
+// fingerprint on the issued certificate line. A certificate without a parsed
+// leaf keeps the plain message, adds no keys to the line and does not panic.
+func TestReconcileIssuedMessageAndLogLine(t *testing.T) {
+	withLeaf := stubCert()
+	withoutLeaf := stubCert()
+	withoutLeaf.Leaf = nil
+	sum := sha256.Sum256(withLeaf.Leaf.Raw)
+	serialKey := `"serial"="` + withLeaf.Leaf.SerialNumber.Text(16) + `"`
+	fingerprintKey := `"fingerprint"="X509SHA256=` + hex.EncodeToString(sum[:]) + `"`
+
+	cases := []struct {
+		name        string
+		cert        *podcertificate.Certificate
+		wantMessage string
+		wantKeys    bool
+	}{
+		{"with a leaf", withLeaf, wantIssuedMessage(withLeaf.Leaf), true},
+		{"without a leaf", withoutLeaf, "certificate issued", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pcr, pod := livePCR(t, "pod-uid", "pod-uid")
+			pcr.Spec.SignerName = "example.org/signer"
+			pcr.UID = "request-uid"
+			cl := fake.NewClientBuilder().
+				WithScheme(newTestScheme(t)).
+				WithObjects(pcr, pod).
+				WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
+				Build()
+			stub := &stubSigner{name: pcr.Spec.SignerName, cert: tc.cert}
+			var lines []string
+			r := &PodCertificateRequestReconciler{
+				Client: cl, APIReader: cl, Log: captureLogger(&lines), Signer: stub, SignerName: stub.name,
+				EventRecorder: events.NewFakeRecorder(10),
+			}
+
+			if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pcr)}); err != nil {
+				t.Fatalf("Reconcile() error = %v", err)
+			}
+
+			stored := &certificatesv1.PodCertificateRequest{}
+			if err := cl.Get(context.Background(), client.ObjectKeyFromObject(pcr), stored); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if len(stored.Status.Conditions) != 1 {
+				t.Fatalf("conditions = %+v, want a single Issued condition", stored.Status.Conditions)
+			}
+			if got := stored.Status.Conditions[0].Message; got != tc.wantMessage {
+				t.Errorf("condition message = %q, want %q", got, tc.wantMessage)
+			}
+			const issuedLine = `"msg"="issued certificate"`
+			if n := countLinesContaining(lines, issuedLine); n != 1 {
+				t.Fatalf("issued certificate lines = %d, want 1; log = %q", n, lines)
+			}
+			gotKeys := countLinesContaining(lines, issuedLine, serialKey, fingerprintKey) == 1
+			if gotKeys != tc.wantKeys {
+				t.Errorf("issued certificate line carries %s and %s = %v, want %v; log = %q",
+					serialKey, fingerprintKey, gotKeys, tc.wantKeys, lines)
+			}
+			if !tc.wantKeys && countLinesContaining(lines, issuedLine, `"serial"=`) != 0 {
+				t.Errorf("issued certificate line carries a serial, want none without a leaf; log = %q", lines)
+			}
+		})
 	}
 }
 
@@ -340,7 +458,7 @@ func TestRecordTerminalEventMessageIsNotAFormat(t *testing.T) {
 	r := &PodCertificateRequestReconciler{Client: cl, APIReader: cl, Log: logr.Discard(), EventRecorder: rec}
 
 	const message = `annotation "example.org/signer-cn": value "100%d of %s" is not a verified identity`
-	if err := r.recordTerminal(context.Background(), pcr, denied(outcome.InvalidUserConfig, errors.New(message)).(*terminalError)); err != nil {
+	if _, err := r.recordTerminal(context.Background(), pcr, denied(outcome.InvalidUserConfig, errors.New(message)).(*terminalError)); err != nil {
 		t.Fatalf("recordTerminal: %v", err)
 	}
 
@@ -454,13 +572,13 @@ func TestRecordOutcomeConflictOnReplacedRequest(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns", UID: newUID},
 		Spec:       certificatesv1.PodCertificateRequestSpec{PodName: "other-pod", PodUID: "other-pod-uid"},
 	}
-	type recordFunc func(context.Context, *PodCertificateRequestReconciler, *certificatesv1.PodCertificateRequest) (bool, error)
-	var issue recordFunc = func(ctx context.Context, r *PodCertificateRequestReconciler, pcr *certificatesv1.PodCertificateRequest) (bool, error) {
+	type recordFunc func(context.Context, *PodCertificateRequestReconciler, *certificatesv1.PodCertificateRequest) (writeResult, error)
+	var issue recordFunc = func(ctx context.Context, r *PodCertificateRequestReconciler, pcr *certificatesv1.PodCertificateRequest) (writeResult, error) {
 		return r.recordIssued(ctx, pcr, stubCert())
 	}
-	var deny recordFunc = func(ctx context.Context, r *PodCertificateRequestReconciler, pcr *certificatesv1.PodCertificateRequest) (bool, error) {
+	var deny recordFunc = func(ctx context.Context, r *PodCertificateRequestReconciler, pcr *certificatesv1.PodCertificateRequest) (writeResult, error) {
 		te := denied(outcome.InvalidUserConfig, errors.New("not a verified identity")).(*terminalError)
-		return false, r.recordTerminal(ctx, pcr, te)
+		return r.recordTerminal(ctx, pcr, te)
 	}
 
 	cases := []struct {
@@ -498,12 +616,12 @@ func TestRecordOutcomeConflictOnReplacedRequest(t *testing.T) {
 			ctx := logr.NewContext(context.Background(), captureLogger(&lines))
 			before := outcomeCount(tc.kind, tc.reason)
 
-			persisted, err := tc.record(ctx, r, pcr)
+			res, err := tc.record(ctx, r, pcr)
 			if err != nil {
 				t.Fatalf("record error = %v, want nil: a request that is gone needs no requeue", err)
 			}
-			if persisted {
-				t.Error("persisted = true, want false: the outcome was not written")
+			if res != writeGone {
+				t.Errorf("result = %v, want writeGone: the outcome belongs to no live request", res)
 			}
 			if writes != 1 {
 				t.Errorf("status writes = %d, want 1: no write may follow the conflict", writes)
@@ -534,6 +652,340 @@ func TestRecordOutcomeConflictOnReplacedRequest(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// conflictErr is the 409 kube-apiserver returns for a status write against a
+// stale resourceVersion.
+func conflictErr(name string) error {
+	return apierrors.NewConflict(
+		schema.GroupResource{Group: "certificates.k8s.io", Resource: "podcertificaterequests"},
+		name, errors.New("resourceVersion mismatch"))
+}
+
+// writeThen is a SubResourceUpdate interceptor that applies the write to the
+// fake store and then returns err, as a client does when the API server
+// commits the write but the response is lost or reported as a failure.
+func writeThen(err error, writes *int) interceptor.Funcs {
+	return interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, c client.Client, _ string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			*writes++
+			if uerr := c.Status().Update(ctx, obj, opts...); uerr != nil {
+				return uerr
+			}
+			return err
+		},
+	}
+}
+
+// failWrite is a SubResourceUpdate interceptor that writes nothing and
+// returns err.
+func failWrite(err error) interceptor.Funcs {
+	return interceptor.Funcs{
+		SubResourceUpdate: func(context.Context, client.Client, string, client.Object, ...client.SubResourceUpdateOption) error {
+			return err
+		},
+	}
+}
+
+// concurrentTerminal is a SubResourceUpdate interceptor whose first write
+// loses to another writer: it stores the terminal status that writer
+// recorded, then returns a conflict. Any later write goes through. writes
+// counts this reconcile's writes, not the other writer's.
+func concurrentTerminal(winner certificatesv1.PodCertificateRequestStatus, writes *int) interceptor.Funcs {
+	return interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, c client.Client, _ string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			*writes++
+			if *writes > 1 {
+				return c.Status().Update(ctx, obj, opts...)
+			}
+			concurrent := &certificatesv1.PodCertificateRequest{}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(obj), concurrent); err != nil {
+				return err
+			}
+			winner.DeepCopyInto(&concurrent.Status)
+			if err := c.Status().Update(ctx, concurrent); err != nil {
+				return err
+			}
+			return conflictErr(obj.GetName())
+		},
+	}
+}
+
+// terminalStatus returns a request status carrying one terminal condition of
+// conditionType and the certificate chain chain.
+func terminalStatus(conditionType, chain string) certificatesv1.PodCertificateRequestStatus {
+	return certificatesv1.PodCertificateRequestStatus{
+		CertificateChain: chain,
+		Conditions: []metav1.Condition{{
+			Type:               conditionType,
+			Status:             metav1.ConditionTrue,
+			LastTransitionTime: metav1.Now(),
+			Reason:             "ConcurrentWriter",
+			Message:            "recorded by a concurrent writer",
+		}},
+	}
+}
+
+// drainEvents returns the number of events rec holds, without blocking.
+func drainEvents(rec *events.FakeRecorder) int {
+	n := 0
+	for {
+		select {
+		case <-rec.Events:
+			n++
+		default:
+			return n
+		}
+	}
+}
+
+// statusWriteFixture builds a reconciler over a stored request with a UID. The
+// status writes go through funcs, and the conflict re-read goes through a
+// separate reader with readFuncs, so a test can fail the re-read without
+// failing its own setup read.
+func statusWriteFixture(t *testing.T, funcs, readFuncs interceptor.Funcs) (*PodCertificateRequestReconciler, *events.FakeRecorder, client.Client, *certificatesv1.PodCertificateRequest) {
+	t.Helper()
+	pcr := &certificatesv1.PodCertificateRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns", UID: "request-uid"},
+		Spec:       certificatesv1.PodCertificateRequestSpec{PodName: "mypod", PodUID: "mypod-uid"},
+	}
+	store := fake.NewClientBuilder().
+		WithScheme(newTestScheme(t)).
+		WithObjects(pcr).
+		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
+		Build()
+	cl := interceptor.NewClient(store, funcs)
+	reader := interceptor.NewClient(store, readFuncs)
+	if err := store.Get(context.Background(), client.ObjectKeyFromObject(pcr), pcr); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	rec := events.NewFakeRecorder(10)
+	r := &PodCertificateRequestReconciler{Client: cl, APIReader: reader, Log: logr.Discard(), EventRecorder: rec}
+	return r, rec, store, pcr
+}
+
+// Each way a status write can end maps to one writeResult, and only a
+// persisted write is announced with an event and counted in the outcome
+// metric. The next step decides from the result whether this reconcile's
+// outcome is in place, lost to another writer, belongs to no live request,
+// was refused, or may or may not be committed.
+func TestStatusWriteResult(t *testing.T) {
+	replacement := &certificatesv1.PodCertificateRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "pcr", Namespace: "ns", UID: "new-request-uid"},
+		Spec:       certificatesv1.PodCertificateRequestSpec{PodName: "other-pod", PodUID: "other-pod-uid"},
+	}
+	gr := schema.GroupResource{Group: "certificates.k8s.io", Resource: "podcertificaterequests"}
+	issued := certificatesv1.PodCertificateRequestConditionTypeIssued
+	deniedType := certificatesv1.PodCertificateRequestConditionTypeDenied
+	var ownWrites, otherWrites, deniedWrites, deniedOntoIssuedWrites, deletedWrites, replacedWrites int
+	invalid := apierrors.NewInvalid(schema.GroupKind{Group: "certificates.k8s.io", Kind: "PodCertificateRequest"}, "pcr",
+		field.ErrorList{field.Required(field.NewPath("status", "certificateChain"), "")})
+
+	cases := []struct {
+		name      string
+		funcs     interceptor.Funcs
+		readFuncs interceptor.Funcs
+		// deny records a Denied outcome in place of the Issued one.
+		deny       bool
+		want       writeResult
+		wantErr    error
+		wantErrIs  func(error) bool
+		wantEvents int
+		// writes counts the status writes of this reconcile. When it is set,
+		// the row asserts it equals wantWrites.
+		writes     *int
+		wantWrites int
+	}{
+		{name: "update succeeds", want: writePersisted, wantEvents: 1},
+		{name: "conflict, own Issued chain in place", funcs: concurrentTerminal(terminalStatus(issued, "pem-chain"), &ownWrites),
+			want: writePersisted, wantEvents: 1, writes: &ownWrites, wantWrites: 1},
+		{name: "conflict, another Issued chain in place", funcs: concurrentTerminal(terminalStatus(issued, "other-chain"), &otherWrites),
+			want: writeSuperseded, writes: &otherWrites, wantWrites: 1},
+		{name: "conflict, Denied in place", funcs: concurrentTerminal(terminalStatus(deniedType, ""), &deniedWrites),
+			want: writeSuperseded, writes: &deniedWrites, wantWrites: 1},
+		// The re-read chain equals the cleared chain of the denial, so only the
+		// Issued type of the desired status tells the two apart.
+		{name: "Denied, conflict, Issued in place", funcs: concurrentTerminal(terminalStatus(issued, ""), &deniedOntoIssuedWrites),
+			deny: true, want: writeSuperseded, writes: &deniedOntoIssuedWrites, wantWrites: 1},
+		{name: "conflict, request deleted", funcs: replacePCR(nil, &deletedWrites),
+			want: writeGone, writes: &deletedWrites, wantWrites: 1},
+		{name: "conflict, request replaced", funcs: replacePCR(replacement, &replacedWrites),
+			want: writeGone, writes: &replacedWrites, wantWrites: 1},
+		{name: "update not found", funcs: failWrite(apierrors.NewNotFound(gr, "pcr")), want: writeGone},
+		{name: "update invalid", funcs: failWrite(invalid), want: writeRejected, wantErrIs: apierrors.IsInvalid},
+		{name: "update forbidden", funcs: failWrite(apierrors.NewForbidden(gr, "pcr", errors.New("no"))),
+			want: writeRejected, wantErrIs: apierrors.IsForbidden},
+		{name: "update bad request", funcs: failWrite(apierrors.NewBadRequest("bad")),
+			want: writeRejected, wantErrIs: apierrors.IsBadRequest},
+		{name: "update unauthorized", funcs: failWrite(apierrors.NewUnauthorized("who")),
+			want: writeRejected, wantErrIs: apierrors.IsUnauthorized},
+		{name: "update timeout", funcs: failWrite(context.DeadlineExceeded), want: writeUnknown, wantErr: context.DeadlineExceeded},
+		{name: "update cancelled", funcs: failWrite(context.Canceled), want: writeUnknown, wantErr: context.Canceled},
+		{name: "update server timeout", funcs: failWrite(apierrors.NewServerTimeout(gr, "update", 1)),
+			want: writeUnknown, wantErrIs: apierrors.IsServerTimeout},
+		{name: "update internal error", funcs: failWrite(apierrors.NewInternalError(errors.New("etcd"))),
+			want: writeUnknown, wantErrIs: apierrors.IsInternalError},
+		{name: "update too many requests", funcs: failWrite(apierrors.NewTooManyRequests("slow down", 1)),
+			want: writeUnknown, wantErrIs: apierrors.IsTooManyRequests},
+		{
+			name: "conflict, re-read fails", funcs: failWrite(conflictErr("pcr")),
+			readFuncs: interceptor.Funcs{Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+				return apierrors.NewForbidden(gr, "pcr", errors.New("no"))
+			}},
+			want: writeUnknown, wantErrIs: apierrors.IsForbidden,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, rec, _, pcr := statusWriteFixture(t, tc.funcs, tc.readFuncs)
+			kind, reason := outcome.Issued, outcome.CertificateIssued
+			if tc.deny {
+				kind, reason = outcome.Denied, outcome.InvalidUserConfig
+			}
+			before := outcomeCount(kind, reason)
+
+			var got writeResult
+			var err error
+			if tc.deny {
+				te := denied(outcome.InvalidUserConfig, errors.New("not a verified identity")).(*terminalError)
+				got, err = r.recordTerminal(context.Background(), pcr, te)
+			} else {
+				got, err = r.recordIssued(context.Background(), pcr, stubCert())
+			}
+			if got != tc.want {
+				t.Errorf("result = %v, want %v", got, tc.want)
+			}
+			switch {
+			case tc.wantErrIs != nil && !tc.wantErrIs(err):
+				t.Errorf("error = %v, want the API error of the write", err)
+			case tc.wantErr != nil && !errors.Is(err, tc.wantErr):
+				t.Errorf("error = %v, want %v", err, tc.wantErr)
+			case tc.wantErr == nil && tc.wantErrIs == nil && err != nil:
+				t.Errorf("error = %v, want nil", err)
+			}
+			if n := drainEvents(rec); n != tc.wantEvents {
+				t.Errorf("events = %d, want %d", n, tc.wantEvents)
+			}
+			if delta := outcomeCount(kind, reason) - before; delta != float64(tc.wantEvents) {
+				t.Errorf("outcome metric moved by %v, want %d", delta, tc.wantEvents)
+			}
+			if tc.writes != nil && *tc.writes != tc.wantWrites {
+				t.Errorf("status writes = %d, want %d", *tc.writes, tc.wantWrites)
+			}
+		})
+	}
+}
+
+// A writeResult prints as its name, so a failed comparison is readable.
+func TestWriteResultString(t *testing.T) {
+	for result, want := range map[writeResult]string{
+		writePersisted:  "writePersisted",
+		writeSuperseded: "writeSuperseded",
+		writeGone:       "writeGone",
+		writeRejected:   "writeRejected",
+		writeUnknown:    "writeUnknown",
+		writeResult(42): "writeResult(42)",
+	} {
+		if got := result.String(); got != want {
+			t.Errorf("writeResult(%d).String() = %q, want %q", int(result), got, want)
+		}
+	}
+}
+
+// A 404 on the status write means the request is gone. The reconcile ends
+// without an error, so it is not requeued, and the requeue counter does not
+// move.
+func TestReconcileStatusWriteNotFoundDoesNotRequeue(t *testing.T) {
+	pcr, pod := livePCR(t, "pod-uid", "pod-uid")
+	pcr.Spec.SignerName = "example.org/signer"
+	pcr.UID = "request-uid"
+	gr := schema.GroupResource{Group: "certificates.k8s.io", Resource: "podcertificaterequests"}
+	cl := fake.NewClientBuilder().
+		WithScheme(newTestScheme(t)).
+		WithObjects(pcr, pod).
+		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
+		WithInterceptorFuncs(failWrite(apierrors.NewNotFound(gr, pcr.Name))).
+		Build()
+	stub := &stubSigner{name: pcr.Spec.SignerName, cert: stubCert()}
+	r := &PodCertificateRequestReconciler{
+		Client: cl, APIReader: cl, Log: logr.Discard(), Signer: stub, SignerName: stub.name, EventRecorder: events.NewFakeRecorder(10),
+	}
+	transientBefore := requeueCount(outcome.Transient)
+	caBefore := requeueCount(outcome.CASignerUnusable)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pcr)})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v, want nil: a request that is gone needs no requeue", err)
+	}
+	if res != (ctrl.Result{}) {
+		t.Errorf("Reconcile() result = %+v, want empty", res)
+	}
+	if !stub.called {
+		t.Fatal("signer did not run, so the status write was never reached")
+	}
+	if delta := requeueCount(outcome.Transient) - transientBefore; delta != 0 {
+		t.Errorf("transient requeue counter moved by %v, want 0", delta)
+	}
+	if delta := requeueCount(outcome.CASignerUnusable) - caBefore; delta != 0 {
+		t.Errorf("CA-unusable requeue counter moved by %v, want 0", delta)
+	}
+}
+
+// A write the API server committed but whose response reports a timeout may
+// or may not be in place as far as this reconcile can tell, so it is neither
+// announced nor counted, even though the store holds it.
+func TestStatusWriteCommitThenTimeout(t *testing.T) {
+	var writes int
+	r, rec, store, pcr := statusWriteFixture(t, writeThen(context.DeadlineExceeded, &writes), interceptor.Funcs{})
+	before := outcomeCount(outcome.Issued, outcome.CertificateIssued)
+
+	got, err := r.recordIssued(context.Background(), pcr, stubCert())
+	if got != writeUnknown {
+		t.Errorf("result = %v, want writeUnknown", got)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error = %v, want context.DeadlineExceeded", err)
+	}
+	if n := drainEvents(rec); n != 0 {
+		t.Errorf("events = %d, want 0", n)
+	}
+	if delta := outcomeCount(outcome.Issued, outcome.CertificateIssued) - before; delta != 0 {
+		t.Errorf("outcome metric moved by %v, want 0", delta)
+	}
+	stored := &certificatesv1.PodCertificateRequest{}
+	if err := store.Get(context.Background(), client.ObjectKeyFromObject(pcr), stored); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if terminalConditionType(&stored.Status) != certificatesv1.PodCertificateRequestConditionTypeIssued {
+		t.Errorf("stored conditions = %+v, want the committed Issued condition", stored.Status.Conditions)
+	}
+}
+
+// A client retry after a lost response can meet a 409 from this reconcile's
+// own committed write. The re-read then shows this reconcile's Issued chain,
+// so the write counts as persisted and is announced once, with no second
+// write.
+func TestStatusWriteOwnCommitSeenAsConflict(t *testing.T) {
+	var writes int
+	r, rec, _, pcr := statusWriteFixture(t, writeThen(conflictErr("pcr"), &writes), interceptor.Funcs{})
+	before := outcomeCount(outcome.Issued, outcome.CertificateIssued)
+
+	got, err := r.recordIssued(context.Background(), pcr, stubCert())
+	if err != nil {
+		t.Fatalf("error = %v, want nil", err)
+	}
+	if got != writePersisted {
+		t.Errorf("result = %v, want writePersisted", got)
+	}
+	if writes != 1 {
+		t.Errorf("status writes = %d, want 1", writes)
+	}
+	if n := drainEvents(rec); n != 1 {
+		t.Errorf("events = %d, want 1", n)
+	}
+	if delta := outcomeCount(outcome.Issued, outcome.CertificateIssued) - before; delta != 1 {
+		t.Errorf("outcome metric moved by %v, want 1", delta)
 	}
 }
 

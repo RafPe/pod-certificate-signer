@@ -2,6 +2,59 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "audit": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "pod_labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^*,\\s]*[*]?$"
+          }
+        },
+        "pod_annotations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^*,\\s]*[*]?$",
+            "not": { "const": "*" }
+          }
+        },
+        "max_copied_keys": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "max_value_length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "max_record_bytes": {
+          "type": "integer",
+          "minimum": 4096,
+          "maximum": 262144
+        },
+        "record_supplied_values": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled",
+        "pod_labels",
+        "pod_annotations",
+        "max_copied_keys",
+        "max_value_length",
+        "max_record_bytes",
+        "record_supplied_values"
+      ],
+      "additionalProperties": false
+    },
     "admissionPolicies": {
       "type": "object",
       "properties": {
