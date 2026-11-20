@@ -573,13 +573,13 @@ func failWrite(err error) interceptor.Funcs {
 
 // concurrentTerminal is a SubResourceUpdate interceptor whose first write
 // loses to another writer: it stores the terminal status that writer
-// recorded, then returns a conflict. Any later write goes through.
-func concurrentTerminal(winner certificatesv1.PodCertificateRequestStatus) interceptor.Funcs {
-	var writes int
+// recorded, then returns a conflict. Any later write goes through. writes
+// counts this reconcile's writes, not the other writer's.
+func concurrentTerminal(winner certificatesv1.PodCertificateRequestStatus, writes *int) interceptor.Funcs {
 	return interceptor.Funcs{
 		SubResourceUpdate: func(ctx context.Context, c client.Client, _ string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
-			writes++
-			if writes > 1 {
+			*writes++
+			if *writes > 1 {
 				return c.Status().Update(ctx, obj, opts...)
 			}
 			concurrent := &certificatesv1.PodCertificateRequest{}
@@ -660,70 +660,160 @@ func TestStatusWriteResult(t *testing.T) {
 	}
 	gr := schema.GroupResource{Group: "certificates.k8s.io", Resource: "podcertificaterequests"}
 	issued := certificatesv1.PodCertificateRequestConditionTypeIssued
-	denied := certificatesv1.PodCertificateRequestConditionTypeDenied
-	var deletedWrites, replacedWrites int
+	deniedType := certificatesv1.PodCertificateRequestConditionTypeDenied
+	var ownWrites, otherWrites, deniedWrites, deniedOntoIssuedWrites, deletedWrites, replacedWrites int
+	invalid := apierrors.NewInvalid(schema.GroupKind{Group: "certificates.k8s.io", Kind: "PodCertificateRequest"}, "pcr",
+		field.ErrorList{field.Required(field.NewPath("status", "certificateChain"), "")})
 
 	cases := []struct {
-		name       string
-		funcs      interceptor.Funcs
-		readFuncs  interceptor.Funcs
+		name      string
+		funcs     interceptor.Funcs
+		readFuncs interceptor.Funcs
+		// deny records a Denied outcome in place of the Issued one.
+		deny       bool
 		want       writeResult
 		wantErr    error
+		wantErrIs  func(error) bool
 		wantEvents int
+		// writes counts the status writes of this reconcile. When it is set,
+		// the row asserts it equals wantWrites.
+		writes     *int
+		wantWrites int
 	}{
-		{"update succeeds", interceptor.Funcs{}, interceptor.Funcs{}, writePersisted, nil, 1},
-		{"conflict, own Issued chain in place", concurrentTerminal(terminalStatus(issued, "pem-chain")), interceptor.Funcs{}, writePersisted, nil, 1},
-		{"conflict, another Issued chain in place", concurrentTerminal(terminalStatus(issued, "other-chain")), interceptor.Funcs{}, writeSuperseded, nil, 0},
-		{"conflict, Denied in place", concurrentTerminal(terminalStatus(denied, "")), interceptor.Funcs{}, writeSuperseded, nil, 0},
-		{"conflict, request deleted", replacePCR(nil, &deletedWrites), interceptor.Funcs{}, writeGone, nil, 0},
-		{"conflict, request replaced", replacePCR(replacement, &replacedWrites), interceptor.Funcs{}, writeGone, nil, 0},
-		{"update not found", failWrite(apierrors.NewNotFound(gr, "pcr")), interceptor.Funcs{}, writeGone, nil, 0},
-		{"update invalid", failWrite(apierrors.NewInvalid(schema.GroupKind{Group: "certificates.k8s.io", Kind: "PodCertificateRequest"}, "pcr", field.ErrorList{field.Required(field.NewPath("status", "certificateChain"), "")})), interceptor.Funcs{}, writeRejected, errAny, 0},
-		{"update forbidden", failWrite(apierrors.NewForbidden(gr, "pcr", errors.New("no"))), interceptor.Funcs{}, writeRejected, errAny, 0},
-		{"update bad request", failWrite(apierrors.NewBadRequest("bad")), interceptor.Funcs{}, writeRejected, errAny, 0},
-		{"update unauthorized", failWrite(apierrors.NewUnauthorized("who")), interceptor.Funcs{}, writeRejected, errAny, 0},
-		{"update timeout", failWrite(context.DeadlineExceeded), interceptor.Funcs{}, writeUnknown, context.DeadlineExceeded, 0},
-		{"update cancelled", failWrite(context.Canceled), interceptor.Funcs{}, writeUnknown, context.Canceled, 0},
-		{"update server timeout", failWrite(apierrors.NewServerTimeout(gr, "update", 1)), interceptor.Funcs{}, writeUnknown, errAny, 0},
-		{"update internal error", failWrite(apierrors.NewInternalError(errors.New("etcd"))), interceptor.Funcs{}, writeUnknown, errAny, 0},
-		{"update too many requests", failWrite(apierrors.NewTooManyRequests("slow down", 1)), interceptor.Funcs{}, writeUnknown, errAny, 0},
+		{name: "update succeeds", want: writePersisted, wantEvents: 1},
+		{name: "conflict, own Issued chain in place", funcs: concurrentTerminal(terminalStatus(issued, "pem-chain"), &ownWrites),
+			want: writePersisted, wantEvents: 1, writes: &ownWrites, wantWrites: 1},
+		{name: "conflict, another Issued chain in place", funcs: concurrentTerminal(terminalStatus(issued, "other-chain"), &otherWrites),
+			want: writeSuperseded, writes: &otherWrites, wantWrites: 1},
+		{name: "conflict, Denied in place", funcs: concurrentTerminal(terminalStatus(deniedType, ""), &deniedWrites),
+			want: writeSuperseded, writes: &deniedWrites, wantWrites: 1},
+		// The re-read chain equals the cleared chain of the denial, so only the
+		// Issued type of the desired status tells the two apart.
+		{name: "Denied, conflict, Issued in place", funcs: concurrentTerminal(terminalStatus(issued, ""), &deniedOntoIssuedWrites),
+			deny: true, want: writeSuperseded, writes: &deniedOntoIssuedWrites, wantWrites: 1},
+		{name: "conflict, request deleted", funcs: replacePCR(nil, &deletedWrites),
+			want: writeGone, writes: &deletedWrites, wantWrites: 1},
+		{name: "conflict, request replaced", funcs: replacePCR(replacement, &replacedWrites),
+			want: writeGone, writes: &replacedWrites, wantWrites: 1},
+		{name: "update not found", funcs: failWrite(apierrors.NewNotFound(gr, "pcr")), want: writeGone},
+		{name: "update invalid", funcs: failWrite(invalid), want: writeRejected, wantErrIs: apierrors.IsInvalid},
+		{name: "update forbidden", funcs: failWrite(apierrors.NewForbidden(gr, "pcr", errors.New("no"))),
+			want: writeRejected, wantErrIs: apierrors.IsForbidden},
+		{name: "update bad request", funcs: failWrite(apierrors.NewBadRequest("bad")),
+			want: writeRejected, wantErrIs: apierrors.IsBadRequest},
+		{name: "update unauthorized", funcs: failWrite(apierrors.NewUnauthorized("who")),
+			want: writeRejected, wantErrIs: apierrors.IsUnauthorized},
+		{name: "update timeout", funcs: failWrite(context.DeadlineExceeded), want: writeUnknown, wantErr: context.DeadlineExceeded},
+		{name: "update cancelled", funcs: failWrite(context.Canceled), want: writeUnknown, wantErr: context.Canceled},
+		{name: "update server timeout", funcs: failWrite(apierrors.NewServerTimeout(gr, "update", 1)),
+			want: writeUnknown, wantErrIs: apierrors.IsServerTimeout},
+		{name: "update internal error", funcs: failWrite(apierrors.NewInternalError(errors.New("etcd"))),
+			want: writeUnknown, wantErrIs: apierrors.IsInternalError},
+		{name: "update too many requests", funcs: failWrite(apierrors.NewTooManyRequests("slow down", 1)),
+			want: writeUnknown, wantErrIs: apierrors.IsTooManyRequests},
 		{
-			"conflict, re-read fails", failWrite(conflictErr("pcr")),
-			interceptor.Funcs{Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+			name: "conflict, re-read fails", funcs: failWrite(conflictErr("pcr")),
+			readFuncs: interceptor.Funcs{Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
 				return apierrors.NewForbidden(gr, "pcr", errors.New("no"))
 			}},
-			writeUnknown, errAny, 0,
+			want: writeUnknown, wantErrIs: apierrors.IsForbidden,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r, rec, _, pcr := statusWriteFixture(t, tc.funcs, tc.readFuncs)
-			before := outcomeCount(outcome.Issued, outcome.CertificateIssued)
+			kind, reason := outcome.Issued, outcome.CertificateIssued
+			if tc.deny {
+				kind, reason = outcome.Denied, outcome.InvalidUserConfig
+			}
+			before := outcomeCount(kind, reason)
 
-			got, err := r.recordIssued(context.Background(), pcr, stubCert())
+			var got writeResult
+			var err error
+			if tc.deny {
+				te := denied(outcome.InvalidUserConfig, errors.New("not a verified identity")).(*terminalError)
+				got, err = r.recordTerminal(context.Background(), pcr, te)
+			} else {
+				got, err = r.recordIssued(context.Background(), pcr, stubCert())
+			}
 			if got != tc.want {
 				t.Errorf("result = %v, want %v", got, tc.want)
 			}
 			switch {
-			case tc.wantErr == nil && err != nil:
-				t.Errorf("error = %v, want nil", err)
-			case tc.wantErr == errAny && err == nil:
-				t.Error("error = nil, want the write error")
-			case tc.wantErr != nil && tc.wantErr != errAny && !errors.Is(err, tc.wantErr):
+			case tc.wantErrIs != nil && !tc.wantErrIs(err):
+				t.Errorf("error = %v, want the API error of the write", err)
+			case tc.wantErr != nil && !errors.Is(err, tc.wantErr):
 				t.Errorf("error = %v, want %v", err, tc.wantErr)
+			case tc.wantErr == nil && tc.wantErrIs == nil && err != nil:
+				t.Errorf("error = %v, want nil", err)
 			}
 			if n := drainEvents(rec); n != tc.wantEvents {
 				t.Errorf("events = %d, want %d", n, tc.wantEvents)
 			}
-			if delta := outcomeCount(outcome.Issued, outcome.CertificateIssued) - before; delta != float64(tc.wantEvents) {
+			if delta := outcomeCount(kind, reason) - before; delta != float64(tc.wantEvents) {
 				t.Errorf("outcome metric moved by %v, want %d", delta, tc.wantEvents)
+			}
+			if tc.writes != nil && *tc.writes != tc.wantWrites {
+				t.Errorf("status writes = %d, want %d", *tc.writes, tc.wantWrites)
 			}
 		})
 	}
 }
 
-// errAny marks a case that expects some error without naming it.
-var errAny = errors.New("any error")
+// A writeResult prints as its name, so a failed comparison is readable.
+func TestWriteResultString(t *testing.T) {
+	for result, want := range map[writeResult]string{
+		writePersisted:  "writePersisted",
+		writeSuperseded: "writeSuperseded",
+		writeGone:       "writeGone",
+		writeRejected:   "writeRejected",
+		writeUnknown:    "writeUnknown",
+		writeResult(42): "writeResult(42)",
+	} {
+		if got := result.String(); got != want {
+			t.Errorf("writeResult(%d).String() = %q, want %q", int(result), got, want)
+		}
+	}
+}
+
+// A 404 on the status write means the request is gone. The reconcile ends
+// without an error, so it is not requeued, and the requeue counter does not
+// move.
+func TestReconcileStatusWriteNotFoundDoesNotRequeue(t *testing.T) {
+	pcr, pod := livePCR(t, "pod-uid", "pod-uid")
+	pcr.Spec.SignerName = "example.org/signer"
+	pcr.UID = "request-uid"
+	gr := schema.GroupResource{Group: "certificates.k8s.io", Resource: "podcertificaterequests"}
+	cl := fake.NewClientBuilder().
+		WithScheme(newTestScheme(t)).
+		WithObjects(pcr, pod).
+		WithStatusSubresource(&certificatesv1.PodCertificateRequest{}).
+		WithInterceptorFuncs(failWrite(apierrors.NewNotFound(gr, pcr.Name))).
+		Build()
+	stub := &stubSigner{name: pcr.Spec.SignerName, cert: stubCert()}
+	r := &PodCertificateRequestReconciler{
+		Client: cl, APIReader: cl, Log: logr.Discard(), Signer: stub, SignerName: stub.name, EventRecorder: events.NewFakeRecorder(10),
+	}
+	transientBefore := requeueCount(outcome.Transient)
+	caBefore := requeueCount(outcome.CASignerUnusable)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pcr)})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v, want nil: a request that is gone needs no requeue", err)
+	}
+	if res != (ctrl.Result{}) {
+		t.Errorf("Reconcile() result = %+v, want empty", res)
+	}
+	if !stub.called {
+		t.Fatal("signer did not run, so the status write was never reached")
+	}
+	if delta := requeueCount(outcome.Transient) - transientBefore; delta != 0 {
+		t.Errorf("transient requeue counter moved by %v, want 0", delta)
+	}
+	if delta := requeueCount(outcome.CASignerUnusable) - caBefore; delta != 0 {
+		t.Errorf("CA-unusable requeue counter moved by %v, want 0", delta)
+	}
+}
 
 // A write the API server committed but whose response reports a timeout may
 // or may not be in place as far as this reconcile can tell, so it is neither

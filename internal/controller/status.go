@@ -69,6 +69,25 @@ const (
 	writeUnknown                       // the write may or may not be committed
 )
 
+// String returns the name of the result, so a log line or a test failure
+// shows writeGone rather than 2.
+func (w writeResult) String() string {
+	switch w {
+	case writePersisted:
+		return "writePersisted"
+	case writeSuperseded:
+		return "writeSuperseded"
+	case writeGone:
+		return "writeGone"
+	case writeRejected:
+		return "writeRejected"
+	case writeUnknown:
+		return "writeUnknown"
+	default:
+		return fmt.Sprintf("writeResult(%d)", int(w))
+	}
+}
+
 // recordTerminal records the Denied or Failed condition a *terminalError
 // carries. The certificate fields are cleared, since kube-apiserver requires
 // them to be empty when denying or failing a PodCertificateRequest. It reports

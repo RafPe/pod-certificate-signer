@@ -170,6 +170,7 @@ func TestAuditIssuedEmitsSignedThenPublished(t *testing.T) {
 // requeues.
 func TestAuditFollowUpByWriteResult(t *testing.T) {
 	gr := schema.GroupResource{Group: "certificates.k8s.io", Resource: "podcertificaterequests"}
+	var supersededWrites int
 	cases := []struct {
 		name    string
 		funcs   interceptor.Funcs
@@ -177,7 +178,7 @@ func TestAuditFollowUpByWriteResult(t *testing.T) {
 		wantErr bool
 	}{
 		{"persisted", interceptor.Funcs{}, publishedPair, false},
-		{"superseded", concurrentTerminal(terminalStatus(certificatesv1.PodCertificateRequestConditionTypeDenied, "")),
+		{"superseded", concurrentTerminal(terminalStatus(certificatesv1.PodCertificateRequestConditionTypeDenied, ""), &supersededWrites),
 			[2]string{string(audit.EventSuperseded), audit.ReasonOtherWriterWon}, false},
 		{"gone", failWrite(apierrors.NewNotFound(gr, "pcr")),
 			[2]string{string(audit.EventSuperseded), audit.ReasonRequestGone}, false},
@@ -305,12 +306,12 @@ func TestAuditDeniedAndFailed(t *testing.T) {
 // reconcile lost the race, the request is gone, or the write is not known to
 // be committed.
 func TestAuditTerminalLostRaceEmitsNothing(t *testing.T) {
-	var writes int
+	var writes, supersededWrites int
 	cases := []struct {
 		name  string
 		funcs interceptor.Funcs
 	}{
-		{"superseded", concurrentTerminal(terminalStatus(certificatesv1.PodCertificateRequestConditionTypeFailed, ""))},
+		{"superseded", concurrentTerminal(terminalStatus(certificatesv1.PodCertificateRequestConditionTypeFailed, ""), &supersededWrites)},
 		{"gone", replacePCR(nil, &writes)},
 		{"rejected", failWrite(apierrors.NewBadRequest("bad"))},
 		{"unknown", failWrite(context.DeadlineExceeded)},
