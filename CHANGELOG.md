@@ -5,6 +5,15 @@ request is prepared. This file follows Keep a Changelog and Semantic Versioning.
 
 <!-- next-release -->
 
+## [3.2.0] - 2026-11-21
+
+- The signer writes a best-effort issuance audit record, on by default (`audit.enabled`), as one JSON line on stdout for each signing attempt and each terminal outcome, described in `docs/auditing.md`.
+- The Issued condition message and its Kubernetes Event now carry the certificate serial and SHA-256 fingerprint, in the form `certificate issued: serial=<hex> fingerprint=X509SHA256=<hex>`.
+- An Issued status write that finds its own certificate after a conflict is now reported as issued with its Kubernetes Event, metric and log line, where before the reconcile logged that another writer recorded a terminal outcome first, emitted no Kubernetes Event and counted no outcome.
+- A status write that conflicts because the PodCertificateRequest was deleted, or replaced by a new request with the same name, no longer applies the old request's outcome to the new request and no longer requeues: the reconcile discards the outcome and logs the UIDs.
+- A status write that returns 404 because the PodCertificateRequest was deleted no longer requeues the request or counts a `Transient` requeue: the reconcile discards the outcome and logs the UID.
+- The manager binary now builds with google.golang.org/grpc v1.83.2 (GHSA-2v4p-qf9q-27wj) and go.opentelemetry.io/otel/sdk and go.opentelemetry.io/otel/trace v1.47.0 (GHSA-q7gw-24fr-5p69), and the build tools module uses oras.land/oras-go/v2 v2.6.2 (GHSA-m37j-52j7-pjw7, GHSA-fxhp-mv3v-67qp, GHSA-jxpm-75mh-9fp7, GHSA-h7vf-4x9w-h99v, GHSA-vh4v-2xq2-g5cg, GHSA-8xwf-rjm4-xvhv, GHSA-xf85-363p-868w) and go.opentelemetry.io/otel/sdk v1.47.0 (GHSA-q7gw-24fr-5p69, GHSA-8wmf-6v46-5gfg).
+
 ## [3.1.0] - 2026-11-11
 
 - A new `--allow-pod-annotations` flag (Helm `signer.allow_pod_annotations`) gates the deprecated fallback that reads certificate configuration from the pod's own annotations. It defaults to on until the fallback is removed in 4.0.0; operators who have moved every workload to `spec.unverifiedUserAnnotations` can set it to false now, so pod annotations stop being a second requester-controlled input.
