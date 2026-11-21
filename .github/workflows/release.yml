@@ -82,10 +82,13 @@ jobs:
     name: "release:e2e"
     needs: verify
     # A called workflow cannot get more permissions than its caller grants.
-    # test-e2e.yml declares statuses: write for gate:e2e, so the call fails
-    # at start without it, even though a called run posts no status.
+    # test-e2e.yml declares pull-requests: read and statuses: write for
+    # gate:e2e, so the call fails at start without them, even though a called
+    # run reads no labels and posts no status. GitHub checks this before any
+    # job condition, so a missing permission fails every Release run.
     permissions:
       contents: read
+      pull-requests: read
       statuses: write
     uses: ./.github/workflows/test-e2e.yml
     with:
