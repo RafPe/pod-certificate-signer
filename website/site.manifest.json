@@ -1,0 +1,77 @@
+{
+  "groups": [
+    "Guides",
+    "Interactive",
+    "Project"
+  ],
+  "pages": [
+    {
+      "source": "docs/getting-started.md",
+      "route": "getting-started",
+      "group": "Guides",
+      "label": "Getting started",
+      "order": 1
+    },
+    {
+      "source": "docs/architecture.md",
+      "route": "architecture",
+      "group": "Guides",
+      "label": "Architecture",
+      "order": 2
+    },
+    {
+      "source": "docs/configuration.md",
+      "route": "configuration",
+      "group": "Guides",
+      "label": "Configuration",
+      "order": 3
+    },
+    {
+      "source": "docs/operations.md",
+      "route": "operations",
+      "group": "Guides",
+      "label": "Operations",
+      "order": 4
+    },
+    {
+      "source": "docs/auditing.md",
+      "route": "auditing",
+      "group": "Guides",
+      "label": "Auditing",
+      "order": 5
+    },
+    {
+      "source": "CONTRIBUTING.md",
+      "route": "project/contributing",
+      "group": "Project",
+      "label": "Contributing",
+      "order": 2
+    },
+    {
+      "source": "docs/releasing.md",
+      "route": "project/releasing",
+      "group": "Project",
+      "label": "Releasing",
+      "order": 3
+    },
+    {
+      "source": "docs/artifact-hub.md",
+      "route": "project/artifact-hub",
+      "group": "Project",
+      "label": "Artifact Hub",
+      "order": 4
+    },
+    {
+      "route": "interactive/ca-rotation",
+      "label": "CA rotation",
+      "group": "Interactive",
+      "order": 2
+    },
+    {
+      "route": "interactive/audit-trail",
+      "label": "Audit trail",
+      "group": "Interactive",
+      "order": 1
+    }
+  ]
+}

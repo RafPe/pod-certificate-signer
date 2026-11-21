@@ -16,3 +16,5 @@ bin/
 
 # The article series: text and images, never part of an image build.
 articles/
+
+website/

@@ -1,0 +1,29 @@
+---
+// Starlight `SiteTitle` override: the default title plus the top-level
+// navigation the landing page design calls for. Hidden on narrow screens,
+// where Starlight's mobile menu exposes the full sidebar instead.
+import Default from '@astrojs/starlight/components/SiteTitle.astro';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const here = Astro.url.pathname;
+const links = [
+  { label: 'Get started', path: 'getting-started' },
+  { label: 'Architecture', path: 'architecture' },
+  { label: 'Auditing', path: 'auditing' },
+  { label: 'Audit trail', path: 'interactive/audit-trail' },
+  { label: 'CA rotation', path: 'interactive/ca-rotation' },
+].map(({label, path}) => ({ label, href: `${base}/${path}/` }));
+---
+<Default />
+<nav class="pcs-topnav sl-hidden lg:sl-flex" aria-label="Site sections">
+  {links.map((l) => (
+    <a href={l.href} aria-current={here === l.href ? 'page' : undefined}>{l.label}</a>
+  ))}
+</nav>
+
+<style>
+  .pcs-topnav { align-items: center; gap: 0.25rem; margin-inline-start: 1.5rem; font-size: 0.9rem; font-weight: 520; white-space: nowrap; }
+  .pcs-topnav a { color: var(--sl-color-gray-2); text-decoration: none; padding: 0.35rem 0.7rem; border-radius: 6px; transition: background-color .15s, color .15s; }
+  .pcs-topnav a:hover { color: var(--sl-color-white); background: var(--pcs-bg-2); }
+  .pcs-topnav a[aria-current="page"] { color: var(--pcs-blue-ink); background: var(--pcs-blue-soft); font-weight: 600; }
+</style>

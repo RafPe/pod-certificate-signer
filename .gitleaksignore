@@ -1,0 +1,2 @@
+# Example PEM headers in the detector test before it moved to test/hygiene/.
+0beefa9f1f682c6822645f8ce0dd4b5bb471fc79:internal/hygiene/hygiene_test.go:private-key:13

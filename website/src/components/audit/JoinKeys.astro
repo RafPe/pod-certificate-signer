@@ -1,0 +1,122 @@
+---
+import './audit.css';
+
+const guide = import.meta.env.BASE_URL.replace(/\/$/, '') + '/auditing/#join-keys';
+
+const places = [
+  { name: 'Audit record', where: 'stdout of the signer', keeps: 'As long as your log backend keeps it' },
+  { name: 'Operational log', where: 'stderr, issued certificate', keeps: 'As long as your log backend keeps it' },
+  { name: 'Condition and Kubernetes Event', where: 'PodCertificateRequest', keeps: 'Request deleted 15 min after creation (checked on Kubernetes v1.37). Event expires after 1 h by default.' },
+  { name: 'API server audit event', where: 'podcertificaterequests/status', keeps: 'Only at level RequestResponse, if your policy and export keep it' },
+];
+
+// One row per key. A null cell means the place does not carry the key.
+const keys = [
+  {
+    id: 'serial', label: 'Serial',
+    cells: ['certificate.serialHex', 'serial', 'In the message', 'In the message'],
+    note: 'A serial is unique only within one issuer. Find the signed record by certificate.serialHex and issuer.fingerprint. Only signed records carry issuer. Convert a serial from another source first: lowercase hex, no colons, no leading zeros.',
+  },
+  {
+    id: 'fingerprint', label: 'Fingerprint',
+    cells: ['certificate.fingerprint', 'fingerprint', 'In the message', 'In the message, and as the SHA-256 of the first chain certificate'],
+    note: 'The fingerprint matches every record of one certificate. In the API server audit event, only the SHA-256 of the first certificate in the chain proves which certificate was published. The message is a convenience for search.',
+  },
+  {
+    id: 'request', label: 'Request UID',
+    cells: ['request.uid', null, 'metadata.uid', 'responseObject.metadata.uid'],
+    note: 'Group the records by request.uid. Use the namespace and name only as a search index: a new request can reuse a name.',
+  },
+  {
+    id: 'pod', label: 'Pod UID',
+    cells: ['workload.pod.uid', null, 'spec.podUID', 'responseObject.spec.podUID'],
+    note: 'The pod UID names one pod. The next replica can use the same pod name, so the pod name is not a join key.',
+  },
+  {
+    id: 'owner', label: 'Owner',
+    cells: ['workload.owner', null, null, null],
+    note: 'The direct controller owner only. After a ReplicaSet or Job is pruned, the owner name no longer resolves. For a StatefulSet or DaemonSet pod, it does not name a revision. Copy revision labels, such as pod-template-hash, as hints.',
+  },
+];
+
+const rules = keys.map(({ id }) => {
+  const sel = `#audit-keys:has(input[value="${id}"]:checked)`;
+  return `${sel} tr[data-key="${id}"] td{background:var(--pcs-blue-soft)}` +
+    `${sel} tr[data-key="${id}"] th{color:var(--pcs-blue-ink);box-shadow:inset 3px 0 0 var(--pcs-blue)}` +
+    `${sel} .panel[data-id="${id}"]{display:block}`;
+}).join('\n');
+---
+<section class="pcs-audit not-content" id="audit-keys" aria-labelledby="audit-keys-title">
+  <header>
+    <p class="eyebrow">Join keys</p>
+    <h3 class="title" id="audit-keys-title">The same keys in every place that records an issuance</h3>
+    <p class="hint">A service logs a serial or a fingerprint. Hours later the pod is gone. Pick a key to see where it is and how to use it. The certificate subject and the pod name are not join keys: a later pod can have the same ones.</p>
+  </header>
+
+  <fieldset class="chips">
+    <legend class="sr-only">Join key</legend>
+    {keys.map((k, i) => (
+      <label class="chip" data-tone="focus">
+        <input class="sr-only" type="radio" name="audit-key" value={k.id} checked={i === 0} />
+        <span>{k.label}</span>
+      </label>
+    ))}
+  </fieldset>
+
+  <div class="matrix-wrap" tabindex="0" aria-label="Join keys by place">
+    <table class="matrix">
+      <thead>
+        <tr>
+          <td></td>
+          {places.map((p) => <th scope="col"><span class="pname">{p.name}</span><span class="pwhere">{p.where}</span></th>)}
+        </tr>
+      </thead>
+      <tbody>
+        {keys.map((k) => (
+          <tr data-key={k.id}>
+            <th scope="row">{k.label}</th>
+            {k.cells.map((c) => c
+              ? <td>{/^[a-zA-Z.]+$/.test(c) ? <code>{c}</code> : c}</td>
+              : <td class="none"><span aria-label="Not recorded">—</span></td>)}
+          </tr>
+        ))}
+        <tr class="keeps">
+          <th scope="row">Kept</th>
+          {places.map((p) => <td>{p.keeps}</td>)}
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panels" aria-live="polite">
+    {keys.map((k) => (
+      <article class="panel" data-id={k.id} data-tone="focus">
+        <h4>{k.label}</h4>
+        <p>{k.note}</p>
+      </article>
+    ))}
+    <p class="more">The operational log carries <code>serial</code> and <code>fingerprint</code> only after the Issued status write persisted. <a href={guide}>Join keys in the Auditing guide →</a></p>
+  </div>
+  <style set:html={rules}></style>
+</section>
+
+<style>
+  .matrix-wrap { overflow-x: auto; margin: 1rem 1.5rem 0; border: 1px solid var(--pcs-line); border-radius: var(--pcs-radius); }
+  .matrix-wrap:focus-visible { outline: 2px solid var(--pcs-blue); outline-offset: 2px; }
+  .matrix { width: 100%; min-width: 46rem; border-collapse: collapse; font-size: 0.875rem; line-height: 1.5; }
+  .matrix th, .matrix td { padding: 0.6rem 0.8rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--pcs-line); transition: background-color .15s; }
+  .matrix thead th { background: var(--pcs-bg-2); }
+  .matrix thead td { background: var(--pcs-bg-2); }
+  .pname { display: block; color: var(--pcs-ink); font-weight: 620; }
+  .pwhere { display: block; font-family: var(--pcs-font-mono); font-size: 0.72rem; color: var(--pcs-muted); font-weight: 400; }
+  .matrix tbody th { color: var(--pcs-ink); font-weight: 620; white-space: nowrap; }
+  .matrix td { color: var(--pcs-ink-2); }
+  .matrix code { font-family: var(--pcs-font-mono); font-size: 0.8rem; color: var(--pcs-ink); white-space: nowrap; }
+  .matrix .none { color: var(--pcs-line-2); text-align: center; }
+  .matrix .keeps td, .matrix .keeps th { border-bottom: 0; font-size: 0.8rem; color: var(--pcs-muted); background: var(--pcs-bg-2); }
+  .panels { padding-top: 1rem !important; }
+  .more { margin: 0.9rem 0 0; font-size: 0.95rem; color: var(--pcs-muted); }
+  .more code { font-family: var(--pcs-font-mono); font-size: 0.85em; color: var(--pcs-ink); }
+  .more a { font-weight: 600; }
+  @media (max-width: 40rem) { .matrix-wrap { margin-inline: 1rem; } }
+</style>

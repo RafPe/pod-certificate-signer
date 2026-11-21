@@ -1,0 +1,152 @@
+name: Documentation
+
+# Builds the website (landing page + docs) with Astro Starlight. Pull requests
+# build it, run the quality gates and upload the result as a workflow artifact
+# for review. Pushes to main also deploy it to GitHub Pages.
+#
+# Repository settings this workflow relies on (recorded in docs/releasing.md):
+#   - Settings > Pages > Source: GitHub Actions
+#   - Settings > Environments > github-pages: deployment branch rule "main"
+on:
+  push:
+    branches:
+      - 'main'
+    paths:
+      - 'docs/**'
+      - 'website/**'
+      - 'CONTRIBUTING.md'
+      - '.github/workflows/pages.yaml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'website/**'
+      - 'CONTRIBUTING.md'
+      - '.github/workflows/pages.yaml'
+  # Rebuild after a release so the version picker picks up the new tag.
+  # The filter matches the head branch of the Release run: release/next for a
+  # merged release PR, main for a manual recovery run.
+  workflow_run:
+    workflows: ['Release']
+    types: [completed]
+    branches: ['release/next', 'main']
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # Cancel superseded pull request builds. Never cancel a deploy of main.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: "site:build"
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the version picker reads tags and Starlight reads
+          # last-updated dates from git.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      # Resolves the site origin and base path (/pod-certificate-signer, or /
+      # once a custom domain is configured) so the build never hard-codes either.
+      - id: pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+        working-directory: website
+
+      - name: Unit tests (staging, sidebar, version, archive)
+        run: npm test
+        working-directory: website
+
+      - name: Build
+        run: npm run build -- --site "${PAGES_ORIGIN}" --base "${PAGES_BASE}"
+        working-directory: website
+        env:
+          PAGES_ORIGIN: ${{ steps.pages.outputs.origin }}
+          PAGES_BASE: ${{ steps.pages.outputs.base_path }}
+
+      - name: Build tagged documentation archives
+        run: npm run archive -- --site "${PAGES_ORIGIN}" --base "${PAGES_BASE}"
+        working-directory: website
+        env:
+          PAGES_ORIGIN: ${{ steps.pages.outputs.origin }}
+          PAGES_BASE: ${{ steps.pages.outputs.base_path }}
+
+      - name: Check built site (no third-party hosts, base path, reduced motion)
+        run: node scripts/check-dist.mjs --base "${PAGES_BASE}"
+        working-directory: website
+        env:
+          PAGES_BASE: ${{ steps.pages.outputs.base_path }}
+
+      # The site is served under the base path, so stage it under that folder
+      # (website/.site-root, gitignored) for the offline link check and for
+      # Lighthouse to resolve root-absolute links and assets.
+      - name: Stage site under its base path
+        run: |
+          set -euo pipefail
+          rm -rf website/.site-root
+          mkdir -p "website/.site-root${PAGES_BASE}"
+          cp -R website/dist/. "website/.site-root${PAGES_BASE}/"
+        env:
+          PAGES_BASE: ${{ steps.pages.outputs.base_path }}
+
+      - name: Link and anchor check of the built site
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: --offline --include-fragments --fallback-extensions html --index-files index.html --root-dir ./website/.site-root --no-progress 'website/.site-root/**/*.html'
+          fail: true
+          failIfEmpty: true
+
+      - name: Lighthouse (accessibility, best practices, SEO)
+        uses: treosh/lighthouse-ci-action@3e7e23fb74242897f95c0ba9cabad3d0227b9b18 # 12.6.2
+        with:
+          configPath: website/lighthouserc.json
+          uploadArtifacts: true
+          temporaryPublicStorage: false
+
+      - name: Upload site for review (pull requests)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: site
+          path: website/dist
+          retention-days: 7
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: website/dist
+
+  deploy:
+    name: "site:deploy"
+    # Only main deploys. The github-pages environment rule enforces the same
+    # outside the repository.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

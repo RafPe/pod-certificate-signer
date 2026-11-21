@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxwYXRoIGZpbGw9IiMxMTY4YmQiIGQ9Ik0wIDBoOHY4SDB6Ii8+PC9zdmc+">
+<title>Workload certificate volume</title>
+<style>
+:root { color-scheme: light; --paper:#ffffff; --ink:#142639; --accent:#1168bd; --tint:#85bbf0; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--paper); color:var(--ink); font-family:Geist,system-ui,sans-serif; }
+figure { margin:0; min-width:0; max-width:100%; }
+.diagram-container { width:100%; overflow-x:auto; }
+.diagram-container:focus-visible, a:focus-visible { outline:3px solid var(--accent); outline-offset:-3px; }
+svg { width:100%; min-width:720px; display:block; font-family:Geist,system-ui,sans-serif; }
+.scope { stroke-width:1; }
+.pod { fill:#fafcfe; stroke:#b7c7d8; }
+.container { fill:#f4f8fc; stroke:#8aabc9; }
+.volume { fill:#eaf3fc; stroke:var(--accent); }
+.file { fill:var(--paper); stroke:#8aabc9; }
+.name { fill:var(--ink); font-size:12px; font-weight:600; }
+.heading { fill:var(--ink); font-size:14px; font-weight:600; }
+.code { font-family:"Geist Mono",ui-monospace,monospace; }
+.note { fill:#345675; font-size:11px; }
+.source { fill:var(--accent); font-size:11px; }
+.filename { fill:var(--ink); font-size:12px; }
+figcaption { font-size:12px; line-height:1.5; padding:0 20px 16px; }
+a { color:var(--accent); text-underline-offset:3px; }
+@media print { .diagram-container { overflow-x:visible; } svg { min-width:0; } }
+</style>
+</head>
+<body>
+<figure>
+<div class="diagram-container" tabindex="0" role="region" aria-label="Workload volume diagram. Scroll horizontally on narrow screens.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 400" role="img" aria-labelledby="workload-volume-title workload-volume-desc">
+<title id="workload-volume-title">Workload certificate volume</title>
+<desc id="workload-volume-desc">The sleeper container in pod pcs-example-workload mounts the x509 projected volume at /var/run/x509, with a credential bundle and a CA bundle from two sources.</desc>
+<rect class="scope pod" x="40" y="40" width="640" height="280" rx="8"/>
+<text class="heading" x="56" y="64">Pod: pcs-example-workload</text>
+<text class="note code" x="512" y="64">namespace: default</text>
+<rect class="scope container" x="64" y="80" width="592" height="216" rx="8"/>
+<text class="name" x="80" y="104">Container: sleeper</text>
+<rect class="scope volume" x="88" y="120" width="544" height="152" rx="8"/>
+<text class="name code" x="104" y="144">/var/run/x509</text>
+<text class="note" x="440" y="144">Volume: x509 · read-only</text>
+<rect class="file" x="112" y="160" width="240" height="88" rx="8"/>
+<text class="source code" x="128" y="180">podCertificate</text>
+<text class="filename code" x="128" y="204">credentialbundle.pem</text>
+<text class="note" x="128" y="228">Private key + issued certificate chain</text>
+<rect class="file" x="376" y="160" width="232" height="88" rx="8"/>
+<text class="source code" x="392" y="180">clusterTrustBundle</text>
+<text class="filename code" x="392" y="204">ca.crt</text>
+<text class="note" x="392" y="228">CA bundle to verify peer certificates</text>
+<line x1="40" y1="340" x2="680" y2="340" stroke="#b7c7d8"/>
+<text class="note" x="40" y="364">Both sources select signer</text>
+<text class="source code" x="204" y="364">example.org/signer</text>
+<text class="note" x="40" y="384">Nested boxes show the pod, container, mount, and projected files.</text>
+</svg>
+</div>
+<figcaption><code>examples/workload-pod.yaml</code></figcaption>
+</figure>
+</body>
+</html>

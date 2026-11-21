@@ -74,7 +74,7 @@ For CA options, a workload that requests a certificate, and the verification ste
 At the same time, the controller keeps the `ClusterTrustBundle` of the signer up to date.
 Workloads use this bundle to verify their peers.
 
-See [docs/architecture.md](./docs/architecture.md) for the full C4 model (system context, containers, components) and the request-flow sequence.
+See [docs/architecture.md](./docs/architecture.md) for the full C4 model (system context, containers, components) and the certificate issuance sequence.
 
 ## Features
 
@@ -117,6 +117,19 @@ admissionPolicies:
 For rollout and scope details, see [configuration](./docs/configuration.md#preventive-dns-san-admission-policy).
 
 ## Documentation
+
+The documentation site includes searchable guides and diagrams for certificate issuance, workload volumes, and CA rotation.
+To preview it locally, run the following commands with Node.js 22.23.4 or later.
+
+```sh
+cd website
+npm ci
+npm run dev
+```
+
+Open the local URL printed by Astro with the path `/pod-certificate-signer/`.
+The documentation workflow builds the site for pull requests and deploys `main` to GitHub Pages.
+Select **GitHub Actions** as the publishing source in the repository’s Pages settings.
 
 | Topic | Where |
 | --- | --- |

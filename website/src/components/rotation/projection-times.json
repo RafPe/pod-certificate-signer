@@ -1,0 +1,14 @@
+[
+  {
+    "label": "Without fix",
+    "version": "v1.37.0",
+    "signerName": 87,
+    "name": 300
+  },
+  {
+    "label": "With fix",
+    "version": "v1.38.0-beta.0",
+    "name": 70,
+    "signerName": 70
+  }
+]

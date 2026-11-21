@@ -1,0 +1,108 @@
+---
+import './audit.css';
+
+const guide = import.meta.env.BASE_URL.replace(/\/$/, '') + '/auditing/#the-second-trail';
+const W = 920, H = 236;
+const checks = [
+  ['stage', 'is ResponseComplete'],
+  ['responseStatus.code', 'is a 2xx code'],
+  ['objectRef.subresource', 'is status'],
+  ['requestURI', 'does not contain dryRun='],
+  ['responseObject.status.conditions', 'has the condition type Issued'],
+];
+---
+<section class="pcs-audit not-content" id="audit-join" aria-labelledby="audit-join-title">
+  <header>
+    <p class="eyebrow">The second trail</p>
+    <h3 class="title" id="audit-join-title">Join a record to the API server audit log</h3>
+    <p class="hint">Use it to check the status write behind a <code>published</code> record, an <code>unknown</code> record or a missing record. Also match on the cluster.</p>
+  </header>
+
+  <div class="diagram">
+    <svg viewBox={`0 0 ${W} ${H}`} style="min-width:720px" role="img" aria-labelledby="audit-join-svg-title audit-join-svg-desc">
+      <title id="audit-join-svg-title">Joining an audit record to an API server audit event</title>
+      <desc id="audit-join-svg-desc">request.uid matches responseObject.metadata.uid. certificate.fingerprint matches the SHA-256 of the DER of the first certificate in responseObject.status.certificateChain.</desc>
+      <defs>
+        <marker id="join-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="context-stroke" />
+        </marker>
+      </defs>
+
+      <!-- connectors first, so boxes sit on top -->
+      <path class="edge" d="M596 116 H326" marker-start="url(#join-arrow)" marker-end="url(#join-arrow)" />
+      <path class="edge hot" d="M596 168 H534" marker-end="url(#join-arrow)" />
+      <path class="edge hot" d="M400 168 H326" marker-end="url(#join-arrow)" />
+      <rect class="mask" x="436" y="94" width="48" height="14" />
+      <text class="label-t mono" x="460" y="105" text-anchor="middle">EQUAL</text>
+      <rect class="mask" x="338" y="146" width="48" height="14" />
+      <text class="label-t mono" x="362" y="157" text-anchor="middle">EQUAL</text>
+
+      <!-- left: the audit record -->
+      <g data-tone="focus">
+        <rect class="mask" x="24" y="40" width="300" height="172" rx="8" />
+        <rect x="24" y="40" width="300" height="172" rx="8" style="fill:var(--pcs-bg-2);stroke:var(--pcs-line-2)" />
+        <text class="eyebrow-t mono" x="40" y="62">STDOUT · SIGNER CONTAINER</text>
+        <text class="name" x="40" y="82">Issuance audit record</text>
+        <rect x="36" y="96" width="276" height="40" rx="4" style="fill:var(--pcs-bg);stroke:var(--pcs-line)" />
+        <text class="sub mono" x="48" y="120" style="fill:var(--pcs-ink)">request.uid</text>
+        <rect x="36" y="148" width="276" height="40" rx="4" style="fill:var(--pcs-blue-soft);stroke:var(--pcs-blue)" />
+        <text class="sub mono" x="48" y="172" style="fill:var(--pcs-blue-ink)">certificate.fingerprint</text>
+      </g>
+
+      <!-- middle: the hash step -->
+      <rect class="mask" x="400" y="148" width="132" height="40" rx="6" />
+      <rect x="400" y="148" width="132" height="40" rx="6" style="fill:var(--pcs-bg);stroke:var(--pcs-blue)" />
+      <text class="name mono" x="466" y="166" text-anchor="middle" style="font-size:12px">SHA-256</text>
+      <text class="sub mono" x="466" y="181" text-anchor="middle" style="font-size:10px">of the first DER</text>
+
+      <!-- right: the API server audit event -->
+      <g>
+        <rect class="mask" x="596" y="40" width="300" height="172" rx="8" />
+        <rect x="596" y="40" width="300" height="172" rx="8" style="fill:var(--pcs-bg-2);stroke:var(--pcs-line-2)" />
+        <text class="eyebrow-t mono" x="612" y="62">LEVEL REQUESTRESPONSE</text>
+        <text class="name" x="612" y="82">API server audit event</text>
+        <rect x="608" y="96" width="276" height="40" rx="4" style="fill:var(--pcs-bg);stroke:var(--pcs-line)" />
+        <text class="sub mono" x="620" y="120" style="fill:var(--pcs-ink)">responseObject.metadata.uid</text>
+        <rect x="608" y="148" width="276" height="40" rx="4" style="fill:var(--pcs-bg);stroke:var(--pcs-line)" />
+        <text class="sub mono" x="620" y="166" style="font-size:10px">responseObject.status</text>
+        <text class="sub mono" x="620" y="180" style="font-size:10px">.certificateChain · first PEM block</text>
+      </g>
+    </svg>
+  </div>
+
+  <div class="join-notes">
+    <div>
+      <h4>Accept only an event that passes all of these tests</h4>
+      <ol class="checks">
+        {checks.map(([field, test]) => <li><code>{field}</code> {test}</li>)}
+      </ol>
+    </div>
+    <div>
+      <h4>Keep in mind</h4>
+      <ul>
+        <li>Use the namespace and name only as a search index. A 409 also writes an audit event, and a new request can reuse a name.</li>
+        <li>A missing or incomplete audit event means <strong>unknown</strong>, not “not published”. Audit export can be off, filtered or truncated.</li>
+        <li>The Issued condition message carries the serial and fingerprint as text, for search. Only the hash of the first chain certificate proves which certificate was published.</li>
+      </ul>
+      <p class="more"><a href={guide}>Audit policy rule and the hash command →</a></p>
+    </div>
+  </div>
+</section>
+
+<style>
+  .join-notes {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem 2rem;
+    padding: 0.75rem 1.5rem 1.5rem;
+    font-size: 0.95rem; line-height: 1.6;
+  }
+  .join-notes h4 { margin: 0 0 0.6rem; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--pcs-muted); font-weight: 600; }
+  .join-notes ol, .join-notes ul { margin: 0; padding-left: 1.2rem; }
+  .join-notes li + li { margin-top: 0.4rem; }
+  .join-notes code { font-family: var(--pcs-font-mono); font-size: 0.82rem; color: var(--pcs-ink); }
+  .checks li::marker { color: var(--pcs-blue); font-weight: 600; }
+  .more { margin: 0.9rem 0 0; }
+  .more a { font-weight: 600; }
+  @media (max-width: 48rem) {
+    .join-notes { grid-template-columns: 1fr; padding-inline: 1rem; }
+  }
+</style>

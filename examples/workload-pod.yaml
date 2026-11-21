@@ -75,6 +75,7 @@ spec:
             # signer.allow_unverified_identities=true). Remove the comment
             # marker only for a signer with that flag:
             # example.org/signer-ip-san: "10.96.0.99"
+      # Optional. Mount the peer CA bundle when the application uses it to verify peers.
       - clusterTrustBundle:
           signerName: example.org/signer
           labelSelector: {}

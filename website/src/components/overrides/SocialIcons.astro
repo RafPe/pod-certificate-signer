@@ -1,0 +1,15 @@
+---
+// Starlight `SocialIcons` override: the GitHub link plus the documentation
+// version picker. scripts/docs-archive.mjs finds the GitHub link to place the
+// picker in the archived versions, so keep the picker right after it.
+import Default from '@astrojs/starlight/components/SocialIcons.astro';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const version = import.meta.env.PUBLIC_DOCS_VERSION ?? 'main';
+const isRelease = import.meta.env.PUBLIC_DOCS_IS_RELEASE === 'true';
+---
+<Default />
+<select aria-label="Documentation version" data-docs-version data-root={base} data-base={base} data-current="current">
+  <option value="current">{isRelease ? version : 'Development'}</option>
+</select>
+<link rel="stylesheet" href={`${base}/docs-version-picker.css`} />
+<script is:inline type="module" src={`${base}/docs-version-picker.js`}></script>
