@@ -1,2 +1,0 @@
-kind: Changed
-body: 'The Issued condition message and its Kubernetes Event now carry the certificate serial and SHA-256 fingerprint, in the form `certificate issued: serial=<hex> fingerprint=X509SHA256=<hex>`.'

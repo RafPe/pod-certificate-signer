@@ -1,2 +1,0 @@
-kind: Fixed
-body: 'A status write that conflicts because the PodCertificateRequest was deleted, or replaced by a new request with the same name, no longer applies the old request''s outcome to the new request and no longer requeues: the reconcile discards the outcome and logs the UIDs.'
